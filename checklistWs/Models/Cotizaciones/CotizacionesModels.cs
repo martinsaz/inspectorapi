@@ -4,6 +4,7 @@ namespace checklistWs.Models.Cotizaciones
     {
         public const byte Borrador = 1;
         public const byte Cancelada = 2;
+        public const byte Autorizada = 3;
     }
 
     public sealed class CotizacionGuardarRequest
@@ -31,6 +32,12 @@ namespace checklistWs.Models.Cotizaciones
         public Guid IdEmpresa { get; set; }
         public Guid IdCotizacion { get; set; }
         public string MotivoCancelacion { get; set; } = string.Empty;
+    }
+
+    public sealed class CotizacionAutorizarRequest
+    {
+        public Guid IdEmpresa { get; set; }
+        public Guid IdCotizacion { get; set; }
     }
 
     public sealed class CotizacionOperacionResponse
@@ -66,6 +73,7 @@ namespace checklistWs.Models.Cotizaciones
         public bool PuedeCancelar { get; set; }
         public bool PuedeClonar { get; set; }
         public bool PuedeExportarPdf { get; set; }
+        public bool PuedeAutorizar { get; set; }
     }
 
     public sealed class CotizacionDetalleDto

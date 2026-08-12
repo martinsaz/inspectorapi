@@ -148,7 +148,8 @@ WHERE c.idEmpresa = @IdEmpresa
                         PuedeEditar = editable,
                         PuedeCancelar = editable,
                         PuedeClonar = true,
-                        PuedeExportarPdf = true
+                        PuedeExportarPdf = true,
+                        PuedeAutorizar = editable
                     });
                 }
 
@@ -559,6 +560,64 @@ WHERE idEmpresa = @IdEmpresa
             catch (Exception ex)
             {
                 return HandleException(ex, "CancelarCotizacion", "No fue posible cancelar la cotización.");
+            }
+        }
+
+        [HttpPost("AutorizarCotizacion")]
+        public async Task<IActionResult> AutorizarCotizacion([FromBody] CotizacionAutorizarRequest request, Guid idEmpresa)
+        {
+            if (!TryResolveRequestContext(idEmpresa, out RequestContext context, out IActionResult? error))
+            {
+                return error!;
+            }
+
+            if (request == null || request.IdCotizacion == Guid.Empty)
+            {
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = "La cotización no está disponible." });
+            }
+
+            try
+            {
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+                await EnsureSchemaAsync(connection);
+
+                using SqlCommand command = new SqlCommand(@"
+UPDATE dbo.Cotizaciones
+SET Estado = @EstadoAutorizada,
+    FechaActualizacion = @FechaActualizacion,
+    idUsuarioActualizacion = @IdUsuarioActualizacion
+WHERE idEmpresa = @IdEmpresa
+  AND id = @IdCotizacion
+  AND Activo = 1
+  AND FechaArchivado IS NULL
+  AND Estado = @EstadoBorrador", connection);
+
+                command.Parameters.AddWithValue("@EstadoAutorizada", CotizacionEstados.Autorizada);
+                command.Parameters.AddWithValue("@EstadoBorrador", CotizacionEstados.Borrador);
+                command.Parameters.AddWithValue("@FechaActualizacion", DateTime.UtcNow);
+                command.Parameters.AddWithValue("@IdUsuarioActualizacion", (object?)context.UsuarioId ?? DBNull.Value);
+                command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                command.Parameters.AddWithValue("@IdCotizacion", request.IdCotizacion);
+
+                int affected = await command.ExecuteNonQueryAsync();
+                if (affected == 0)
+                {
+                    return BadRequest(new CotizacionOperacionResponse { Mensaje = "Solo se pueden autorizar cotizaciones en borrador." });
+                }
+
+                return Ok(new CotizacionOperacionResponse
+                {
+                    Exito = true,
+                    Mensaje = "La cotización se autorizó correctamente.",
+                    IdCotizacion = request.IdCotizacion,
+                    Estado = CotizacionEstados.Autorizada,
+                    EstadoNombre = GetEstadoNombre(CotizacionEstados.Autorizada)
+                });
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "AutorizarCotizacion", "No fue posible autorizar la cotización.");
             }
         }
 
@@ -1282,6 +1341,7 @@ END;", connection);
             {
                 CotizacionEstados.Borrador => "Borrador",
                 CotizacionEstados.Cancelada => "Cancelada",
+                CotizacionEstados.Autorizada => "Autorizada",
                 _ => "Desconocido"
             };
         }
