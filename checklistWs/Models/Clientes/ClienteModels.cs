@@ -32,6 +32,7 @@ namespace checklistWs.Models.Clientes
         public string Telefono { get; set; } = string.Empty;
         public string Correo { get; set; } = string.Empty;
         public string Empresa { get; set; } = string.Empty;
+        public decimal Descuento { get; set; }
         public bool Activo { get; set; }
         public DateTime FechaCreacion { get; set; }
         public DateTime? FechaActualizacion { get; set; }
