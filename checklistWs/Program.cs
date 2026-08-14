@@ -3,6 +3,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddControllersWithViews();
 builder.Services.AddSwaggerGen();
+builder.Services.AddDataProtection();
+builder.Services.AddScoped<checklistWs.Services.DocumentEmailService>();
 
 var app = builder.Build();
 
