@@ -10,8 +10,74 @@ namespace checklistWs.Services
     {
         public async Task SendTestEmailAsync(SmtpDocumentConfiguration configuration, CancellationToken cancellationToken = default)
         {
+            DocumentEmailMessage message = new DocumentEmailMessage
+            {
+                Destinatario = configuration.DestinatarioPrueba,
+                Asunto = "Prueba de correo saliente — CheckApp",
+                TextoPlano = "Esta es una prueba de configuración del correo saliente de CheckApp."
+            };
+
+            await SendDocumentEmailAsync(configuration, message, cancellationToken);
+        }
+
+        public async Task SendDocumentEmailAsync(
+            SmtpDocumentConfiguration configuration,
+            DocumentEmailMessage message,
+            CancellationToken cancellationToken = default)
+        {
             using SmtpClient client = new SmtpClient();
 
+            await ConnectAndAuthenticateAsync(client, configuration, cancellationToken);
+
+            try
+            {
+                MimeMessage mail = BuildMessage(configuration, message);
+                await client.SendAsync(mail, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                throw new DocumentEmailSendException(ex);
+            }
+            finally
+            {
+                await SafeDisconnectAsync(client, cancellationToken);
+            }
+        }
+
+        private static MimeMessage BuildMessage(SmtpDocumentConfiguration configuration, DocumentEmailMessage message)
+        {
+            MimeMessage mail = new MimeMessage();
+            mail.From.Add(MailboxAddress.Parse(configuration.Cuenta));
+            mail.To.Add(MailboxAddress.Parse(message.Destinatario));
+            mail.Subject = message.Asunto;
+
+            BodyBuilder builder = new BodyBuilder
+            {
+                TextBody = message.TextoPlano
+            };
+
+            if (!string.IsNullOrWhiteSpace(message.Html))
+            {
+                builder.HtmlBody = message.Html;
+            }
+
+            foreach (DocumentEmailAttachment attachment in message.Adjuntos)
+            {
+                builder.Attachments.Add(
+                    attachment.FileName,
+                    attachment.Content,
+                    ContentType.Parse(attachment.ContentType));
+            }
+
+            mail.Body = builder.ToMessageBody();
+            return mail;
+        }
+
+        private static async Task ConnectAndAuthenticateAsync(
+            SmtpClient client,
+            SmtpDocumentConfiguration configuration,
+            CancellationToken cancellationToken)
+        {
             try
             {
                 client.CheckCertificateRevocation = false;
@@ -32,49 +98,22 @@ namespace checklistWs.Services
             }
             catch (Exception ex)
             {
-                try
-                {
-                    if (client.IsConnected)
-                    {
-                        await client.DisconnectAsync(true, cancellationToken);
-                    }
-                }
-                catch
-                {
-                }
-
+                await SafeDisconnectAsync(client, cancellationToken);
                 throw new DocumentEmailAuthenticationException(ex);
             }
+        }
 
+        private static async Task SafeDisconnectAsync(SmtpClient client, CancellationToken cancellationToken)
+        {
             try
             {
-                MimeMessage message = new MimeMessage();
-                message.From.Add(MailboxAddress.Parse(configuration.Cuenta));
-                message.To.Add(MailboxAddress.Parse(configuration.DestinatarioPrueba));
-                message.Subject = "Prueba de correo saliente — CheckApp";
-                message.Body = new TextPart("plain")
+                if (client.IsConnected)
                 {
-                    Text = "Esta es una prueba de configuración del correo saliente de CheckApp."
-                };
-
-                await client.SendAsync(message, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                throw new DocumentEmailSendException(ex);
-            }
-            finally
-            {
-                try
-                {
-                    if (client.IsConnected)
-                    {
-                        await client.DisconnectAsync(true, cancellationToken);
-                    }
+                    await client.DisconnectAsync(true, cancellationToken);
                 }
-                catch
-                {
-                }
+            }
+            catch
+            {
             }
         }
 
@@ -119,5 +158,21 @@ namespace checklistWs.Services
             : base("No fue posible enviar el correo de prueba.", innerException)
         {
         }
+    }
+
+    public sealed class DocumentEmailMessage
+    {
+        public string Destinatario { get; set; } = string.Empty;
+        public string Asunto { get; set; } = string.Empty;
+        public string TextoPlano { get; set; } = string.Empty;
+        public string? Html { get; set; }
+        public IReadOnlyCollection<DocumentEmailAttachment> Adjuntos { get; set; } = Array.Empty<DocumentEmailAttachment>();
+    }
+
+    public sealed class DocumentEmailAttachment
+    {
+        public string FileName { get; set; } = string.Empty;
+        public byte[] Content { get; set; } = Array.Empty<byte>();
+        public string ContentType { get; set; } = "application/octet-stream";
     }
 }

@@ -1,11 +1,15 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Globalization;
+using System.Net.Mail;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using checklistWs.Models.Configuracion;
 using checklistWs.Models.Cotizaciones;
+using checklistWs.Services;
 using checklistWs.Utiles;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -33,12 +37,20 @@ namespace checklistWs.Controllers.Cotizaciones
 
         private readonly IConfiguration _configuration;
         private readonly SqlConnectionFactory _connectionFactory;
+        private readonly IDataProtector _protector;
+        private readonly DocumentEmailService _documentEmailService;
         private readonly ILogger<CotizacionesController> _logger;
 
-        public CotizacionesController(IConfiguration configuration, ILogger<CotizacionesController> logger)
+        public CotizacionesController(
+            IConfiguration configuration,
+            ILogger<CotizacionesController> logger,
+            IDataProtectionProvider dataProtectionProvider,
+            DocumentEmailService documentEmailService)
         {
             _configuration = configuration;
             _connectionFactory = new SqlConnectionFactory(configuration);
+            _protector = dataProtectionProvider.CreateProtector("checklistWs.Configuracion.CorreoSaliente.Password.v1");
+            _documentEmailService = documentEmailService;
             _logger = logger;
         }
 
@@ -656,6 +668,152 @@ WHERE idEmpresa = @IdEmpresa
             }
         }
 
+        [HttpPost("EnviarCotizacionCorreo")]
+        public async Task<IActionResult> EnviarCotizacionCorreo(Guid idEmpresa, [FromBody] CotizacionCorreoRequest? request)
+        {
+            if (!TryResolveRequestContext(idEmpresa, out RequestContext context, out IActionResult? error))
+            {
+                return error!;
+            }
+
+            if (request == null || request.IdCotizacion == Guid.Empty)
+            {
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = "La cotización no está disponible." });
+            }
+
+            string correo = (request.Correo ?? string.Empty).Trim();
+            string asunto = (request.Asunto ?? string.Empty).Trim();
+            string mensaje = (request.Mensaje ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(correo) || string.IsNullOrWhiteSpace(asunto) || string.IsNullOrWhiteSpace(mensaje))
+            {
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = "Correo, asunto y mensaje son obligatorios." });
+            }
+
+            if (!IsValidEmail(correo))
+            {
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = "Captura un correo válido." });
+            }
+
+            try
+            {
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+                await EnsureSchemaAsync(connection);
+
+                CorreoSalientePersistedConfiguration? storedConfiguration = await LoadCorreoSalienteConfigurationAsync(connection, context.IdEmpresa);
+                if (storedConfiguration == null || string.IsNullOrWhiteSpace(storedConfiguration.CredencialProtegida))
+                {
+                    return Conflict(new CotizacionOperacionResponse
+                    {
+                        Mensaje = "No hay una cuenta de correo configurada para enviar documentos."
+                    });
+                }
+
+                if (!storedConfiguration.ConfiguracionVerificada)
+                {
+                    return Conflict(new CotizacionOperacionResponse
+                    {
+                        Mensaje = "La cuenta de correo debe verificarse antes de enviar documentos."
+                    });
+                }
+
+                string password;
+                try
+                {
+                    password = _protector.Unprotect(storedConfiguration.CredencialProtegida);
+                }
+                catch
+                {
+                    return Conflict(new CotizacionOperacionResponse
+                    {
+                        Mensaje = "No hay una cuenta de correo configurada para enviar documentos."
+                    });
+                }
+
+                if (string.IsNullOrWhiteSpace(password))
+                {
+                    return Conflict(new CotizacionOperacionResponse
+                    {
+                        Mensaje = "No hay una cuenta de correo configurada para enviar documentos."
+                    });
+                }
+
+                CotizacionDocumentoExportDto documento = await ObtenerDocumentoCotizacionAsync(connection, context.IdEmpresa, request.IdCotizacion);
+                if (documento.IdCotizacion == Guid.Empty)
+                {
+                    return NotFound(new CotizacionOperacionResponse { Mensaje = "La cotización no está disponible." });
+                }
+
+                byte[] pdf = BuildPdfDocument(documento);
+                if (pdf.Length == 0)
+                {
+                    return StatusCode(StatusCodes.Status500InternalServerError, new CotizacionOperacionResponse
+                    {
+                        Mensaje = "No fue posible adjuntar el PDF de la cotización."
+                    });
+                }
+
+                SmtpDocumentConfiguration smtpConfiguration = new SmtpDocumentConfiguration
+                {
+                    Cuenta = storedConfiguration.Cuenta,
+                    Contrasena = password,
+                    ServidorSmtp = storedConfiguration.ServidorSmtp,
+                    Puerto = storedConfiguration.Puerto,
+                    Seguridad = storedConfiguration.Seguridad
+                };
+
+                DocumentEmailMessage emailMessage = new DocumentEmailMessage
+                {
+                    Destinatario = correo,
+                    Asunto = asunto,
+                    TextoPlano = mensaje,
+                    Adjuntos = new[]
+                    {
+                        new DocumentEmailAttachment
+                        {
+                            FileName = BuildSafeFileName("cotizacion", documento.Folio, ".pdf"),
+                            Content = pdf,
+                            ContentType = "application/pdf"
+                        }
+                    }
+                };
+
+                await _documentEmailService.SendDocumentEmailAsync(smtpConfiguration, emailMessage);
+
+                return Ok(new CotizacionOperacionResponse
+                {
+                    Exito = true,
+                    Mensaje = "La cotización se envió por correo correctamente."
+                });
+            }
+            catch (DocumentEmailConnectionException)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, new CotizacionOperacionResponse
+                {
+                    Mensaje = "No fue posible conectar con la cuenta de correo configurada."
+                });
+            }
+            catch (DocumentEmailAuthenticationException)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, new CotizacionOperacionResponse
+                {
+                    Mensaje = "No fue posible autenticar la cuenta de correo configurada."
+                });
+            }
+            catch (DocumentEmailSendException)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, new CotizacionOperacionResponse
+                {
+                    Mensaje = "No fue posible enviar el correo."
+                });
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "EnviarCotizacionCorreo", "No fue posible enviar la cotización por correo.");
+            }
+        }
+
         private async Task<CotizacionDocumentoExportDto> ObtenerDocumentoCotizacionAsync(SqlConnection connection, Guid idEmpresa, Guid idCotizacion)
         {
             using SqlCommand command = new SqlCommand(@"
@@ -735,6 +893,70 @@ WHERE c.idEmpresa = @IdEmpresa
                 .ToList();
 
             return documento;
+        }
+
+        private static bool IsValidEmail(string correo)
+        {
+            try
+            {
+                _ = new MailAddress(correo);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private async Task<CorreoSalientePersistedConfiguration?> LoadCorreoSalienteConfigurationAsync(SqlConnection connection, Guid idEmpresa)
+        {
+            using SqlCommand command = new SqlCommand(@"
+SELECT TOP (1)
+    id,
+    idEmpresa,
+    identityKey,
+    Cuenta,
+    ServidorSmtp,
+    Puerto,
+    Seguridad,
+    CredencialProtegida,
+    DestinatarioPrueba,
+    ConfiguracionVerificada,
+    FechaUltimaPrueba,
+    FechaCreacion,
+    FechaActualizacion,
+    Activo
+FROM dbo.ConfiguracionCorreoSaliente
+WHERE idEmpresa = @IdEmpresa
+  AND Activo = 1
+  AND FechaArchivado IS NULL
+ORDER BY FechaCreacion DESC", connection);
+
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+            {
+                return null;
+            }
+
+            return new CorreoSalientePersistedConfiguration
+            {
+                Id = ReadGuid(reader, "id"),
+                IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                IdentityKey = ReadGuid(reader, "identityKey"),
+                Cuenta = ReadString(reader, "Cuenta"),
+                ServidorSmtp = ReadString(reader, "ServidorSmtp"),
+                Puerto = ReadInt(reader, "Puerto"),
+                Seguridad = ReadString(reader, "Seguridad"),
+                CredencialProtegida = ReadString(reader, "CredencialProtegida"),
+                DestinatarioPrueba = ReadString(reader, "DestinatarioPrueba"),
+                ConfiguracionVerificada = ReadBool(reader, "ConfiguracionVerificada"),
+                FechaUltimaPrueba = ReadNullableDateTime(reader, "FechaUltimaPrueba"),
+                FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
+                FechaActualizacion = ReadNullableDateTime(reader, "FechaActualizacion"),
+                Activo = ReadBool(reader, "Activo")
+            };
         }
 
         private async Task<List<CotizacionPartidaDetalleDto>> ObtenerPartidasAsync(SqlConnection connection, Guid idEmpresa, Guid idCotizacion)

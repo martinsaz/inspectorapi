@@ -40,6 +40,16 @@ namespace checklistWs.Models.Cotizaciones
         public Guid IdCotizacion { get; set; }
     }
 
+    public sealed class CotizacionCorreoRequest
+    {
+        public Guid IdCotizacion { get; set; }
+        public string Correo { get; set; } = string.Empty;
+        public string Asunto { get; set; } = string.Empty;
+        public string Mensaje { get; set; } = string.Empty;
+        public string Folio { get; set; } = string.Empty;
+        public string ClienteNombre { get; set; } = string.Empty;
+    }
+
     public sealed class CotizacionOperacionResponse
     {
         public bool Exito { get; set; }
