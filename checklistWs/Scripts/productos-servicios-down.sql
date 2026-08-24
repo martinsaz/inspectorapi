@@ -16,6 +16,166 @@ BEGIN TRY
     IF EXISTS (
         SELECT 1
         FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosMultimedia_Productos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosMultimedia
+        DROP CONSTRAINT FK_ProductosServiciosMultimedia_Productos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosVarianteValores_OpcionesValores_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosVarianteValores
+        DROP CONSTRAINT FK_ProductosServiciosVarianteValores_OpcionesValores_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosVarianteValores_Opciones_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosVarianteValores
+        DROP CONSTRAINT FK_ProductosServiciosVarianteValores_Opciones_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosVarianteValores_AtributosValores_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosVarianteValores
+        DROP CONSTRAINT FK_ProductosServiciosVarianteValores_AtributosValores_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosVarianteValores_Atributos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosVarianteValores
+        DROP CONSTRAINT FK_ProductosServiciosVarianteValores_Atributos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosVarianteValores_Variantes_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosVarianteValores
+        DROP CONSTRAINT FK_ProductosServiciosVarianteValores_Variantes_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosOpcionesVarianteValores_Opciones_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosOpcionesVarianteValores
+        DROP CONSTRAINT FK_ProductosServiciosOpcionesVarianteValores_Opciones_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosOpcionesVariante_Productos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosOpcionesVariante
+        DROP CONSTRAINT FK_ProductosServiciosOpcionesVariante_Productos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosVariantes_Productos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosVariantes
+        DROP CONSTRAINT FK_ProductosServiciosVariantes_Productos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosProductoAtributoValores_AtributosValores_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosProductoAtributoValores
+        DROP CONSTRAINT FK_ProductosServiciosProductoAtributoValores_AtributosValores_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosProductoAtributoValores_ProductoAtributos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosProductoAtributoValores
+        DROP CONSTRAINT FK_ProductosServiciosProductoAtributoValores_ProductoAtributos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosProductoAtributos_Atributos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosProductoAtributos
+        DROP CONSTRAINT FK_ProductosServiciosProductoAtributos_Atributos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosProductoAtributos_Productos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosProductoAtributos
+        DROP CONSTRAINT FK_ProductosServiciosProductoAtributos_Productos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServiciosAtributosValores_Atributos_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosAtributosValores
+        DROP CONSTRAINT FK_ProductosServiciosAtributosValores_Atributos_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServicios_Paquetes_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServicios
+        DROP CONSTRAINT FK_ProductosServicios_Paquetes_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
+        WHERE name = N'FK_ProductosServicios_Colecciones_EmpresaId'
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServicios
+        DROP CONSTRAINT FK_ProductosServicios_Colecciones_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.foreign_keys
         WHERE name = N'FK_ProductosServiciosMovimientos_ProductosServicios_EmpresaId'
     )
     BEGIN
@@ -61,6 +221,61 @@ BEGIN TRY
     BEGIN
         ALTER TABLE dbo.ProductosServicios
         DROP CONSTRAINT FK_ProductosServicios_Categorias_EmpresaId;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosVarianteValores')
+          AND name = N'IX_ProductosServiciosVarianteValores_Empresa_Variante_Orden'
+    )
+    BEGIN
+        DROP INDEX IX_ProductosServiciosVarianteValores_Empresa_Variante_Orden
+            ON dbo.ProductosServiciosVarianteValores;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosOpcionesVarianteValores')
+          AND name = N'UX_ProductosServiciosOpcionesVarianteValores_Empresa_Opcion_Valor'
+    )
+    BEGIN
+        DROP INDEX UX_ProductosServiciosOpcionesVarianteValores_Empresa_Opcion_Valor
+            ON dbo.ProductosServiciosOpcionesVarianteValores;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosOpcionesVarianteValores')
+          AND name = N'UX_ProductosServiciosOpcionesVarianteValores_Empresa_Id'
+    )
+    BEGIN
+        DROP INDEX UX_ProductosServiciosOpcionesVarianteValores_Empresa_Id
+            ON dbo.ProductosServiciosOpcionesVarianteValores;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosOpcionesVariante')
+          AND name = N'UX_ProductosServiciosOpcionesVariante_Empresa_Producto_Nombre'
+    )
+    BEGIN
+        DROP INDEX UX_ProductosServiciosOpcionesVariante_Empresa_Producto_Nombre
+            ON dbo.ProductosServiciosOpcionesVariante;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.indexes
+        WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosOpcionesVariante')
+          AND name = N'UX_ProductosServiciosOpcionesVariante_Empresa_Id'
+    )
+    BEGIN
+        DROP INDEX UX_ProductosServiciosOpcionesVariante_Empresa_Id
+            ON dbo.ProductosServiciosOpcionesVariante;
     END;
 
     IF EXISTS (
@@ -308,6 +523,61 @@ BEGIN TRY
     IF OBJECT_ID(N'dbo.ProductosServiciosMovimientosInventario', N'U') IS NOT NULL
     BEGIN
         DROP TABLE dbo.ProductosServiciosMovimientosInventario;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosMultimedia', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosMultimedia;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosOpcionesVarianteValores', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosOpcionesVarianteValores;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosOpcionesVariante', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosOpcionesVariante;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosVarianteValores', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosVarianteValores;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosVariantes', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosVariantes;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosProductoAtributoValores', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosProductoAtributoValores;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosProductoAtributos', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosProductoAtributos;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosAtributosValores', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosAtributosValores;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosAtributos', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosAtributos;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosPaquetes', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosPaquetes;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosColecciones', N'U') IS NOT NULL
+    BEGIN
+        DROP TABLE dbo.ProductosServiciosColecciones;
     END;
 
     IF OBJECT_ID(N'dbo.ProductosServiciosExistencias', N'U') IS NOT NULL

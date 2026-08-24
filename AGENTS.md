@@ -128,3 +128,18 @@
   - la API validó alta, duplicado, edición con concurrencia, suspensión y reactivación del perfil temporal autorizado
   - al cierre no quedaron datos QA en `OperadoresPerfil` ni en `ListasOperadoresAsignaciones`
   - no hubo cambios adicionales de backend durante esta certificación final; la limitación observada fue de autenticación/sesión compartida en frontend
+- TICKET 02 — Diseño y Validaciones de `Productos y Servicios` ejecutado el `2026-08-21`.
+- Reglas backend/API ratificadas por esta iteración:
+  - la API mantiene autoridad final sobre validaciones funcionales y mensajes no técnicos
+  - no se modificó esquema SQL; se reutilizó el modelo vigente
+  - `PrecioUnitarioMonto`, `PrecioUnitarioBaseCantidad` y `PrecioUnitarioUnidad` ya soportaban el concepto requerido; solo se endureció validación de completitud
+- Hallazgos funcionales auditados el `2026-08-21`:
+  - `Categoría`, `Marca` y `Unidad` tienen duplicado real por `Código`
+  - `Colección` tiene duplicado real por `Número`
+  - `Paquete` ya soportaba `EsPredeterminado` por empresa; la API limpia el predeterminado previo al marcar uno nuevo
+  - `PesoKg` del producto y `PesoEmpaqueVacioKg` del paquete son conceptos distintos y deben conservarse separados
+- SAT auditado en solo lectura el `2026-08-21`:
+  - el legado `Raramuri.blzr` usa `_opcionesProd` y `_opcionesUnidad`
+  - `sazapi` obtiene catálogo SAT desde API externa con rutas `GetClaveProdServ4` y `GetTodoClaveUnidad`
+  - la API CheckApp debe consumir esa fuente de manera server-to-server y nunca exponerla directamente al navegador
+  - `H87` debe preservarse como unidad base segura cuando no exista otra selección
