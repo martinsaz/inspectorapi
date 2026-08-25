@@ -762,6 +762,51 @@ BEGIN TRY
         );
     END;
 
+    IF OBJECT_ID(N'dbo.ProductosServiciosTags', N'U') IS NULL
+    BEGIN
+        CREATE TABLE dbo.ProductosServiciosTags
+        (
+            id UNIQUEIDENTIFIER NOT NULL
+                CONSTRAINT PK_ProductosServiciosTags PRIMARY KEY CLUSTERED
+                CONSTRAINT DF_ProductosServiciosTags_id DEFAULT (NEWID()),
+            idEmpresa UNIQUEIDENTIFIER NOT NULL,
+            identityKey UNIQUEIDENTIFIER NOT NULL
+                CONSTRAINT DF_ProductosServiciosTags_identityKey DEFAULT (NEWID()),
+            Nombre NVARCHAR(100) NOT NULL,
+            Activo BIT NOT NULL
+                CONSTRAINT DF_ProductosServiciosTags_Activo DEFAULT ((1)),
+            FechaCreacion DATETIME2(0) NOT NULL
+                CONSTRAINT DF_ProductosServiciosTags_FechaCreacion DEFAULT (SYSUTCDATETIME()),
+            FechaActualizacion DATETIME2(0) NOT NULL
+                CONSTRAINT DF_ProductosServiciosTags_FechaActualizacion DEFAULT (SYSUTCDATETIME()),
+            FechaArchivado DATETIME2(0) NULL
+        );
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosTags', N'U') IS NOT NULL
+       AND COL_LENGTH(N'dbo.ProductosServiciosTags', N'NombreNormalizado') IS NULL
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosTags
+        ADD NombreNormalizado AS UPPER(LTRIM(RTRIM(Nombre)));
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosProductoTags', N'U') IS NULL
+    BEGIN
+        CREATE TABLE dbo.ProductosServiciosProductoTags
+        (
+            id UNIQUEIDENTIFIER NOT NULL
+                CONSTRAINT PK_ProductosServiciosProductoTags PRIMARY KEY CLUSTERED
+                CONSTRAINT DF_ProductosServiciosProductoTags_id DEFAULT (NEWID()),
+            idEmpresa UNIQUEIDENTIFIER NOT NULL,
+            identityKey UNIQUEIDENTIFIER NOT NULL
+                CONSTRAINT DF_ProductosServiciosProductoTags_identityKey DEFAULT (NEWID()),
+            idProductoServicio UNIQUEIDENTIFIER NOT NULL,
+            idTag UNIQUEIDENTIFIER NOT NULL,
+            FechaCreacion DATETIME2(0) NOT NULL
+                CONSTRAINT DF_ProductosServiciosProductoTags_FechaCreacion DEFAULT (SYSUTCDATETIME())
+        );
+    END;
+
     IF OBJECT_ID(N'dbo.ProductosServiciosOpcionesVariante', N'U') IS NULL
     BEGIN
         CREATE TABLE dbo.ProductosServiciosOpcionesVariante
@@ -824,6 +869,7 @@ BEGIN TRY
             ClaveCombinacion NVARCHAR(500) NOT NULL,
             ImagenUrl NVARCHAR(1000) NULL,
             ImagenNombre NVARCHAR(255) NULL,
+            Costo DECIMAL(18, 2) NULL,
             PrecioPublico DECIMAL(18, 2) NULL,
             PrecioComparacion DECIMAL(18, 2) NULL,
             PrecioUnitarioMonto DECIMAL(18, 6) NULL,
@@ -852,6 +898,13 @@ BEGIN TRY
     BEGIN
         ALTER TABLE dbo.ProductosServiciosVariantes
         ADD ImagenNombre NVARCHAR(255) NULL;
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosVariantes', N'U') IS NOT NULL
+       AND COL_LENGTH(N'dbo.ProductosServiciosVariantes', N'Costo') IS NULL
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosVariantes
+        ADD Costo DECIMAL(18, 2) NULL;
     END;
 
     IF OBJECT_ID(N'dbo.ProductosServiciosVarianteValores', N'U') IS NULL
@@ -1133,6 +1186,50 @@ BEGIN TRY
             ON dbo.ProductosServiciosVariantes (idEmpresa, idProductoServicio, ClaveCombinacion);
     END;
 
+    IF OBJECT_ID(N'dbo.ProductosServiciosTags', N'U') IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM sys.indexes
+            WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosTags')
+              AND name = N'UX_ProductosServiciosTags_Empresa_Id'
+       )
+    BEGIN
+        CREATE UNIQUE NONCLUSTERED INDEX UX_ProductosServiciosTags_Empresa_Id
+            ON dbo.ProductosServiciosTags (idEmpresa, id);
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosTags', N'U') IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM sys.indexes
+            WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosTags')
+              AND name = N'UX_ProductosServiciosTags_Empresa_NombreNormalizado'
+       )
+    BEGIN
+        CREATE UNIQUE NONCLUSTERED INDEX UX_ProductosServiciosTags_Empresa_NombreNormalizado
+            ON dbo.ProductosServiciosTags (idEmpresa, NombreNormalizado);
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosProductoTags', N'U') IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM sys.indexes
+            WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosProductoTags')
+              AND name = N'UX_ProductosServiciosProductoTags_Empresa_Producto_Tag'
+       )
+    BEGIN
+        CREATE UNIQUE NONCLUSTERED INDEX UX_ProductosServiciosProductoTags_Empresa_Producto_Tag
+            ON dbo.ProductosServiciosProductoTags (idEmpresa, idProductoServicio, idTag);
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosProductoTags', N'U') IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM sys.indexes
+            WHERE object_id = OBJECT_ID(N'dbo.ProductosServiciosProductoTags')
+              AND name = N'IX_ProductosServiciosProductoTags_Empresa_Tag'
+       )
+    BEGIN
+        CREATE NONCLUSTERED INDEX IX_ProductosServiciosProductoTags_Empresa_Tag
+            ON dbo.ProductosServiciosProductoTags (idEmpresa, idTag, idProductoServicio);
+    END;
+
     IF OBJECT_ID(N'dbo.ProductosServiciosVarianteValores', N'U') IS NOT NULL
        AND NOT EXISTS (
             SELECT 1 FROM sys.indexes
@@ -1273,6 +1370,38 @@ BEGIN TRY
         ADD CONSTRAINT FK_ProductosServiciosOpcionesVarianteValores_Opciones_EmpresaId
             FOREIGN KEY (idEmpresa, idOpcionVariante)
             REFERENCES dbo.ProductosServiciosOpcionesVariante (idEmpresa, id);
+    END;
+
+    -- Ticket 06:
+    -- El ambiente certificado no expone una tabla/llave estable de empresa
+    -- compatible para forzar un FK directo desde ProductosServiciosTags.
+    -- La integridad multitenant queda resguardada por:
+    -- 1) validacion server-side del contexto activo;
+    -- 2) llaves compuestas (idEmpresa, idProductoServicio) y (idEmpresa, idTag)
+    --    en la tabla relacional ProductosServiciosProductoTags.
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosProductoTags', N'U') IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM sys.foreign_keys
+            WHERE name = N'FK_ProductosServiciosProductoTags_Productos_EmpresaId'
+       )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosProductoTags WITH CHECK
+        ADD CONSTRAINT FK_ProductosServiciosProductoTags_Productos_EmpresaId
+            FOREIGN KEY (idEmpresa, idProductoServicio)
+            REFERENCES dbo.ProductosServicios (idEmpresa, id);
+    END;
+
+    IF OBJECT_ID(N'dbo.ProductosServiciosProductoTags', N'U') IS NOT NULL
+       AND NOT EXISTS (
+            SELECT 1 FROM sys.foreign_keys
+            WHERE name = N'FK_ProductosServiciosProductoTags_Tags_EmpresaId'
+       )
+    BEGIN
+        ALTER TABLE dbo.ProductosServiciosProductoTags WITH CHECK
+        ADD CONSTRAINT FK_ProductosServiciosProductoTags_Tags_EmpresaId
+            FOREIGN KEY (idEmpresa, idTag)
+            REFERENCES dbo.ProductosServiciosTags (idEmpresa, id);
     END;
 
     IF OBJECT_ID(N'dbo.ProductosServiciosVarianteValores', N'U') IS NOT NULL

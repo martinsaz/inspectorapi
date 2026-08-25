@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -13,6 +14,9 @@ using Firebase.Auth;
 using Firebase.Auth.Providers;
 using Firebase.Storage;
 using Microsoft.AspNetCore.Mvc;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace checklistWs.Controllers.ProductosServicios
 {
@@ -45,6 +49,7 @@ namespace checklistWs.Controllers.ProductosServicios
         private const int ObjetoImpuestoLength = 4;
         private const int PrecioUnitarioUnidadLength = 20;
         private const int TipoPaqueteLength = 30;
+        private const decimal FactorVolumetricoDefault = 5000m;
         private const int AtributoNombreLength = 100;
         private const int AtributoValorLength = 120;
         private const int OpcionVarianteNombreLength = 100;
@@ -74,6 +79,14 @@ namespace checklistWs.Controllers.ProductosServicios
         private readonly IConfiguration _configuration;
         private readonly SqlConnectionFactory _connectionFactory;
         private readonly ILogger<ProductosServiciosController> _logger;
+
+        private sealed class ProductoServicioLogisticsMetrics
+        {
+            public decimal FactorVolumetrico { get; init; }
+            public decimal? PesoFisicoTotalKg { get; init; }
+            public decimal? PesoVolumetricoKg { get; init; }
+            public decimal? PesoFacturableKg { get; init; }
+        }
 
         public ProductosServiciosController(IConfiguration configuration, ILogger<ProductosServiciosController> logger)
         {
@@ -111,7 +124,7 @@ SELECT
     ps.Tipo,
     CASE ps.Tipo WHEN 1 THEN 'Producto' ELSE 'Servicio' END AS TipoNombre,
     ps.Codigo,
-    ISNULL(ps.Tag, '') AS Tag,
+    COALESCE(NULLIF(tg.TagsDisplay, ''), ISNULL(ps.Tag, '')) AS Tag,
     ps.Nombre,
     ISNULL(ps.Descripcion, '') AS Descripcion,
     ps.idCategoria,
@@ -128,6 +141,11 @@ SELECT
     ISNULL(col.Nombre, '') AS ColeccionNombre,
     ps.idPaquete,
     ISNULL(pa.Nombre, '') AS PaqueteNombre,
+    ISNULL(pa.TipoPaquete, '') AS TipoPaquete,
+    pa.LargoCm AS PaqueteLargoCm,
+    pa.AnchoCm AS PaqueteAnchoCm,
+    pa.AltoCm AS PaqueteAltoCm,
+    pa.PesoEmpaqueVacioKg,
     ps.Costo,
     ps.PrecioPublico,
     ps.PrecioComparacion,
@@ -172,19 +190,46 @@ LEFT JOIN dbo.ProductosServiciosPaquetes pa
     ON pa.idEmpresa = ps.idEmpresa AND pa.id = ps.idPaquete
 LEFT JOIN dbo.ProductosServiciosExistencias ex
     ON ex.idEmpresa = ps.idEmpresa AND ex.idProductoServicio = ps.id
-OUTER APPLY (
+LEFT JOIN (
     SELECT
+        pm.idEmpresa,
+        pm.idProductoServicio,
         SUM(CASE WHEN pm.Activo = 1 AND pm.Foto = 1 THEN 1 ELSE 0 END) AS CantidadFotos,
         SUM(CASE WHEN pm.Activo = 1 AND pm.Video = 1 THEN 1 ELSE 0 END) AS CantidadVideos,
         SUM(CASE WHEN pm.Activo = 1 AND pm.Documento = 1 THEN 1 ELSE 0 END) AS CantidadDocumentos
     FROM dbo.ProductosServiciosMultimedia pm
-    WHERE pm.idEmpresa = ps.idEmpresa AND pm.idProductoServicio = ps.id
+    GROUP BY pm.idEmpresa, pm.idProductoServicio
 ) mm
-OUTER APPLY (
-    SELECT COUNT(1) AS CantidadVariantes
+    ON mm.idEmpresa = ps.idEmpresa AND mm.idProductoServicio = ps.id
+LEFT JOIN (
+    SELECT
+        pv.idEmpresa,
+        pv.idProductoServicio,
+        COUNT(1) AS CantidadVariantes
     FROM dbo.ProductosServiciosVariantes pv
-    WHERE pv.idEmpresa = ps.idEmpresa AND pv.idProductoServicio = ps.id AND pv.Activo = 1
+    WHERE pv.Activo = 1
+    GROUP BY pv.idEmpresa, pv.idProductoServicio
 ) vr
+    ON vr.idEmpresa = ps.idEmpresa AND vr.idProductoServicio = ps.id
+LEFT JOIN (
+    SELECT
+        pt.idEmpresa,
+        pt.idProductoServicio,
+        STUFF((
+            SELECT ', ' + t2.Nombre
+            FROM dbo.ProductosServiciosProductoTags pt2
+            INNER JOIN dbo.ProductosServiciosTags t2
+                ON t2.idEmpresa = pt2.idEmpresa AND t2.id = pt2.idTag
+            WHERE pt2.idEmpresa = pt.idEmpresa
+              AND pt2.idProductoServicio = pt.idProductoServicio
+              AND t2.Activo = 1
+            ORDER BY t2.Nombre
+            FOR XML PATH(''), TYPE
+        ).value('.', 'nvarchar(max)'), 1, 2, '') AS TagsDisplay
+    FROM dbo.ProductosServiciosProductoTags pt
+    GROUP BY pt.idEmpresa, pt.idProductoServicio
+) tg
+    ON tg.idEmpresa = ps.idEmpresa AND tg.idProductoServicio = ps.id
 WHERE ps.idEmpresa = @IdEmpresa");
 
                 using SqlCommand command = new SqlCommand();
@@ -196,7 +241,7 @@ WHERE ps.idEmpresa = @IdEmpresa");
                     query.Append(@"
   AND (
       ps.Codigo LIKE @Busqueda
-      OR ISNULL(ps.Tag, '') LIKE @Busqueda
+      OR COALESCE(NULLIF(tg.TagsDisplay, ''), ISNULL(ps.Tag, '')) LIKE @Busqueda
       OR ps.Nombre LIKE @Busqueda
       OR ISNULL(ps.Descripcion, '') LIKE @Busqueda
   )");
@@ -266,6 +311,11 @@ SELECT
     ISNULL(col.Nombre, '') AS ColeccionNombre,
     ps.idPaquete,
     ISNULL(pa.Nombre, '') AS PaqueteNombre,
+    ISNULL(pa.TipoPaquete, '') AS TipoPaquete,
+    pa.LargoCm AS PaqueteLargoCm,
+    pa.AnchoCm AS PaqueteAnchoCm,
+    pa.AltoCm AS PaqueteAltoCm,
+    pa.PesoEmpaqueVacioKg,
     ps.Costo,
     ps.PrecioPublico,
     ps.PrecioComparacion,
@@ -359,6 +409,11 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
                             ColeccionNombre = baseItem.ColeccionNombre,
                             IdPaquete = baseItem.IdPaquete,
                             PaqueteNombre = baseItem.PaqueteNombre,
+                            TipoPaquete = ReadString(reader, "TipoPaquete"),
+                            PaqueteLargoCm = ReadNullableDecimal(reader, "PaqueteLargoCm"),
+                            PaqueteAnchoCm = ReadNullableDecimal(reader, "PaqueteAnchoCm"),
+                            PaqueteAltoCm = ReadNullableDecimal(reader, "PaqueteAltoCm"),
+                            PaquetePesoEmpaqueVacioKg = ReadNullableDecimal(reader, "PesoEmpaqueVacioKg"),
                             Costo = baseItem.Costo,
                             PrecioPublico = baseItem.PrecioPublico,
                             PrecioComparacion = baseItem.PrecioComparacion,
@@ -400,16 +455,377 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
                 }
 
                 detalle.MovimientosRecientes = await ObtenerMovimientosInventarioInternoAsync(connection, context.IdEmpresa, idProductoServicio, 10);
+                detalle.Tags = await ObtenerTagsProductoAsync(connection, context.IdEmpresa, idProductoServicio, detalle.Tag);
                 detalle.Atributos = await ObtenerAtributosProductoAsync(connection, context.IdEmpresa, idProductoServicio);
                 detalle.OpcionesVariante = await ObtenerOpcionesVarianteProductoAsync(connection, context.IdEmpresa, idProductoServicio);
                 detalle.Variantes = await ObtenerVariantesProductoAsync(connection, context.IdEmpresa, idProductoServicio);
                 detalle.Multimedia = await ObtenerMultimediaProductoAsync(connection, context.IdEmpresa, idProductoServicio);
+                ApplyLogisticsMetrics(detalle);
                 return Ok(detalle);
             }
             catch (Exception ex)
             {
                 return HandleException(ex, "ObtenerProductoServicio", "No fue posible cargar el detalle del producto o servicio.");
             }
+        }
+
+        [HttpGet("ObtenerFichaTecnicaProductoServicio")]
+        public async Task<IActionResult> ObtenerFichaTecnicaProductoServicio(Guid idEmpresa, Guid idProductoServicio)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            {
+                return error!;
+            }
+
+            if (idProductoServicio == Guid.Empty)
+            {
+                return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "El producto o servicio no está disponible." });
+            }
+
+            try
+            {
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+
+                ProductoServicioFichaTecnicaDto? ficha = await ObtenerFichaTecnicaProductoAsync(connection, context.IdEmpresa, idProductoServicio);
+                if (ficha == null || ficha.Id == Guid.Empty)
+                {
+                    return NotFound(new ProductoServicioOperacionResponse { Mensaje = "El producto o servicio no está disponible." });
+                }
+
+                return Ok(ficha);
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ObtenerFichaTecnicaProductoServicio", "No fue posible cargar la ficha técnica del producto o servicio.");
+            }
+        }
+
+        [HttpGet("ExportarFichaTecnicaProductoServicioPdf")]
+        public async Task<IActionResult> ExportarFichaTecnicaProductoServicioPdf(Guid idEmpresa, Guid idProductoServicio)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            {
+                return error!;
+            }
+
+            if (idProductoServicio == Guid.Empty)
+            {
+                return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "El producto o servicio no está disponible." });
+            }
+
+            try
+            {
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+
+                ProductoServicioFichaTecnicaDto? ficha = await ObtenerFichaTecnicaProductoAsync(connection, context.IdEmpresa, idProductoServicio);
+                if (ficha == null || ficha.Id == Guid.Empty)
+                {
+                    return NotFound(new ProductoServicioOperacionResponse { Mensaje = "El producto o servicio no está disponible." });
+                }
+
+                byte[] pdf = await BuildFichaTecnicaPdfDocumentAsync(ficha);
+                string fileName = BuildFichaTecnicaFileName(ficha.Codigo, ficha.Nombre);
+                return File(pdf, "application/pdf", fileName);
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ExportarFichaTecnicaProductoServicioPdf", "No fue posible generar el PDF de la ficha técnica.");
+            }
+        }
+
+        private async Task<ProductoServicioFichaTecnicaDto?> ObtenerFichaTecnicaProductoAsync(SqlConnection connection, Guid idEmpresa, Guid idProductoServicio)
+        {
+            using SqlCommand command = new SqlCommand(@"
+SELECT TOP (1)
+    ps.id,
+    ps.idEmpresa,
+    ps.Tipo,
+    CASE ps.Tipo WHEN 1 THEN 'Producto' ELSE 'Servicio' END AS TipoNombre,
+    ps.Codigo,
+    ps.Nombre,
+    ISNULL(ps.Descripcion, '') AS Descripcion,
+    ps.Activo,
+    cat.Nombre AS Categoria,
+    cat.AplicaA AS CategoriaAplicaA,
+    ISNULL(m.Nombre, '') AS Marca,
+    ps.idColeccion,
+    ISNULL(col.Numero, '') AS ColeccionNumero,
+    ISNULL(col.Nombre, '') AS ColeccionNombre,
+    ps.idPaquete,
+    ISNULL(pa.Nombre, '') AS PaqueteNombre,
+    ISNULL(pa.TipoPaquete, '') AS TipoPaquete,
+    pa.LargoCm AS PaqueteLargoCm,
+    pa.AnchoCm AS PaqueteAnchoCm,
+    pa.AltoCm AS PaqueteAltoCm,
+    pa.PesoEmpaqueVacioKg,
+    ISNULL(ps.ImagenUrl, '') AS ImagenUrl,
+    ISNULL(ps.ImagenNombre, '') AS ImagenNombre,
+    ps.idUnidadMedida,
+    um.Nombre AS UnidadMedida,
+    um.Abreviatura AS UnidadAbreviatura,
+    um.PermiteDecimales AS UnidadPermiteDecimales,
+    ps.Costo,
+    ps.PrecioPublico,
+    ps.PrecioComparacion,
+    ps.PrecioUnitarioMonto,
+    ps.PrecioUnitarioBaseCantidad,
+    ISNULL(ps.PrecioUnitarioUnidad, '') AS PrecioUnitarioUnidad,
+    ISNULL(ps.ClaveProductoSat, '') AS ClaveProductoSat,
+    ISNULL(ps.ClaveUnidadSat, '') AS ClaveUnidadSat,
+    ISNULL(ps.ObjetoImpuesto, '') AS ObjetoImpuesto,
+    ps.EsProductoFisico,
+    ps.PesoKg,
+    ps.LargoCm,
+    ps.AnchoCm,
+    ps.AltoCm,
+    ps.UsaNumeroSerie,
+    ps.CausaInventario,
+    ps.PermiteVentaSinExistencia,
+    ex.ExistenciaActual,
+    ex.ExistenciaMinima
+FROM dbo.ProductosServicios ps
+INNER JOIN dbo.ProductosServiciosCategorias cat
+    ON cat.idEmpresa = ps.idEmpresa AND cat.id = ps.idCategoria
+INNER JOIN dbo.ProductosServiciosUnidadesMedida um
+    ON um.idEmpresa = ps.idEmpresa AND um.id = ps.idUnidadMedida
+LEFT JOIN dbo.ProductosServiciosMarcas m
+    ON m.idEmpresa = ps.idEmpresa AND m.id = ps.idMarca
+LEFT JOIN dbo.ProductosServiciosColecciones col
+    ON col.idEmpresa = ps.idEmpresa AND col.id = ps.idColeccion
+LEFT JOIN dbo.ProductosServiciosPaquetes pa
+    ON pa.idEmpresa = ps.idEmpresa AND pa.id = ps.idPaquete
+LEFT JOIN dbo.ProductosServiciosExistencias ex
+    ON ex.idEmpresa = ps.idEmpresa AND ex.idProductoServicio = ps.id
+WHERE ps.idEmpresa = @IdEmpresa
+  AND ps.id = @IdProductoServicio
+  AND ps.FechaArchivado IS NULL", connection);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+
+            ProductoServicioFichaTecnicaDto? ficha = null;
+            using (SqlDataReader reader = await command.ExecuteReaderAsync())
+            {
+                if (await reader.ReadAsync())
+                {
+                    ficha = new ProductoServicioFichaTecnicaDto
+                    {
+                        Id = ReadGuid(reader, "id"),
+                        IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                        Tipo = ReadByte(reader, "Tipo"),
+                        TipoNombre = ReadString(reader, "TipoNombre"),
+                        Codigo = ReadString(reader, "Codigo"),
+                        Nombre = ReadString(reader, "Nombre"),
+                        Descripcion = ReadString(reader, "Descripcion"),
+                        Activo = ReadBool(reader, "Activo"),
+                        EstatusNombre = ReadBool(reader, "Activo") ? "Activo" : "Inactivo",
+                        Categoria = ReadString(reader, "Categoria"),
+                        CategoriaAplicaA = ReadByte(reader, "CategoriaAplicaA"),
+                        Marca = ReadString(reader, "Marca"),
+                        IdColeccion = ReadNullableGuid(reader, "idColeccion"),
+                        ColeccionNumero = ReadString(reader, "ColeccionNumero"),
+                        ColeccionNombre = ReadString(reader, "ColeccionNombre"),
+                        IdPaquete = ReadNullableGuid(reader, "idPaquete"),
+                        PaqueteNombre = ReadString(reader, "PaqueteNombre"),
+                        TipoPaquete = ReadString(reader, "TipoPaquete"),
+                        PaqueteLargoCm = ReadNullableDecimal(reader, "PaqueteLargoCm"),
+                        PaqueteAnchoCm = ReadNullableDecimal(reader, "PaqueteAnchoCm"),
+                        PaqueteAltoCm = ReadNullableDecimal(reader, "PaqueteAltoCm"),
+                        PaquetePesoEmpaqueVacioKg = ReadNullableDecimal(reader, "PesoEmpaqueVacioKg"),
+                        ImagenUrl = ReadString(reader, "ImagenUrl"),
+                        ImagenNombre = ReadString(reader, "ImagenNombre"),
+                        IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
+                        UnidadMedida = ReadString(reader, "UnidadMedida"),
+                        UnidadAbreviatura = ReadString(reader, "UnidadAbreviatura"),
+                        UnidadPermiteDecimales = ReadBool(reader, "UnidadPermiteDecimales"),
+                        Costo = ReadNullableDecimal(reader, "Costo"),
+                        PrecioPublico = ReadDecimal(reader, "PrecioPublico"),
+                        PrecioComparacion = ReadNullableDecimal(reader, "PrecioComparacion"),
+                        PrecioUnitarioMonto = ReadNullableDecimal(reader, "PrecioUnitarioMonto"),
+                        PrecioUnitarioBaseCantidad = ReadNullableDecimal(reader, "PrecioUnitarioBaseCantidad"),
+                        PrecioUnitarioUnidad = ReadString(reader, "PrecioUnitarioUnidad"),
+                        ClaveProductoSat = ReadString(reader, "ClaveProductoSat"),
+                        ClaveUnidadSat = ReadString(reader, "ClaveUnidadSat"),
+                        ObjetoImpuesto = ReadString(reader, "ObjetoImpuesto"),
+                        EsProductoFisico = ReadBool(reader, "EsProductoFisico"),
+                        PesoKg = ReadNullableDecimal(reader, "PesoKg"),
+                        LargoCm = ReadNullableDecimal(reader, "LargoCm"),
+                        AnchoCm = ReadNullableDecimal(reader, "AnchoCm"),
+                        AltoCm = ReadNullableDecimal(reader, "AltoCm"),
+                        UsaNumeroSerie = ReadBool(reader, "UsaNumeroSerie"),
+                        CausaInventario = ReadBool(reader, "CausaInventario"),
+                        PermiteVentaSinExistencia = ReadBool(reader, "PermiteVentaSinExistencia"),
+                        ExistenciaActual = ReadNullableDecimal(reader, "ExistenciaActual"),
+                        ExistenciaMinima = ReadNullableDecimal(reader, "ExistenciaMinima")
+                    };
+                }
+            }
+
+            if (ficha == null)
+            {
+                return null;
+            }
+
+            ficha.Tags = await ObtenerTagsProductoAsync(connection, idEmpresa, idProductoServicio, string.Empty);
+            ficha.Atributos = await ObtenerAtributosProductoAsync(connection, idEmpresa, idProductoServicio);
+            ficha.Variantes = await ObtenerVariantesProductoAsync(connection, idEmpresa, idProductoServicio);
+            ficha.Multimedia = await ObtenerMultimediaProductoAsync(connection, idEmpresa, idProductoServicio);
+            ficha.PrecioUnitarioResumen = BuildPrecioUnitarioResumen(ficha.PrecioUnitarioMonto, ficha.PrecioUnitarioBaseCantidad, ficha.PrecioUnitarioUnidad);
+            ApplyLogisticsMetrics(ficha);
+            await EnriquecerFichaSatAsync(ficha);
+            return ficha;
+        }
+
+        private async Task EnriquecerFichaSatAsync(ProductoServicioFichaTecnicaDto ficha)
+        {
+            if (!string.IsNullOrWhiteSpace(ficha.ClaveProductoSat))
+            {
+                ficha.ClaveProductoSatDescripcion = await ResolveSatCatalogDescriptionAsync(
+                    ficha.ClaveProductoSat,
+                    term => BuscarClavesProductoSatAsync(new[] { term }, 10));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ficha.ClaveUnidadSat))
+            {
+                ficha.ClaveUnidadSatDescripcion = await ResolveSatCatalogDescriptionAsync(
+                ficha.ClaveUnidadSat,
+                    term => BuscarClavesUnidadSatAsync(term, 25));
+            }
+        }
+
+        private static decimal ResolveFactorVolumetrico(Guid _idEmpresa)
+        {
+            return FactorVolumetricoDefault;
+        }
+
+        private static ProductoServicioLogisticsMetrics CalculateLogisticsMetrics(
+            byte tipo,
+            bool esProductoFisico,
+            decimal? pesoKg,
+            decimal? paquetePesoEmpaqueVacioKg,
+            decimal? paqueteLargoCm,
+            decimal? paqueteAnchoCm,
+            decimal? paqueteAltoCm,
+            Guid? idPaquete,
+            Guid idEmpresa)
+        {
+            decimal factorVolumetrico = ResolveFactorVolumetrico(idEmpresa);
+            if (tipo != TipoProducto || !esProductoFisico)
+            {
+                return new ProductoServicioLogisticsMetrics
+                {
+                    FactorVolumetrico = factorVolumetrico
+                };
+            }
+
+            decimal? pesoFisicoTotalKg = null;
+            if (pesoKg.HasValue)
+            {
+                pesoFisicoTotalKg = pesoKg.Value + (paquetePesoEmpaqueVacioKg ?? 0m);
+            }
+
+            decimal? pesoVolumetricoKg = null;
+            bool hasPaquete = idPaquete.HasValue && idPaquete.Value != Guid.Empty;
+            if (hasPaquete &&
+                paqueteLargoCm.HasValue && paqueteLargoCm.Value > 0 &&
+                paqueteAnchoCm.HasValue && paqueteAnchoCm.Value > 0 &&
+                paqueteAltoCm.HasValue && paqueteAltoCm.Value > 0 &&
+                factorVolumetrico > 0)
+            {
+                pesoVolumetricoKg = (paqueteLargoCm.Value * paqueteAnchoCm.Value * paqueteAltoCm.Value) / factorVolumetrico;
+            }
+
+            decimal? pesoFacturableKg = null;
+            if (pesoFisicoTotalKg.HasValue && pesoVolumetricoKg.HasValue)
+            {
+                pesoFacturableKg = Math.Max(pesoFisicoTotalKg.Value, pesoVolumetricoKg.Value);
+            }
+            else
+            {
+                pesoFacturableKg = pesoFisicoTotalKg ?? pesoVolumetricoKg;
+            }
+
+            return new ProductoServicioLogisticsMetrics
+            {
+                FactorVolumetrico = factorVolumetrico,
+                PesoFisicoTotalKg = pesoFisicoTotalKg,
+                PesoVolumetricoKg = pesoVolumetricoKg,
+                PesoFacturableKg = pesoFacturableKg
+            };
+        }
+
+        private static void ApplyLogisticsMetrics(ProductoServicioDetalleDto detalle)
+        {
+            ProductoServicioLogisticsMetrics metrics = CalculateLogisticsMetrics(
+                detalle.Tipo,
+                detalle.EsProductoFisico,
+                detalle.PesoKg,
+                detalle.PaquetePesoEmpaqueVacioKg,
+                detalle.PaqueteLargoCm,
+                detalle.PaqueteAnchoCm,
+                detalle.PaqueteAltoCm,
+                detalle.IdPaquete,
+                detalle.IdEmpresa);
+
+            detalle.PesoFisicoTotalKg = metrics.PesoFisicoTotalKg;
+            detalle.PesoVolumetricoKg = metrics.PesoVolumetricoKg;
+            detalle.PesoFacturableKg = metrics.PesoFacturableKg;
+        }
+
+        private static void ApplyLogisticsMetrics(ProductoServicioFichaTecnicaDto ficha)
+        {
+            ProductoServicioLogisticsMetrics metrics = CalculateLogisticsMetrics(
+                ficha.Tipo,
+                ficha.EsProductoFisico,
+                ficha.PesoKg,
+                ficha.PaquetePesoEmpaqueVacioKg,
+                ficha.PaqueteLargoCm,
+                ficha.PaqueteAnchoCm,
+                ficha.PaqueteAltoCm,
+                ficha.IdPaquete,
+                ficha.IdEmpresa);
+
+            ficha.PesoFisicoTotalKg = metrics.PesoFisicoTotalKg;
+            ficha.PesoVolumetricoKg = metrics.PesoVolumetricoKg;
+            ficha.PesoFacturableKg = metrics.PesoFacturableKg;
+        }
+
+        private static string BuildPrecioUnitarioResumen(decimal? monto, decimal? baseCantidad, string unidad)
+        {
+            if (!monto.HasValue || monto.Value <= 0 || !baseCantidad.HasValue || baseCantidad.Value <= 0 || string.IsNullOrWhiteSpace(unidad))
+            {
+                return string.Empty;
+            }
+
+            return $"{monto.Value.ToString("C2", CultureInfo.GetCultureInfo("es-MX"))} por {baseCantidad.Value.ToString("0.####", CultureInfo.InvariantCulture)} {unidad.Trim()}";
+        }
+
+        private async Task<string> ResolveSatCatalogDescriptionAsync(string clave, Func<string, Task<List<ProductoServicioOpcionDto>>> search)
+        {
+            string normalized = (clave ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                List<ProductoServicioOpcionDto> results = await search(normalized);
+                ProductoServicioOpcionDto? exact = results.FirstOrDefault(item => string.Equals(item.Clave, normalized, StringComparison.OrdinalIgnoreCase));
+                if (exact != null)
+                {
+                    string label = (exact.Nombre ?? string.Empty).Trim();
+                    int separatorIndex = label.IndexOf(" - ", StringComparison.Ordinal);
+                    return separatorIndex >= 0 ? label[(separatorIndex + 3)..].Trim() : label;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "No fue posible resolver la descripción SAT para la clave {Clave}.", normalized);
+            }
+
+            return string.Empty;
         }
 
         [HttpPost("SubirImagenTemporal")]
@@ -759,6 +1175,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     }
 
                     await SynchronizeInventoryForSaveAsync(connection, transaction, productoId, context.IdEmpresa, normalized, existente, existenciaActual, movimientosHistoricos, usuarioId, ahora);
+                    await SynchronizeProductoTagsAsync(connection, transaction, context.IdEmpresa, productoId, normalized.Tags, ahora);
                     await SynchronizeProductoAtributosAsync(connection, transaction, context.IdEmpresa, productoId, normalized.Atributos, ahora);
                     Dictionary<string, VariantOptionReference> optionReferences = await SynchronizeProductoOpcionesVarianteAsync(connection, transaction, context.IdEmpresa, productoId, normalized.OpcionesVariante, ahora);
                     variantSync = await SynchronizeProductoVariantesAsync(connection, transaction, context, productoId, normalized.Variantes, optionReferences, ahora);
@@ -828,12 +1245,14 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
             {
                 ProductoServicioCombosDto response = new ProductoServicioCombosDto
                 {
+                    FactorVolumetrico = ResolveFactorVolumetrico(context.IdEmpresa),
                     Categorias = await ObtenerCategoriasComboAsync(context.IdEmpresa, null),
                     Marcas = await ObtenerCatalogoBasicoComboAsync(context.IdEmpresa, "dbo.ProductosServiciosMarcas"),
                     UnidadesMedida = await ObtenerUnidadesComboAsync(context.IdEmpresa),
                     Colecciones = await ObtenerColeccionesComboAsync(context.IdEmpresa),
                     Paquetes = await ObtenerPaquetesComboAsync(context.IdEmpresa),
                     Atributos = await ObtenerAtributosComboAsync(context.IdEmpresa),
+                    Tags = await ObtenerTagsCatalogoAsync(context.IdEmpresa),
                     Tipos = new List<ProductoServicioOpcionDto>
                     {
                         new ProductoServicioOpcionDto { Clave = TipoProducto.ToString(), Nombre = "Producto" },
@@ -875,6 +1294,45 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
             catch (Exception ex)
             {
                 return HandleException(ex, "ObtenerCombosProductosServicios", "No fue posible cargar los catálogos del módulo.");
+            }
+        }
+
+        [HttpPost("GuardarTagProductoServicio")]
+        public async Task<IActionResult> GuardarTagProductoServicio([FromBody] ProductoServicioTagGuardarRequest request, Guid idEmpresa)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            {
+                return error!;
+            }
+
+            try
+            {
+                string nombre = Truncate(request.Nombre ?? string.Empty, TagLength).Trim();
+                if (string.IsNullOrWhiteSpace(nombre))
+                {
+                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Captura un nombre de etiqueta." });
+                }
+
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+                using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+
+                ProductoServicioTagDto tag = await ResolveOrCreateTagAsync(connection, transaction, context.IdEmpresa, nombre, DateTime.UtcNow);
+                transaction.Commit();
+
+                return Ok(new ProductoServicioTagOperacionResponse
+                {
+                    Mensaje = "La etiqueta fue guardada.",
+                    Tag = tag
+                });
+            }
+            catch (ProductoServicioValidationException validationEx)
+            {
+                return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validationEx.Message });
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "GuardarTagProductoServicio", "No fue posible guardar la etiqueta.");
             }
         }
 
@@ -2343,6 +2801,104 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1");
             return items;
         }
 
+        private async Task<List<ProductoServicioTagDto>> ObtenerTagsCatalogoAsync(Guid idEmpresa, string busqueda = "")
+        {
+            using SqlConnection connection = CreateConnection();
+            await connection.OpenAsync();
+
+            StringBuilder query = new StringBuilder(@"
+SELECT
+    id,
+    idEmpresa,
+    identityKey,
+    '' AS Codigo,
+    Nombre,
+    '' AS Descripcion,
+    Activo,
+    FechaCreacion,
+    FechaActualizacion,
+    FechaArchivado
+FROM dbo.ProductosServiciosTags
+WHERE idEmpresa = @IdEmpresa AND Activo = 1");
+
+            using SqlCommand command = new SqlCommand();
+            command.Connection = connection;
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+
+            if (!string.IsNullOrWhiteSpace(busqueda))
+            {
+                query.Append(" AND Nombre LIKE @Busqueda");
+                command.Parameters.AddWithValue("@Busqueda", $"%{busqueda.Trim()}%");
+            }
+
+            query.Append(" ORDER BY Nombre ASC");
+            command.CommandText = query.ToString();
+
+            List<ProductoServicioTagDto> items = new List<ProductoServicioTagDto>();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(new ProductoServicioTagDto
+                {
+                    Id = ReadGuid(reader, "id"),
+                    IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                    IdentityKey = ReadGuid(reader, "identityKey"),
+                    Codigo = ReadString(reader, "Codigo"),
+                    Nombre = ReadString(reader, "Nombre"),
+                    Descripcion = ReadString(reader, "Descripcion"),
+                    Activo = ReadBool(reader, "Activo"),
+                    FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
+                    FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),
+                    FechaArchivado = ReadNullableDateTime(reader, "FechaArchivado")
+                });
+            }
+
+            return items;
+        }
+
+        private async Task<List<ProductoServicioTagSeleccionDto>> ObtenerTagsProductoAsync(SqlConnection connection, Guid idEmpresa, Guid idProductoServicio, string legacyTag)
+        {
+            using SqlCommand command = new SqlCommand(@"
+SELECT
+    t.id,
+    t.Nombre,
+    t.Activo
+FROM dbo.ProductosServiciosProductoTags pt
+INNER JOIN dbo.ProductosServiciosTags t
+    ON t.idEmpresa = pt.idEmpresa AND t.id = pt.idTag
+WHERE pt.idEmpresa = @IdEmpresa AND pt.idProductoServicio = @IdProductoServicio
+ORDER BY t.Nombre ASC", connection);
+
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+
+            List<ProductoServicioTagSeleccionDto> items = new List<ProductoServicioTagSeleccionDto>();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(new ProductoServicioTagSeleccionDto
+                {
+                    Id = ReadGuid(reader, "id"),
+                    Nombre = ReadString(reader, "Nombre"),
+                    Activo = ReadBool(reader, "Activo"),
+                    Legacy = false
+                });
+            }
+
+            if (items.Count == 0 && !string.IsNullOrWhiteSpace(legacyTag))
+            {
+                items.Add(new ProductoServicioTagSeleccionDto
+                {
+                    Id = null,
+                    Nombre = legacyTag.Trim(),
+                    Activo = true,
+                    Legacy = true
+                });
+            }
+
+            return items;
+        }
+
         private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerUnidadesComboAsync(Guid idEmpresa, string busqueda = "")
         {
             using SqlConnection connection = CreateConnection();
@@ -2974,6 +3530,17 @@ WHERE idEmpresa = @IdEmpresa
                 return $"La etiqueta no puede exceder {TagLength} caracteres.";
             }
 
+            if (request.Tags != null)
+            {
+                foreach (ProductoServicioTagGuardarRequest tag in request.Tags)
+                {
+                    if ((tag?.Nombre ?? string.Empty).Trim().Length > TagLength)
+                    {
+                        return $"Cada etiqueta debe tener como máximo {TagLength} caracteres.";
+                    }
+                }
+            }
+
             if ((request.Descripcion ?? string.Empty).Trim().Length > DescripcionLength)
             {
                 return $"La descripción no puede exceder {DescripcionLength} caracteres.";
@@ -3089,6 +3656,24 @@ WHERE idEmpresa = @IdEmpresa
                 return "Todos los atributos deben estar definidos.";
             }
 
+            if (request.Tags != null)
+            {
+                foreach (ProductoServicioTagGuardarRequest tag in request.Tags)
+                {
+                    string nombreTag = (tag?.Nombre ?? string.Empty).Trim();
+                    bool hasId = tag != null && tag.Id.HasValue && tag.Id.Value != Guid.Empty;
+                    if (!hasId && string.IsNullOrWhiteSpace(nombreTag))
+                    {
+                        return "No envíes etiquetas vacías.";
+                    }
+
+                    if (nombreTag.Length > TagLength)
+                    {
+                        return $"Cada etiqueta debe tener como máximo {TagLength} caracteres.";
+                    }
+                }
+            }
+
             if (request.Atributos.Any(a => a.Valores == null || !a.Valores.Any()))
             {
                 return "Cada asociación de atributo debe incluir al menos un elemento seleccionado.";
@@ -3102,6 +3687,11 @@ WHERE idEmpresa = @IdEmpresa
             if (request.Variantes.Any(v => string.IsNullOrWhiteSpace(v.ClaveCombinacion)))
             {
                 return "Todas las variantes deben incluir una clave de combinación.";
+            }
+
+            if (request.Variantes.Any(v => v.Costo.HasValue && v.Costo.Value < 0))
+            {
+                return "El costo por variante no puede ser negativo.";
             }
 
             return string.Empty;
@@ -3429,12 +4019,21 @@ WHERE idEmpresa = @IdEmpresa
 
         private static NormalizedProductoServicioRequest NormalizeRequest(ProductoServicioGuardarRequest request)
         {
+            List<ProductoServicioTagGuardarRequest> normalizedTags = (request.Tags ?? new List<ProductoServicioTagGuardarRequest>())
+                .Select(tag => new ProductoServicioTagGuardarRequest
+                {
+                    Id = tag?.Id.HasValue == true && tag.Id.Value != Guid.Empty ? tag.Id : null,
+                    Nombre = Truncate(tag?.Nombre ?? string.Empty, TagLength).Trim()
+                })
+                .Where(tag => tag.Id.HasValue || !string.IsNullOrWhiteSpace(tag.Nombre))
+                .ToList();
+
             NormalizedProductoServicioRequest normalized = new NormalizedProductoServicioRequest
             {
                 Id = request.Id,
                 Tipo = request.Tipo,
                 Codigo = request.Codigo.Trim(),
-                Tag = (request.Tag ?? string.Empty).Trim(),
+                Tag = ResolveLegacyTagShadow(normalizedTags, request.Tag),
                 Nombre = request.Nombre.Trim(),
                 Descripcion = (request.Descripcion ?? string.Empty).Trim(),
                 IdCategoria = request.IdCategoria,
@@ -3464,6 +4063,7 @@ WHERE idEmpresa = @IdEmpresa
                 Activo = request.Activo,
                 ImagenPrincipal = request.ImagenPrincipal,
                 EliminarImagenPrincipal = request.EliminarImagenPrincipal,
+                Tags = normalizedTags,
                 Atributos = request.Atributos ?? new List<ProductoServicioAtributoGuardarRequest>(),
                 OpcionesVariante = request.OpcionesVariante ?? new List<ProductoServicioOpcionVarianteGuardarRequest>(),
                 Variantes = request.Variantes ?? new List<ProductoServicioVarianteGuardarRequest>(),
@@ -3495,6 +4095,19 @@ WHERE idEmpresa = @IdEmpresa
             }
 
             return normalized;
+        }
+
+        private static string ResolveLegacyTagShadow(List<ProductoServicioTagGuardarRequest> tags, string? fallback)
+        {
+            ProductoServicioTagGuardarRequest? firstTag = (tags ?? new List<ProductoServicioTagGuardarRequest>())
+                .FirstOrDefault(tag => !string.IsNullOrWhiteSpace(tag.Nombre));
+
+            if (firstTag != null)
+            {
+                return firstTag.Nombre.Trim();
+            }
+
+            return (fallback ?? string.Empty).Trim();
         }
 
         private static void AddProductoServicioParameters(SqlCommand command, Guid productoId, Guid idEmpresa, NormalizedProductoServicioRequest request, ResolvedImageMutation imageMutation, DateTime ahora, bool includeIdentityKey)
@@ -4329,6 +4942,7 @@ SELECT
     pv.ClaveCombinacion,
     ISNULL(pv.ImagenUrl, '') AS ImagenUrl,
     ISNULL(pv.ImagenNombre, '') AS ImagenNombre,
+    pv.Costo,
     pv.PrecioPublico,
     pv.PrecioComparacion,
     pv.PrecioUnitarioMonto,
@@ -4369,6 +4983,7 @@ ORDER BY pv.Orden, pv.Nombre, vv.Orden", connection, transaction);
                         ClaveCombinacion = ReadString(reader, "ClaveCombinacion"),
                         ImagenUrl = ReadString(reader, "ImagenUrl"),
                         ImagenNombre = ReadString(reader, "ImagenNombre"),
+                        Costo = ReadNullableDecimal(reader, "Costo"),
                         PrecioPublico = ReadNullableDecimal(reader, "PrecioPublico"),
                         PrecioComparacion = ReadNullableDecimal(reader, "PrecioComparacion"),
                         PrecioUnitarioMonto = ReadNullableDecimal(reader, "PrecioUnitarioMonto"),
@@ -4607,6 +5222,210 @@ VALUES
             }
         }
 
+        private async Task<ProductoServicioTagDto> ResolveOrCreateTagAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, string nombre, DateTime ahora)
+        {
+            string normalizedName = Truncate(nombre ?? string.Empty, TagLength).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedName))
+            {
+                throw new ProductoServicioValidationException("Captura un nombre de etiqueta.");
+            }
+
+            using SqlCommand find = new SqlCommand(@"
+SELECT TOP (1)
+    id,
+    idEmpresa,
+    identityKey,
+    '' AS Codigo,
+    Nombre,
+    '' AS Descripcion,
+    Activo,
+    FechaCreacion,
+    FechaActualizacion,
+    FechaArchivado
+FROM dbo.ProductosServiciosTags
+WHERE idEmpresa = @IdEmpresa
+  AND UPPER(LTRIM(RTRIM(Nombre))) = UPPER(@NombreNormalizado)
+ORDER BY Activo DESC, FechaActualizacion DESC, FechaCreacion DESC, id DESC", connection, transaction);
+
+            find.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            find.Parameters.AddWithValue("@NombreNormalizado", normalizedName);
+
+            using SqlDataReader reader = await find.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                ProductoServicioTagDto existing = new ProductoServicioTagDto
+                {
+                    Id = ReadGuid(reader, "id"),
+                    IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                    IdentityKey = ReadGuid(reader, "identityKey"),
+                    Codigo = ReadString(reader, "Codigo"),
+                    Nombre = ReadString(reader, "Nombre"),
+                    Descripcion = ReadString(reader, "Descripcion"),
+                    Activo = ReadBool(reader, "Activo"),
+                    FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
+                    FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),
+                    FechaArchivado = ReadNullableDateTime(reader, "FechaArchivado")
+                };
+
+                reader.Close();
+
+                if (!existing.Activo)
+                {
+                    await ReactivateTagAsync(connection, transaction, idEmpresa, existing.Id, ahora);
+                    existing.Activo = true;
+                    existing.FechaActualizacion = ahora;
+                    existing.FechaArchivado = null;
+                }
+
+                return existing;
+            }
+
+            reader.Close();
+
+            ProductoServicioTagDto created = new ProductoServicioTagDto
+            {
+                Id = Guid.NewGuid(),
+                IdEmpresa = idEmpresa,
+                IdentityKey = Guid.NewGuid(),
+                Nombre = normalizedName,
+                Activo = true,
+                FechaCreacion = ahora,
+                FechaActualizacion = ahora
+            };
+
+            using SqlCommand insert = new SqlCommand(@"
+INSERT INTO dbo.ProductosServiciosTags
+    (id, idEmpresa, identityKey, Nombre, Activo, FechaCreacion, FechaActualizacion, FechaArchivado)
+VALUES
+    (@Id, @IdEmpresa, @IdentityKey, @Nombre, 1, @FechaCreacion, @FechaActualizacion, NULL)", connection, transaction);
+
+            insert.Parameters.AddWithValue("@Id", created.Id);
+            insert.Parameters.AddWithValue("@IdEmpresa", created.IdEmpresa);
+            insert.Parameters.AddWithValue("@IdentityKey", created.IdentityKey);
+            insert.Parameters.AddWithValue("@Nombre", created.Nombre);
+            insert.Parameters.AddWithValue("@FechaCreacion", created.FechaCreacion);
+            insert.Parameters.AddWithValue("@FechaActualizacion", created.FechaActualizacion);
+            await insert.ExecuteNonQueryAsync();
+
+            return created;
+        }
+
+        private async Task ReactivateTagAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idTag, DateTime ahora)
+        {
+            using SqlCommand update = new SqlCommand(@"
+UPDATE dbo.ProductosServiciosTags
+SET
+    Activo = 1,
+    FechaActualizacion = @FechaActualizacion,
+    FechaArchivado = NULL
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+
+            update.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            update.Parameters.AddWithValue("@Id", idTag);
+            update.Parameters.AddWithValue("@FechaActualizacion", ahora);
+            await update.ExecuteNonQueryAsync();
+        }
+
+        private async Task SynchronizeProductoTagsAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, List<ProductoServicioTagGuardarRequest> tags, DateTime ahora)
+        {
+            List<ProductoServicioTagGuardarRequest> requestedTags = tags ?? new List<ProductoServicioTagGuardarRequest>();
+            Dictionary<Guid, ProductoServicioTagDto> resolvedTags = new Dictionary<Guid, ProductoServicioTagDto>();
+
+            foreach (ProductoServicioTagGuardarRequest requestedTag in requestedTags)
+            {
+                ProductoServicioTagDto resolved;
+                if (requestedTag.Id.HasValue && requestedTag.Id.Value != Guid.Empty)
+                {
+                    using SqlCommand findById = new SqlCommand(@"
+SELECT TOP (1)
+    id,
+    idEmpresa,
+    identityKey,
+    '' AS Codigo,
+    Nombre,
+    '' AS Descripcion,
+    Activo,
+    FechaCreacion,
+    FechaActualizacion,
+    FechaArchivado
+FROM dbo.ProductosServiciosTags
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+
+                    findById.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                    findById.Parameters.AddWithValue("@Id", requestedTag.Id.Value);
+
+                    using SqlDataReader reader = await findById.ExecuteReaderAsync();
+                    if (!await reader.ReadAsync())
+                    {
+                        throw new ProductoServicioValidationException("Una de las etiquetas seleccionadas ya no está disponible.");
+                    }
+
+                    resolved = new ProductoServicioTagDto
+                    {
+                        Id = ReadGuid(reader, "id"),
+                        IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                        IdentityKey = ReadGuid(reader, "identityKey"),
+                        Codigo = ReadString(reader, "Codigo"),
+                        Nombre = ReadString(reader, "Nombre"),
+                        Descripcion = ReadString(reader, "Descripcion"),
+                        Activo = ReadBool(reader, "Activo"),
+                        FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
+                        FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),
+                        FechaArchivado = ReadNullableDateTime(reader, "FechaArchivado")
+                    };
+
+                    reader.Close();
+
+                    if (!resolved.Activo)
+                    {
+                        await ReactivateTagAsync(connection, transaction, idEmpresa, resolved.Id, ahora);
+                        resolved.Activo = true;
+                        resolved.FechaActualizacion = ahora;
+                        resolved.FechaArchivado = null;
+                    }
+                }
+                else
+                {
+                    resolved = await ResolveOrCreateTagAsync(connection, transaction, idEmpresa, requestedTag.Nombre, ahora);
+                }
+
+                resolvedTags[resolved.Id] = resolved;
+            }
+
+            using SqlCommand delete = new SqlCommand(@"
+DELETE FROM dbo.ProductosServiciosProductoTags
+WHERE idEmpresa = @IdEmpresa
+  AND idProductoServicio = @IdProductoServicio", connection, transaction);
+
+            delete.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            delete.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+            await delete.ExecuteNonQueryAsync();
+
+            foreach (Guid idTag in resolvedTags.Keys)
+            {
+                using SqlCommand insert = new SqlCommand(@"
+IF NOT EXISTS (
+    SELECT 1
+    FROM dbo.ProductosServiciosProductoTags
+    WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio AND idTag = @IdTag
+)
+BEGIN
+    INSERT INTO dbo.ProductosServiciosProductoTags
+        (id, idEmpresa, identityKey, idProductoServicio, idTag, FechaCreacion)
+    VALUES
+        (@Id, @IdEmpresa, @IdentityKey, @IdProductoServicio, @IdTag, @FechaCreacion)
+END", connection, transaction);
+
+                insert.Parameters.AddWithValue("@Id", Guid.NewGuid());
+                insert.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
+                insert.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+                insert.Parameters.AddWithValue("@IdTag", idTag);
+                insert.Parameters.AddWithValue("@FechaCreacion", ahora);
+                await insert.ExecuteNonQueryAsync();
+            }
+        }
+
         private async Task SynchronizeProductoAtributosAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, List<ProductoServicioAtributoGuardarRequest> atributos, DateTime ahora)
         {
             using SqlCommand deleteValores = new SqlCommand(@"
@@ -4803,9 +5622,9 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
 
                 using SqlCommand insert = new SqlCommand(@"
 INSERT INTO dbo.ProductosServiciosVariantes
-    (id, idEmpresa, identityKey, idProductoServicio, Sku, Nombre, ClaveCombinacion, ImagenUrl, ImagenNombre, PrecioPublico, PrecioComparacion, PrecioUnitarioMonto, PrecioUnitarioBaseCantidad, PrecioUnitarioUnidad, Orden, Activo, FechaCreacion, FechaActualizacion)
+    (id, idEmpresa, identityKey, idProductoServicio, Sku, Nombre, ClaveCombinacion, ImagenUrl, ImagenNombre, Costo, PrecioPublico, PrecioComparacion, PrecioUnitarioMonto, PrecioUnitarioBaseCantidad, PrecioUnitarioUnidad, Orden, Activo, FechaCreacion, FechaActualizacion)
 VALUES
-    (@Id, @IdEmpresa, @IdentityKey, @IdProductoServicio, @Sku, @Nombre, @ClaveCombinacion, @ImagenUrl, @ImagenNombre, @PrecioPublico, @PrecioComparacion, @PrecioUnitarioMonto, @PrecioUnitarioBaseCantidad, @PrecioUnitarioUnidad, @Orden, 1, @FechaCreacion, @FechaActualizacion)", connection, transaction);
+    (@Id, @IdEmpresa, @IdentityKey, @IdProductoServicio, @Sku, @Nombre, @ClaveCombinacion, @ImagenUrl, @ImagenNombre, @Costo, @PrecioPublico, @PrecioComparacion, @PrecioUnitarioMonto, @PrecioUnitarioBaseCantidad, @PrecioUnitarioUnidad, @Orden, 1, @FechaCreacion, @FechaActualizacion)", connection, transaction);
                 insert.Parameters.AddWithValue("@Id", idVariante);
                 insert.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
                 insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
@@ -4815,6 +5634,7 @@ VALUES
                 insert.Parameters.AddWithValue("@ClaveCombinacion", variante.ClaveCombinacion.Trim());
                 insert.Parameters.AddWithValue("@ImagenUrl", string.IsNullOrWhiteSpace(imageMutation.ImagenUrl) ? DBNull.Value : imageMutation.ImagenUrl);
                 insert.Parameters.AddWithValue("@ImagenNombre", string.IsNullOrWhiteSpace(imageMutation.ImagenNombre) ? DBNull.Value : imageMutation.ImagenNombre);
+                insert.Parameters.AddWithValue("@Costo", variante.Costo.HasValue ? variante.Costo.Value : DBNull.Value);
                 insert.Parameters.AddWithValue("@PrecioPublico", variante.PrecioPublico.HasValue ? variante.PrecioPublico.Value : DBNull.Value);
                 insert.Parameters.AddWithValue("@PrecioComparacion", variante.PrecioComparacion.HasValue ? variante.PrecioComparacion.Value : DBNull.Value);
                 insert.Parameters.AddWithValue("@PrecioUnitarioMonto", variante.PrecioUnitarioMonto.HasValue ? variante.PrecioUnitarioMonto.Value : DBNull.Value);
@@ -5652,6 +6472,670 @@ VALUES
             };
         }
 
+        private async Task<byte[]> BuildFichaTecnicaPdfDocumentAsync(ProductoServicioFichaTecnicaDto ficha)
+        {
+            QuestPDF.Settings.License = LicenseType.Community;
+
+            byte[]? logo = LoadSharedCheckAppLogo();
+            byte[]? imagenPrincipal = await LoadRemoteImageBytesAsync(ficha.ImagenUrl);
+            Dictionary<Guid, byte[]?> imagenesVariantes = new Dictionary<Guid, byte[]?>();
+            foreach (ProductoServicioVarianteDto variante in ficha.Variantes)
+            {
+                imagenesVariantes[variante.Id] = await LoadRemoteImageBytesAsync(variante.ImagenUrl);
+            }
+
+            bool hasPhysicalSection = ficha.Tipo == TipoProducto && (
+                ficha.EsProductoFisico ||
+                ficha.PesoKg.HasValue ||
+                ficha.IdPaquete.HasValue ||
+                ficha.PaqueteLargoCm.HasValue ||
+                ficha.PaqueteAnchoCm.HasValue ||
+                ficha.PaqueteAltoCm.HasValue ||
+                ficha.PaquetePesoEmpaqueVacioKg.HasValue);
+            bool hasInventorySection = ficha.Tipo == TipoProducto && ficha.CausaInventario;
+            bool hasAttributesSection = ficha.Tipo == TipoProducto && ficha.Atributos.Any();
+            bool hasVariantsSection = ficha.Tipo == TipoProducto && ficha.Variantes.Any();
+            bool hasMultimediaSection = ficha.Multimedia.Any();
+
+            return Document.Create(document =>
+            {
+                document.Page(page =>
+                {
+                    page.Size(PageSizes.A4);
+                    page.Margin(28);
+                    page.DefaultTextStyle(style => style.FontFamily(Fonts.Calibri).FontSize(10).FontColor("#20304A"));
+
+                    page.Header().Column(column =>
+                    {
+                        column.Spacing(10);
+                        column.Item().Row(row =>
+                        {
+                            row.RelativeItem().Column(left =>
+                            {
+                                left.Spacing(4);
+                                if (logo != null)
+                                {
+                                    left.Item().Height(24).Image(logo).FitHeight();
+                                }
+
+                                left.Item().Text("FICHA TÉCNICA").SemiBold().FontSize(20).FontColor("#0F172A");
+                                left.Item().Text("CheckApp").FontSize(9).FontColor("#64748B");
+                            });
+
+                            row.ConstantItem(210).Element(card =>
+                            {
+                                card
+                                    .Border(1)
+                                    .BorderColor("#D7E0EA")
+                                    .CornerRadius(12)
+                                    .Background("#F8FAFC")
+                                    .Padding(12)
+                                    .Column(info =>
+                                    {
+                                        info.Spacing(4);
+                                        info.Item().Text(ficha.Nombre).SemiBold().FontSize(13).FontColor("#0F172A");
+                                        info.Item().Text($"Código: {FichaTextOrDash(ficha.Codigo)}").FontColor("#334155");
+                                        info.Item().Text($"{FichaTextOrDash(ficha.TipoNombre)} · {FichaTextOrDash(ficha.EstatusNombre)}").FontColor("#334155");
+                                    });
+                            });
+                        });
+                    });
+
+                    page.Content().Column(content =>
+                    {
+                        content.Spacing(12);
+                        content.Item().Element(container => ComposeFichaGeneralSection(container, ficha, imagenPrincipal));
+                        content.Item().Element(container => ComposeFichaCommercialSection(container, ficha));
+                        content.Item().Element(container => ComposeFichaFiscalSection(container, ficha));
+
+                        if (hasPhysicalSection)
+                        {
+                            content.Item().Element(container => ComposeFichaPhysicalSection(container, ficha));
+                        }
+
+                        if (hasInventorySection)
+                        {
+                            content.Item().Element(container => ComposeFichaInventorySection(container, ficha));
+                        }
+
+                        if (hasAttributesSection)
+                        {
+                            content.Item().Element(container => ComposeFichaAttributesSection(container, ficha.Atributos));
+                        }
+
+                        if (hasVariantsSection)
+                        {
+                            content.Item().Element(container => ComposeFichaVariantsSection(container, ficha.Variantes, imagenesVariantes));
+                        }
+
+                        if (hasMultimediaSection)
+                        {
+                            content.Item().Element(container => ComposeFichaMultimediaSection(container, ficha.Multimedia));
+                        }
+                    });
+
+                    page.Footer().AlignCenter().Text(text =>
+                    {
+                        text.DefaultTextStyle(style => style.FontSize(8).FontColor("#64748B"));
+                        text.Span("CheckApp · Ficha técnica · ");
+                        text.CurrentPageNumber();
+                        text.Span(" / ");
+                        text.TotalPages();
+                    });
+                });
+            }).GeneratePdf();
+        }
+
+        private static void ComposeFichaGeneralSection(IContainer container, ProductoServicioFichaTecnicaDto ficha, byte[]? imagenPrincipal)
+        {
+            container
+                .Border(1)
+                .BorderColor("#D7E0EA")
+                .CornerRadius(14)
+                .Padding(14)
+                .Column(column =>
+                {
+                    column.Spacing(10);
+                    column.Item().Text("Información general").SemiBold().FontSize(13).FontColor("#0F172A");
+                    column.Item().Row(row =>
+                    {
+                        row.ConstantItem(150).Element(box =>
+                        {
+                            IContainer imageBox = box
+                                .Border(1)
+                                .BorderColor("#D7E0EA")
+                                .CornerRadius(10)
+                                .Padding(8)
+                                .Height(132);
+
+                            if (imagenPrincipal != null)
+                            {
+                                imageBox.Image(imagenPrincipal).FitArea();
+                            }
+                            else
+                            {
+                                imageBox.AlignCenter().AlignMiddle().Text("Sin imagen").FontColor("#94A3B8");
+                            }
+                        });
+
+                        row.RelativeItem().PaddingLeft(12).Column(details =>
+                        {
+                            details.Spacing(6);
+                            details.Item().Text($"Nombre: {FichaTextOrDash(ficha.Nombre)}").FontColor("#0F172A");
+                            details.Item().Text($"Código: {FichaTextOrDash(ficha.Codigo)}");
+                            details.Item().Text($"Tipo: {FichaTextOrDash(ficha.TipoNombre)}");
+                            details.Item().Text($"Estatus: {FichaTextOrDash(ficha.EstatusNombre)}");
+                            if (!string.IsNullOrWhiteSpace(ficha.Descripcion))
+                            {
+                                details.Item().Text($"Descripción: {ficha.Descripcion.Trim()}");
+                            }
+
+                            details.Item().Text($"Categoría: {FichaTextOrDash(ficha.Categoria)}");
+                            if (ficha.Tipo == TipoProducto && !string.IsNullOrWhiteSpace(ficha.Marca))
+                            {
+                                details.Item().Text($"Marca: {ficha.Marca.Trim()}");
+                            }
+
+                            string coleccion = BuildColeccionLabel(ficha.ColeccionNumero, ficha.ColeccionNombre);
+                            if (!string.IsNullOrWhiteSpace(coleccion))
+                            {
+                                details.Item().Text($"Colección: {coleccion}");
+                            }
+                        });
+                    });
+
+                    if (ficha.Tags.Any())
+                    {
+                        column.Item().Element(box =>
+                        {
+                            box.Column(tagColumn =>
+                            {
+                                tagColumn.Spacing(6);
+                                tagColumn.Item().Text("Etiquetas").SemiBold().FontSize(10).FontColor("#475569");
+                                tagColumn.Item().Text(string.Join(" • ", ficha.Tags
+                                    .Select(tag => FichaTextOrDash(tag.Nombre))
+                                    .Where(nombre => !string.IsNullOrWhiteSpace(nombre))))
+                                    .FontColor("#1D4ED8");
+                            });
+                        });
+                    }
+                });
+        }
+
+        private static void ComposeFichaCommercialSection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            List<(string Label, string Value)> rows = new List<(string Label, string Value)>
+            {
+                ("Unidad", BuildUnidadLabel(ficha.UnidadMedida, ficha.UnidadAbreviatura)),
+                ("Precio público", FichaFormatCurrency(ficha.PrecioPublico))
+            };
+
+            if (ficha.Costo.HasValue)
+            {
+                rows.Insert(1, ("Costo", FichaFormatCurrency(ficha.Costo.Value)));
+            }
+
+            if (ficha.PrecioComparacion.HasValue && ficha.PrecioComparacion.Value > 0)
+            {
+                rows.Add(("Precio de comparación", FichaFormatCurrency(ficha.PrecioComparacion.Value)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ficha.PrecioUnitarioResumen))
+            {
+                rows.Add(("Precio unitario", ficha.PrecioUnitarioResumen));
+            }
+
+            ComposeFichaInfoTable(container, "Información comercial", rows);
+        }
+
+        private static void ComposeFichaFiscalSection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            List<(string Label, string Value)> rows = new List<(string Label, string Value)>();
+
+            if (!string.IsNullOrWhiteSpace(ficha.ClaveProductoSat))
+            {
+                rows.Add(("Clave producto/servicio SAT", BuildSatLabel(ficha.ClaveProductoSat, ficha.ClaveProductoSatDescripcion)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ficha.ClaveUnidadSat))
+            {
+                rows.Add(("Clave unidad SAT", BuildSatLabel(ficha.ClaveUnidadSat, ficha.ClaveUnidadSatDescripcion)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ficha.ObjetoImpuesto))
+            {
+                rows.Add(("Objeto de impuesto", ficha.ObjetoImpuesto.Trim()));
+            }
+
+            if (!rows.Any())
+            {
+                return;
+            }
+
+            ComposeFichaInfoTable(container, "Información fiscal", rows);
+        }
+
+        private static void ComposeFichaPhysicalSection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            List<(string Label, string Value)> rows = new List<(string Label, string Value)>();
+
+            if (ficha.EsProductoFisico)
+            {
+                rows.Add(("Producto físico", "Sí"));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ficha.PaqueteNombre))
+            {
+                rows.Add(("Paquete", ficha.PaqueteNombre.Trim()));
+            }
+
+            string tipoPaquete = BuildTipoPaqueteLabel(ficha.TipoPaquete);
+            if (!string.IsNullOrWhiteSpace(tipoPaquete))
+            {
+                rows.Add(("Tipo de paquete", tipoPaquete));
+            }
+
+            rows.Add(("Peso del producto", FormatLogisticsWeightOrUnavailable(ficha.PesoKg)));
+            rows.Add(("Peso vacío del empaque", FormatLogisticsWeightOrUnavailable(ficha.PaquetePesoEmpaqueVacioKg)));
+            rows.Add(("Peso físico total", FormatLogisticsWeightOrUnavailable(ficha.PesoFisicoTotalKg)));
+            rows.Add(("Dimensiones del paquete", BuildDimensionsLabel(ficha.PaqueteLargoCm, ficha.PaqueteAnchoCm, ficha.PaqueteAltoCm, "No disponible")));
+            rows.Add(("Peso volumétrico", FormatLogisticsWeightOrUnavailable(ficha.PesoVolumetricoKg)));
+            rows.Add(("Peso facturable", FormatLogisticsWeightOrUnavailable(ficha.PesoFacturableKg)));
+
+            if (ficha.UsaNumeroSerie)
+            {
+                rows.Add(("Usa número de serie", "Sí"));
+            }
+
+            if (!rows.Any())
+            {
+                return;
+            }
+
+            ComposeFichaInfoTable(container, "Información física y logística", rows);
+        }
+
+        private static void ComposeFichaInventorySection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            List<(string Label, string Value)> rows = new List<(string Label, string Value)>();
+
+            if (ficha.ExistenciaActual.HasValue)
+            {
+                rows.Add(("Existencia actual", ficha.ExistenciaActual.Value.ToString("0.####", CultureInfo.InvariantCulture)));
+            }
+
+            if (ficha.ExistenciaMinima.HasValue)
+            {
+                rows.Add(("Existencia mínima", ficha.ExistenciaMinima.Value.ToString("0.####", CultureInfo.InvariantCulture)));
+            }
+
+            rows.Add(("Permite venta sin existencia", ficha.PermiteVentaSinExistencia ? "Sí" : "No"));
+
+            ComposeFichaInfoTable(container, "Inventario", rows);
+        }
+
+        private static void ComposeFichaAttributesSection(IContainer container, IReadOnlyCollection<ProductoServicioAtributoSeleccionDto> atributos)
+        {
+            container
+                .Border(1)
+                .BorderColor("#D7E0EA")
+                .CornerRadius(14)
+                .Padding(14)
+                .Column(column =>
+                {
+                    column.Spacing(10);
+                    column.Item().Text("Atributos").SemiBold().FontSize(13).FontColor("#0F172A");
+                    column.Item().Table(table =>
+                    {
+                        table.ColumnsDefinition(columns =>
+                        {
+                            columns.RelativeColumn(1.2f);
+                            columns.RelativeColumn(2.8f);
+                        });
+
+                        table.Header(header =>
+                        {
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Atributo"));
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Elemento(s)"));
+                        });
+
+                        foreach (ProductoServicioAtributoSeleccionDto atributo in atributos)
+                        {
+                            string valores = string.Join(", ", atributo.Valores.OrderBy(v => v.Orden).Select(v => v.Valor).Where(v => !string.IsNullOrWhiteSpace(v)));
+                            table.Cell().Element(x => FichaTableBodyCell(x, FichaTextOrDash(atributo.Nombre)));
+                            table.Cell().Element(x => FichaTableBodyCell(x, FichaTextOrDash(valores)));
+                        }
+                    });
+                });
+        }
+
+        private static void ComposeFichaVariantsSection(IContainer container, IReadOnlyCollection<ProductoServicioVarianteDto> variantes, IReadOnlyDictionary<Guid, byte[]?> imagenesVariantes)
+        {
+            container
+                .Border(1)
+                .BorderColor("#D7E0EA")
+                .CornerRadius(14)
+                .Padding(14)
+                .Column(column =>
+                {
+                    column.Spacing(10);
+                    column.Item().Text("Variantes").SemiBold().FontSize(13).FontColor("#0F172A");
+                    column.Item().Table(table =>
+                    {
+                        table.ColumnsDefinition(columns =>
+                        {
+                            columns.RelativeColumn(2.2f);
+                            columns.ConstantColumn(64);
+                            columns.RelativeColumn(1f);
+                            columns.RelativeColumn(1f);
+                        });
+
+                        table.Header(header =>
+                        {
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Variante"));
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Imagen"));
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Costo"));
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Precio"));
+                        });
+
+                        foreach (ProductoServicioVarianteDto variante in variantes.OrderBy(v => v.Orden))
+                        {
+                            string descripcion = BuildVariantLabel(variante);
+                            table.Cell().Element(x => FichaTableBodyCell(x, descripcion));
+                            table.Cell().Element(cell =>
+                            {
+                                IContainer imageCell = cell
+                                    .BorderBottom(1)
+                                    .BorderColor("#D7E0EA")
+                                    .Padding(6)
+                                    .AlignCenter()
+                                    .AlignMiddle();
+
+                                if (imagenesVariantes.TryGetValue(variante.Id, out byte[]? imageBytes) && imageBytes != null)
+                                {
+                                    imageCell.Height(46).Image(imageBytes).FitArea();
+                                }
+                                else
+                                {
+                                    imageCell.Text("—").FontColor("#94A3B8");
+                                }
+                            });
+                            table.Cell().Element(x => FichaTableBodyCell(x, variante.Costo.HasValue ? FichaFormatCurrency(variante.Costo.Value) : "—", true));
+                            table.Cell().Element(x => FichaTableBodyCell(x, variante.PrecioPublico.HasValue ? FichaFormatCurrency(variante.PrecioPublico.Value) : "—", true));
+                        }
+                    });
+                });
+        }
+
+        private static void ComposeFichaMultimediaSection(IContainer container, IReadOnlyCollection<ProductoServicioMultimediaDto> multimedia)
+        {
+            string fotos = string.Join(", ", multimedia.Where(item => item.Foto).Select(item => item.NombreOriginal).Where(name => !string.IsNullOrWhiteSpace(name)));
+            string videos = string.Join(", ", multimedia.Where(item => item.Video).Select(item => item.NombreOriginal).Where(name => !string.IsNullOrWhiteSpace(name)));
+            string documentos = string.Join(", ", multimedia.Where(item => item.Documento).Select(item => item.NombreOriginal).Where(name => !string.IsNullOrWhiteSpace(name)));
+
+            List<(string Label, string Value)> rows = new List<(string Label, string Value)>();
+            if (!string.IsNullOrWhiteSpace(fotos))
+            {
+                rows.Add(("Fotografías", fotos));
+            }
+
+            if (!string.IsNullOrWhiteSpace(videos))
+            {
+                rows.Add(("Video", videos));
+            }
+
+            if (!string.IsNullOrWhiteSpace(documentos))
+            {
+                rows.Add(("Documentos", documentos));
+            }
+
+            if (!rows.Any())
+            {
+                return;
+            }
+
+            ComposeFichaInfoTable(container, "Evidencia y multimedia", rows);
+        }
+
+        private static void ComposeFichaInfoTable(IContainer container, string title, IReadOnlyCollection<(string Label, string Value)> rows)
+        {
+            if (rows.Count == 0)
+            {
+                return;
+            }
+
+            container
+                .Border(1)
+                .BorderColor("#D7E0EA")
+                .CornerRadius(14)
+                .Padding(14)
+                .Column(column =>
+                {
+                    column.Spacing(10);
+                    column.Item().Text(title).SemiBold().FontSize(13).FontColor("#0F172A");
+                    column.Item().Table(table =>
+                    {
+                        table.ColumnsDefinition(columns =>
+                        {
+                            columns.RelativeColumn(1.1f);
+                            columns.RelativeColumn(2.4f);
+                        });
+
+                        foreach ((string label, string value) in rows)
+                        {
+                            table.Cell().Element(x => FichaTableLabelCell(x, label));
+                            table.Cell().Element(x => FichaTableBodyCell(x, value));
+                        }
+                    });
+                });
+        }
+
+        private static void FichaTableHeaderCell(IContainer container, string text)
+        {
+            container
+                .Background("#EEF2FF")
+                .PaddingVertical(7)
+                .PaddingHorizontal(8)
+                .Text(text)
+                .SemiBold()
+                .FontSize(9)
+                .FontColor("#1E3A8A");
+        }
+
+        private static void FichaTableLabelCell(IContainer container, string text)
+        {
+            container
+                .BorderBottom(1)
+                .BorderColor("#D7E0EA")
+                .PaddingVertical(7)
+                .PaddingHorizontal(8)
+                .Text(text)
+                .SemiBold()
+                .FontSize(9)
+                .FontColor("#475569");
+        }
+
+        private static void FichaTableBodyCell(IContainer container, string text, bool alignRight = false)
+        {
+            IContainer body = container
+                .BorderBottom(1)
+                .BorderColor("#D7E0EA")
+                .PaddingVertical(7)
+                .PaddingHorizontal(8);
+
+            body = alignRight ? body.AlignRight() : body.AlignLeft();
+            body.Text(FichaTextOrDash(text)).FontSize(9).FontColor("#0F172A");
+        }
+
+        private static string FichaTextOrDash(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? "—" : value.Trim();
+        }
+
+        private static string FichaFormatCurrency(decimal value)
+        {
+            return value.ToString("C2", CultureInfo.GetCultureInfo("es-MX"));
+        }
+
+        private static string BuildUnidadLabel(string unidad, string abreviatura)
+        {
+            string normalizedUnit = (unidad ?? string.Empty).Trim();
+            string normalizedAbbreviation = (abreviatura ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedUnit))
+            {
+                return string.Empty;
+            }
+
+            return string.IsNullOrWhiteSpace(normalizedAbbreviation)
+                ? normalizedUnit
+                : $"{normalizedUnit} ({normalizedAbbreviation})";
+        }
+
+        private static string BuildColeccionLabel(string numero, string nombre)
+        {
+            string normalizedNumero = (numero ?? string.Empty).Trim();
+            string normalizedNombre = (nombre ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedNumero))
+            {
+                return normalizedNombre;
+            }
+
+            if (string.IsNullOrWhiteSpace(normalizedNombre))
+            {
+                return normalizedNumero;
+            }
+
+            return $"{normalizedNumero} · {normalizedNombre}";
+        }
+
+        private static string BuildSatLabel(string clave, string descripcion)
+        {
+            string normalizedKey = (clave ?? string.Empty).Trim();
+            string normalizedDescription = (descripcion ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedDescription))
+            {
+                return normalizedKey;
+            }
+
+            return $"{normalizedKey} - {normalizedDescription}";
+        }
+
+        private static string BuildTipoPaqueteLabel(string tipo)
+        {
+            return (tipo ?? string.Empty).Trim().ToLowerInvariant() switch
+            {
+                "caja" => "Caja",
+                "sobre" => "Sobre",
+                "flexible" => "Paquete flexible",
+                _ => string.Empty
+            };
+        }
+
+        private static string BuildDimensionsLabel(decimal? largo, decimal? ancho, decimal? alto, string fallback = "")
+        {
+            List<string> items = new List<string>();
+            if (largo.HasValue)
+            {
+                items.Add($"L {largo.Value.ToString("0.####", CultureInfo.InvariantCulture)} cm");
+            }
+
+            if (ancho.HasValue)
+            {
+                items.Add($"A {ancho.Value.ToString("0.####", CultureInfo.InvariantCulture)} cm");
+            }
+
+            if (alto.HasValue)
+            {
+                items.Add($"H {alto.Value.ToString("0.####", CultureInfo.InvariantCulture)} cm");
+            }
+
+            return items.Any() ? string.Join(" · ", items) : fallback;
+        }
+
+        private static string FormatLogisticsWeightOrUnavailable(decimal? value)
+        {
+            return value.HasValue
+                ? $"{value.Value.ToString("0.00", CultureInfo.InvariantCulture)} kg"
+                : "No disponible";
+        }
+
+        private static string BuildVariantLabel(ProductoServicioVarianteDto variante)
+        {
+            string nombre = (variante.Nombre ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(nombre))
+            {
+                return nombre;
+            }
+
+            string composed = string.Join(" / ", variante.Valores.OrderBy(value => value.Orden).Select(value => value.Valor).Where(value => !string.IsNullOrWhiteSpace(value)));
+            if (!string.IsNullOrWhiteSpace(composed))
+            {
+                return composed;
+            }
+
+            return FichaTextOrDash(variante.Sku);
+        }
+
+        private static string BuildFichaTecnicaFileName(string codigo, string nombre)
+        {
+            string raw = $"FichaTecnica_{codigo}_{nombre}".Trim('_').Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                raw = "FichaTecnica";
+            }
+
+            foreach (char invalid in Path.GetInvalidFileNameChars())
+            {
+                raw = raw.Replace(invalid, '_');
+            }
+
+            while (raw.Contains("__", StringComparison.Ordinal))
+            {
+                raw = raw.Replace("__", "_", StringComparison.Ordinal);
+            }
+
+            return $"{raw.Trim('_')}.pdf";
+        }
+
+        private static byte[]? LoadSharedCheckAppLogo()
+        {
+            DirectoryInfo? current = new DirectoryInfo(AppContext.BaseDirectory);
+            while (current != null)
+            {
+                string candidate = Path.Combine(current.FullName, "inspector", "checklist", "wwwroot", "assets", "media", "logos", "checkapp2.png");
+                if (System.IO.File.Exists(candidate))
+                {
+                    return System.IO.File.ReadAllBytes(candidate);
+                }
+
+                current = current.Parent;
+            }
+
+            return null;
+        }
+
+        private static async Task<byte[]?> LoadRemoteImageBytesAsync(string url)
+        {
+            string normalized = (url ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return null;
+            }
+
+            try
+            {
+                using HttpClient client = new HttpClient
+                {
+                    Timeout = TimeSpan.FromSeconds(20)
+                };
+                return await client.GetByteArrayAsync(normalized);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static Guid ReadGuid(SqlDataReader reader, string columnName)
         {
             int ordinal = reader.GetOrdinal(columnName);
@@ -5798,6 +7282,7 @@ VALUES
             public bool Activo { get; set; }
             public ProductoServicioImagenGuardarRequest? ImagenPrincipal { get; set; }
             public bool EliminarImagenPrincipal { get; set; }
+            public List<ProductoServicioTagGuardarRequest> Tags { get; set; } = new List<ProductoServicioTagGuardarRequest>();
             public List<ProductoServicioAtributoGuardarRequest> Atributos { get; set; } = new List<ProductoServicioAtributoGuardarRequest>();
             public List<ProductoServicioOpcionVarianteGuardarRequest> OpcionesVariante { get; set; } = new List<ProductoServicioOpcionVarianteGuardarRequest>();
             public List<ProductoServicioVarianteGuardarRequest> Variantes { get; set; } = new List<ProductoServicioVarianteGuardarRequest>();

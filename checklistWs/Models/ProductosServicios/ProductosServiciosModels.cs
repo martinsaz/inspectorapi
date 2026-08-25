@@ -60,9 +60,79 @@ namespace checklistWs.Models.ProductosServicios
     public class ProductoServicioDetalleDto : ProductoServicioListadoDto
     {
         public Guid? IdExistencia { get; set; }
+        public string TipoPaquete { get; set; } = string.Empty;
+        public decimal? PaqueteLargoCm { get; set; }
+        public decimal? PaqueteAnchoCm { get; set; }
+        public decimal? PaqueteAltoCm { get; set; }
+        public decimal? PaquetePesoEmpaqueVacioKg { get; set; }
+        public decimal? PesoFisicoTotalKg { get; set; }
+        public decimal? PesoVolumetricoKg { get; set; }
+        public decimal? PesoFacturableKg { get; set; }
+        public List<ProductoServicioTagSeleccionDto> Tags { get; set; } = new List<ProductoServicioTagSeleccionDto>();
         public List<ProductoServicioMovimientoDto> MovimientosRecientes { get; set; } = new List<ProductoServicioMovimientoDto>();
         public List<ProductoServicioAtributoSeleccionDto> Atributos { get; set; } = new List<ProductoServicioAtributoSeleccionDto>();
         public List<ProductoServicioOpcionVarianteDto> OpcionesVariante { get; set; } = new List<ProductoServicioOpcionVarianteDto>();
+        public List<ProductoServicioVarianteDto> Variantes { get; set; } = new List<ProductoServicioVarianteDto>();
+        public List<ProductoServicioMultimediaDto> Multimedia { get; set; } = new List<ProductoServicioMultimediaDto>();
+    }
+
+    public class ProductoServicioFichaTecnicaDto
+    {
+        public Guid Id { get; set; }
+        public Guid IdEmpresa { get; set; }
+        public byte Tipo { get; set; }
+        public string TipoNombre { get; set; } = string.Empty;
+        public string Codigo { get; set; } = string.Empty;
+        public string Nombre { get; set; } = string.Empty;
+        public string EstatusNombre { get; set; } = string.Empty;
+        public bool Activo { get; set; }
+        public string Descripcion { get; set; } = string.Empty;
+        public string Categoria { get; set; } = string.Empty;
+        public byte CategoriaAplicaA { get; set; }
+        public string Marca { get; set; } = string.Empty;
+        public Guid? IdColeccion { get; set; }
+        public string ColeccionNumero { get; set; } = string.Empty;
+        public string ColeccionNombre { get; set; } = string.Empty;
+        public Guid? IdPaquete { get; set; }
+        public string PaqueteNombre { get; set; } = string.Empty;
+        public string TipoPaquete { get; set; } = string.Empty;
+        public decimal? PaqueteLargoCm { get; set; }
+        public decimal? PaqueteAnchoCm { get; set; }
+        public decimal? PaqueteAltoCm { get; set; }
+        public decimal? PaquetePesoEmpaqueVacioKg { get; set; }
+        public string ImagenUrl { get; set; } = string.Empty;
+        public string ImagenNombre { get; set; } = string.Empty;
+        public Guid IdUnidadMedida { get; set; }
+        public string UnidadMedida { get; set; } = string.Empty;
+        public string UnidadAbreviatura { get; set; } = string.Empty;
+        public bool UnidadPermiteDecimales { get; set; }
+        public decimal? Costo { get; set; }
+        public decimal PrecioPublico { get; set; }
+        public decimal? PrecioComparacion { get; set; }
+        public decimal? PrecioUnitarioMonto { get; set; }
+        public decimal? PrecioUnitarioBaseCantidad { get; set; }
+        public string PrecioUnitarioUnidad { get; set; } = string.Empty;
+        public string PrecioUnitarioResumen { get; set; } = string.Empty;
+        public string ClaveProductoSat { get; set; } = string.Empty;
+        public string ClaveProductoSatDescripcion { get; set; } = string.Empty;
+        public string ClaveUnidadSat { get; set; } = string.Empty;
+        public string ClaveUnidadSatDescripcion { get; set; } = string.Empty;
+        public string ObjetoImpuesto { get; set; } = string.Empty;
+        public bool EsProductoFisico { get; set; }
+        public decimal? PesoKg { get; set; }
+        public decimal? LargoCm { get; set; }
+        public decimal? AnchoCm { get; set; }
+        public decimal? AltoCm { get; set; }
+        public bool UsaNumeroSerie { get; set; }
+        public bool CausaInventario { get; set; }
+        public bool PermiteVentaSinExistencia { get; set; }
+        public decimal? PesoFisicoTotalKg { get; set; }
+        public decimal? PesoVolumetricoKg { get; set; }
+        public decimal? PesoFacturableKg { get; set; }
+        public decimal? ExistenciaActual { get; set; }
+        public decimal? ExistenciaMinima { get; set; }
+        public List<ProductoServicioTagSeleccionDto> Tags { get; set; } = new List<ProductoServicioTagSeleccionDto>();
+        public List<ProductoServicioAtributoSeleccionDto> Atributos { get; set; } = new List<ProductoServicioAtributoSeleccionDto>();
         public List<ProductoServicioVarianteDto> Variantes { get; set; } = new List<ProductoServicioVarianteDto>();
         public List<ProductoServicioMultimediaDto> Multimedia { get; set; } = new List<ProductoServicioMultimediaDto>();
     }
@@ -103,6 +173,7 @@ namespace checklistWs.Models.ProductosServicios
         public bool Activo { get; set; } = true;
         public ProductoServicioImagenGuardarRequest? ImagenPrincipal { get; set; }
         public bool EliminarImagenPrincipal { get; set; }
+        public List<ProductoServicioTagGuardarRequest> Tags { get; set; } = new List<ProductoServicioTagGuardarRequest>();
         public List<ProductoServicioAtributoGuardarRequest> Atributos { get; set; } = new List<ProductoServicioAtributoGuardarRequest>();
         public List<ProductoServicioOpcionVarianteGuardarRequest> OpcionesVariante { get; set; } = new List<ProductoServicioOpcionVarianteGuardarRequest>();
         public List<ProductoServicioVarianteGuardarRequest> Variantes { get; set; } = new List<ProductoServicioVarianteGuardarRequest>();
@@ -165,6 +236,18 @@ namespace checklistWs.Models.ProductosServicios
     {
     }
 
+    public class ProductoServicioTagDto : ProductoServicioCatalogoBasicoDto
+    {
+    }
+
+    public class ProductoServicioTagSeleccionDto
+    {
+        public Guid? Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public bool Activo { get; set; } = true;
+        public bool Legacy { get; set; }
+    }
+
     public class ProductoServicioUnidadMedidaDto : ProductoServicioCatalogoBasicoDto
     {
         public string Abreviatura { get; set; } = string.Empty;
@@ -223,6 +306,18 @@ namespace checklistWs.Models.ProductosServicios
         public string Codigo { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
+    }
+
+    public class ProductoServicioTagGuardarRequest
+    {
+        public Guid? Id { get; set; }
+        public Guid IdEmpresa { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+    }
+
+    public class ProductoServicioTagOperacionResponse : ProductoServicioOperacionResponse
+    {
+        public ProductoServicioTagDto? Tag { get; set; }
     }
 
     public class ProductoServicioUnidadMedidaGuardarRequest
@@ -295,12 +390,14 @@ namespace checklistWs.Models.ProductosServicios
 
     public class ProductoServicioCombosDto
     {
+        public decimal FactorVolumetrico { get; set; }
         public List<ProductoServicioCatalogoComboDto> Categorias { get; set; } = new List<ProductoServicioCatalogoComboDto>();
         public List<ProductoServicioCatalogoComboDto> Marcas { get; set; } = new List<ProductoServicioCatalogoComboDto>();
         public List<ProductoServicioCatalogoComboDto> UnidadesMedida { get; set; } = new List<ProductoServicioCatalogoComboDto>();
         public List<ProductoServicioCatalogoComboDto> Colecciones { get; set; } = new List<ProductoServicioCatalogoComboDto>();
         public List<ProductoServicioCatalogoComboDto> Paquetes { get; set; } = new List<ProductoServicioCatalogoComboDto>();
         public List<ProductoServicioCatalogoComboDto> Atributos { get; set; } = new List<ProductoServicioCatalogoComboDto>();
+        public List<ProductoServicioTagDto> Tags { get; set; } = new List<ProductoServicioTagDto>();
         public List<ProductoServicioOpcionDto> Tipos { get; set; } = new List<ProductoServicioOpcionDto>();
         public List<ProductoServicioOpcionDto> Estatus { get; set; } = new List<ProductoServicioOpcionDto>();
         public List<ProductoServicioOpcionDto> ObjetosImpuesto { get; set; } = new List<ProductoServicioOpcionDto>();
@@ -443,6 +540,7 @@ namespace checklistWs.Models.ProductosServicios
         public string ClaveCombinacion { get; set; } = string.Empty;
         public string ImagenUrl { get; set; } = string.Empty;
         public string ImagenNombre { get; set; } = string.Empty;
+        public decimal? Costo { get; set; }
         public decimal? PrecioPublico { get; set; }
         public decimal? PrecioComparacion { get; set; }
         public decimal? PrecioUnitarioMonto { get; set; }
@@ -504,6 +602,7 @@ namespace checklistWs.Models.ProductosServicios
         public string ClaveCombinacion { get; set; } = string.Empty;
         public ProductoServicioImagenGuardarRequest? Imagen { get; set; }
         public bool EliminarImagen { get; set; }
+        public decimal? Costo { get; set; }
         public decimal? PrecioPublico { get; set; }
         public decimal? PrecioComparacion { get; set; }
         public decimal? PrecioUnitarioMonto { get; set; }
