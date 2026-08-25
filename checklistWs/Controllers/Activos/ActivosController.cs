@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.SqlClient;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +16,12 @@ namespace checklistWs.Controllers.Activos
     [ApiController]
     public class ActivosController : ControllerBase
     {
+        private const string ProxyEmpresaIdHeader = "X-Activos-Proxy-EmpresaId";
+        private const string ProxyEmpresaKeyHeader = "X-Activos-Proxy-Empresa";
+        private const string ProxyUsuarioIdHeader = "X-Activos-Proxy-UsuarioId";
+        private const string ProxyTimestampHeader = "X-Activos-Proxy-Timestamp";
+        private const string ProxySignatureHeader = "X-Activos-Proxy-Signature";
+        private const string ProxyContextItemKey = "__ActivosProxyContext";
         private const int CodigoActivoLength = 64;
         private const int NombreActivoLength = 200;
         private const int TagLength = 80;
@@ -32,6 +39,7 @@ namespace checklistWs.Controllers.Activos
         private const long VideoMaxBytes = 200L * 1024L * 1024L;
         private const long DocumentoMaxBytes = 25L * 1024L * 1024L;
         private const long UploadTemporalRequestLimitBytes = 210L * 1024L * 1024L;
+        private static readonly TimeSpan ProxyHeaderTolerance = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan TemporalTokenLifetime = TimeSpan.FromHours(6);
         private static readonly string[] TiposPermitidos = new[] { "foto", "video", "documento" };
 
@@ -629,6 +637,11 @@ WHERE idEmpresa = @IdEmpresa AND id = @IdActivo AND Activo = 1", connection);
         {
             try
             {
+                if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId, out IActionResult? error))
+                {
+                    return error!;
+                }
+
                 using SqlConnection connection = CreateConnection(cadena);
                 await connection.OpenAsync();
 
@@ -639,7 +652,7 @@ WHERE idEmpresa = @IdEmpresa");
 
                 using SqlCommand command = new SqlCommand();
                 command.Connection = connection;
-                command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
 
                 if (!string.IsNullOrWhiteSpace(busqueda))
                 {
@@ -683,6 +696,11 @@ WHERE idEmpresa = @IdEmpresa");
         {
             try
             {
+                if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId, out IActionResult? error))
+                {
+                    return error!;
+                }
+
                 using SqlConnection connection = CreateConnection(cadena);
                 await connection.OpenAsync();
 
@@ -691,7 +709,7 @@ SELECT id, idEmpresa, Codigo, Nombre, Descripcion, PermiteOperacion, Orden, Acti
 FROM dbo.ActivosEstadosOperativos
 WHERE idEmpresa = @IdEmpresa AND id = @IdEstadoOperativo", connection);
 
-                command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
                 command.Parameters.AddWithValue("@IdEstadoOperativo", idEstadoOperativo);
 
                 using SqlDataReader reader = await command.ExecuteReaderAsync();
@@ -725,7 +743,12 @@ WHERE idEmpresa = @IdEmpresa AND id = @IdEstadoOperativo", connection);
         {
             try
             {
-                request.IdEmpresa = idEmpresa;
+                if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId, out IActionResult? error))
+                {
+                    return error!;
+                }
+
+                request.IdEmpresa = effectiveEmpresaId;
                 string validacion = ValidateEstadoOperativoRequest(request);
                 if (!string.IsNullOrEmpty(validacion))
                 {
@@ -743,9 +766,14 @@ WHERE idEmpresa = @IdEmpresa AND id = @IdEstadoOperativo", connection);
                     idEstadoOperativo = Guid.NewGuid();
                 }
 
-                if (await ExisteCodigoCatalogoAsync(connection, transaction, idEmpresa, request.Codigo, esNuevo ? null : idEstadoOperativo, "dbo.ActivosEstadosOperativos"))
+                string codigoPersistido = esNuevo
+                    ? await GenerateNextCatalogCodeAsync(connection, transaction, effectiveEmpresaId, "dbo.ActivosEstadosOperativos")
+                    : await ObtenerCodigoCatalogoAsync(connection, transaction, effectiveEmpresaId, idEstadoOperativo, "dbo.ActivosEstadosOperativos");
+
+                if (string.IsNullOrWhiteSpace(codigoPersistido))
                 {
-                    return BadRequest(new ActivoOperacionResponse { Mensaje = "Ya existe un estado operativo con el mismo código." });
+                    transaction.Rollback();
+                    return NotFound(new ActivoOperacionResponse { Mensaje = "El estado operativo no está disponible." });
                 }
 
                 DateTime ahora = DateTime.UtcNow;
@@ -758,8 +786,8 @@ VALUES
     (@Id, @IdEmpresa, @Codigo, @Nombre, @Descripcion, @PermiteOperacion, @Orden, 1, @FechaCreacion, @FechaActualizacion)", connection, transaction);
 
                     insert.Parameters.AddWithValue("@Id", idEstadoOperativo);
-                    insert.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-                    insert.Parameters.AddWithValue("@Codigo", request.Codigo.Trim());
+                    insert.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
+                    insert.Parameters.AddWithValue("@Codigo", codigoPersistido);
                     insert.Parameters.AddWithValue("@Nombre", request.Nombre.Trim());
                     insert.Parameters.AddWithValue("@Descripcion", request.Descripcion.Trim());
                     insert.Parameters.AddWithValue("@PermiteOperacion", request.PermiteOperacion);
@@ -773,7 +801,6 @@ VALUES
                     using SqlCommand update = new SqlCommand(@"
 UPDATE dbo.ActivosEstadosOperativos
 SET
-    Codigo = @Codigo,
     Nombre = @Nombre,
     Descripcion = @Descripcion,
     PermiteOperacion = @PermiteOperacion,
@@ -782,8 +809,7 @@ SET
 WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
 
                     update.Parameters.AddWithValue("@Id", idEstadoOperativo);
-                    update.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-                    update.Parameters.AddWithValue("@Codigo", request.Codigo.Trim());
+                    update.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
                     update.Parameters.AddWithValue("@Nombre", request.Nombre.Trim());
                     update.Parameters.AddWithValue("@Descripcion", request.Descripcion.Trim());
                     update.Parameters.AddWithValue("@PermiteOperacion", request.PermiteOperacion);
@@ -799,7 +825,13 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                 }
 
                 transaction.Commit();
-                return Ok(new ActivoOperacionResponse { Mensaje = esNuevo ? "El estado operativo fue registrado." : "El estado operativo fue actualizado." });
+                return Ok(new ActivoOperacionResponse
+                {
+                    Mensaje = esNuevo ? "El estado operativo fue registrado." : "El estado operativo fue actualizado.",
+                    Id = idEstadoOperativo,
+                    Codigo = codigoPersistido,
+                    Nombre = request.Nombre.Trim()
+                });
             }
             catch (Exception ex)
             {
@@ -901,6 +933,11 @@ FROM (
         private async Task<List<TDto>> ObtenerCatalogosBasicosAsync<TDto>(string cadena, Guid idEmpresa, string busqueda, string estatus, string tableName)
             where TDto : TipoActivoDto, new()
         {
+            if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId))
+            {
+                return new List<TDto>();
+            }
+
             using SqlConnection connection = CreateConnection(cadena);
             await connection.OpenAsync();
 
@@ -911,7 +948,7 @@ WHERE idEmpresa = @IdEmpresa");
 
             using SqlCommand command = new SqlCommand();
             command.Connection = connection;
-            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
 
             if (!string.IsNullOrWhiteSpace(busqueda))
             {
@@ -946,6 +983,11 @@ WHERE idEmpresa = @IdEmpresa");
         private async Task<TDto?> ObtenerCatalogoBasicoAsync<TDto>(string cadena, Guid idEmpresa, Guid id, string tableName)
             where TDto : TipoActivoDto, new()
         {
+            if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId))
+            {
+                return null;
+            }
+
             using SqlConnection connection = CreateConnection(cadena);
             await connection.OpenAsync();
 
@@ -954,7 +996,7 @@ SELECT id, idEmpresa, Codigo, Nombre, Descripcion, Activo, FechaCreacion, FechaA
 FROM {tableName}
 WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
 
-            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
             command.Parameters.AddWithValue("@Id", id);
 
             using SqlDataReader reader = await command.ExecuteReaderAsync();
@@ -980,7 +1022,12 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
         {
             try
             {
-                string validacion = ValidateCatalogoBasico(idEmpresa, codigo, nombre, descripcion);
+                if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId, out IActionResult? error))
+                {
+                    return error!;
+                }
+
+                string validacion = ValidateCatalogoBasico(effectiveEmpresaId, nombre, descripcion);
                 if (!string.IsNullOrEmpty(validacion))
                 {
                     return BadRequest(new ActivoOperacionResponse { Mensaje = validacion });
@@ -997,9 +1044,14 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
                     itemId = Guid.NewGuid();
                 }
 
-                if (await ExisteCodigoCatalogoAsync(connection, transaction, idEmpresa, codigo, esNuevo ? null : itemId, tableName))
+                string codigoPersistido = esNuevo
+                    ? await GenerateNextCatalogCodeAsync(connection, transaction, effectiveEmpresaId, tableName)
+                    : await ObtenerCodigoCatalogoAsync(connection, transaction, effectiveEmpresaId, itemId, tableName);
+
+                if (string.IsNullOrWhiteSpace(codigoPersistido))
                 {
-                    return BadRequest(new ActivoOperacionResponse { Mensaje = $"Ya existe un {label} con el mismo código." });
+                    transaction.Rollback();
+                    return NotFound(new ActivoOperacionResponse { Mensaje = $"El {label} no está disponible." });
                 }
 
                 DateTime ahora = DateTime.UtcNow;
@@ -1012,8 +1064,8 @@ VALUES
     (@Id, @IdEmpresa, @Codigo, @Nombre, @Descripcion, 1, @FechaCreacion, @FechaActualizacion)", connection, transaction);
 
                     insert.Parameters.AddWithValue("@Id", itemId);
-                    insert.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-                    insert.Parameters.AddWithValue("@Codigo", codigo.Trim());
+                    insert.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
+                    insert.Parameters.AddWithValue("@Codigo", codigoPersistido);
                     insert.Parameters.AddWithValue("@Nombre", nombre.Trim());
                     insert.Parameters.AddWithValue("@Descripcion", (descripcion ?? string.Empty).Trim());
                     insert.Parameters.AddWithValue("@FechaCreacion", ahora);
@@ -1025,15 +1077,13 @@ VALUES
                     using SqlCommand update = new SqlCommand($@"
 UPDATE {tableName}
 SET
-    Codigo = @Codigo,
     Nombre = @Nombre,
     Descripcion = @Descripcion,
     FechaActualizacion = @FechaActualizacion
 WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
 
                     update.Parameters.AddWithValue("@Id", itemId);
-                    update.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-                    update.Parameters.AddWithValue("@Codigo", codigo.Trim());
+                    update.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
                     update.Parameters.AddWithValue("@Nombre", nombre.Trim());
                     update.Parameters.AddWithValue("@Descripcion", (descripcion ?? string.Empty).Trim());
                     update.Parameters.AddWithValue("@FechaActualizacion", ahora);
@@ -1047,7 +1097,13 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                 }
 
                 transaction.Commit();
-                return Ok(new ActivoOperacionResponse { Mensaje = esNuevo ? $"El {label} fue registrado." : $"El {label} fue actualizado." });
+                return Ok(new ActivoOperacionResponse
+                {
+                    Mensaje = esNuevo ? $"El {label} fue registrado." : $"El {label} fue actualizado.",
+                    Id = itemId,
+                    Codigo = codigoPersistido,
+                    Nombre = nombre.Trim()
+                });
             }
             catch (Exception ex)
             {
@@ -1059,6 +1115,11 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         {
             try
             {
+                if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId, out IActionResult? error))
+                {
+                    return error!;
+                }
+
                 using SqlConnection connection = CreateConnection(cadena);
                 await connection.OpenAsync();
 
@@ -1069,7 +1130,7 @@ SET
     FechaActualizacion = @FechaActualizacion
 WHERE idEmpresa = @IdEmpresa AND id = @Id AND Activo <> @Activo", connection);
 
-                command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
                 command.Parameters.AddWithValue("@Id", id);
                 command.Parameters.AddWithValue("@Activo", activar);
                 command.Parameters.AddWithValue("@FechaActualizacion", DateTime.UtcNow);
@@ -1086,6 +1147,107 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND Activo <> @Activo", connection);
             {
                 return StatusCode(500, new ActivoOperacionResponse { Mensaje = $"Error interno del servidor: {ex.Message}" });
             }
+        }
+
+        private bool TryResolveCatalogEmpresa(Guid clientEmpresaId, out Guid effectiveEmpresaId, out IActionResult? error)
+        {
+            error = null;
+            effectiveEmpresaId = Guid.Empty;
+
+            if (!TryResolveCatalogEmpresa(clientEmpresaId, out effectiveEmpresaId))
+            {
+                error = clientEmpresaId == Guid.Empty
+                    ? Unauthorized(new ActivoOperacionResponse { Mensaje = "No fue posible resolver la empresa activa." })
+                    : BadRequest(new ActivoOperacionResponse { Mensaje = "La empresa solicitada no coincide con la sesión activa." });
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool TryResolveCatalogEmpresa(Guid clientEmpresaId, out Guid effectiveEmpresaId)
+        {
+            effectiveEmpresaId = Guid.Empty;
+
+            if (!TryResolveSignedProxyEmpresa(out Guid proxyEmpresaId))
+            {
+                return false;
+            }
+
+            if (clientEmpresaId == Guid.Empty || clientEmpresaId != proxyEmpresaId)
+            {
+                return false;
+            }
+
+            effectiveEmpresaId = proxyEmpresaId;
+            return true;
+        }
+
+        private bool TryResolveSignedProxyEmpresa(out Guid empresaId)
+        {
+            empresaId = Guid.Empty;
+
+            if (HttpContext.Items.TryGetValue(ProxyContextItemKey, out object? cached) && cached is Guid cachedEmpresaId && cachedEmpresaId != Guid.Empty)
+            {
+                empresaId = cachedEmpresaId;
+                return true;
+            }
+
+            if (!Request.Headers.TryGetValue(ProxyEmpresaIdHeader, out var empresaIdHeader) ||
+                !Request.Headers.TryGetValue(ProxyEmpresaKeyHeader, out var empresaKeyHeader) ||
+                !Request.Headers.TryGetValue(ProxyTimestampHeader, out var timestampHeader) ||
+                !Request.Headers.TryGetValue(ProxySignatureHeader, out var signatureHeader))
+            {
+                return false;
+            }
+
+            string secret = _configuration["fireBdata:fireClave"] ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(secret))
+            {
+                return false;
+            }
+
+            string empresaIdRaw = empresaIdHeader.ToString().Trim();
+            string empresaKeyRaw = empresaKeyHeader.ToString().Trim();
+            string usuarioIdRaw = Request.Headers.TryGetValue(ProxyUsuarioIdHeader, out var usuarioIdHeader)
+                ? usuarioIdHeader.ToString().Trim()
+                : string.Empty;
+            string timestampRaw = timestampHeader.ToString().Trim();
+            string signatureRaw = signatureHeader.ToString().Trim();
+
+            if (!Guid.TryParse(empresaIdRaw, out Guid parsedEmpresaId) || parsedEmpresaId == Guid.Empty)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(empresaKeyRaw) ||
+                !DateTimeOffset.TryParseExact(timestampRaw, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset timestamp))
+            {
+                return false;
+            }
+
+            if ((DateTimeOffset.UtcNow - timestamp.ToUniversalTime()).Duration() > ProxyHeaderTolerance)
+            {
+                return false;
+            }
+
+            string payload = string.Join('\n', empresaIdRaw, empresaKeyRaw.ToUpperInvariant(), usuarioIdRaw, timestampRaw);
+            string expectedSignature = ComputeProxySignature(secret, payload);
+            if (!CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expectedSignature), Encoding.UTF8.GetBytes(signatureRaw)))
+            {
+                return false;
+            }
+
+            HttpContext.Items[ProxyContextItemKey] = parsedEmpresaId;
+            empresaId = parsedEmpresaId;
+            return true;
+        }
+
+        private static string ComputeProxySignature(string secret, string payload)
+        {
+            using HMACSHA256 hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+            byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
+            return Convert.ToBase64String(hash);
         }
 
         private async Task<List<ActivoMultimediaDto>> ObtenerMultimediaActivaAsync(SqlConnection connection, Guid idActivo)
@@ -1417,6 +1579,11 @@ VALUES
 
         private async Task<List<CatalogoActivoDto>> GetCatalogoAsync(string cadena, string baseQuery, Guid idEmpresa, string busqueda, string orderBy)
         {
+            if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId))
+            {
+                return new List<CatalogoActivoDto>();
+            }
+
             using SqlConnection connection = CreateConnection(cadena);
             await connection.OpenAsync();
 
@@ -1428,7 +1595,7 @@ FROM (
 WHERE 1 = 1");
             using SqlCommand command = new SqlCommand();
             command.Connection = connection;
-            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
 
             if (!string.IsNullOrWhiteSpace(busqueda))
             {
@@ -1531,11 +1698,6 @@ WHERE 1 = 1");
                 return "No fue posible resolver la empresa activa.";
             }
 
-            if (string.IsNullOrWhiteSpace(codigo) || codigo.Trim().Length > CodigoCatalogoLength)
-            {
-                return $"Captura un código válido de hasta {CodigoCatalogoLength} caracteres.";
-            }
-
             if (string.IsNullOrWhiteSpace(nombre) || nombre.Trim().Length > NombreCatalogoLength)
             {
                 return $"Captura un nombre válido de hasta {NombreCatalogoLength} caracteres.";
@@ -1551,7 +1713,7 @@ WHERE 1 = 1");
 
         private static string ValidateEstadoOperativoRequest(EstadoOperativoGuardarRequest request)
         {
-            string baseValidation = ValidateCatalogoBasico(request.IdEmpresa, request.Codigo, request.Nombre, request.Descripcion);
+            string baseValidation = ValidateCatalogoBasico(request.IdEmpresa, request.Nombre, request.Descripcion);
             if (!string.IsNullOrEmpty(baseValidation))
             {
                 return baseValidation;
@@ -1563,6 +1725,61 @@ WHERE 1 = 1");
             }
 
             return string.Empty;
+        }
+
+        private static string ValidateCatalogoBasico(Guid idEmpresa, string nombre, string descripcion)
+        {
+            if (idEmpresa == Guid.Empty)
+            {
+                return "No fue posible resolver la empresa activa.";
+            }
+
+            if (string.IsNullOrWhiteSpace(nombre) || nombre.Trim().Length > NombreCatalogoLength)
+            {
+                return $"Captura un nombre válido de hasta {NombreCatalogoLength} caracteres.";
+            }
+
+            if ((descripcion ?? string.Empty).Trim().Length > DescripcionCatalogoLength)
+            {
+                return $"La descripción no puede exceder {DescripcionCatalogoLength} caracteres.";
+            }
+
+            return string.Empty;
+        }
+
+        private async Task<string> GenerateNextCatalogCodeAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, string tableName)
+        {
+            string lockResource = $"ticket05:{tableName}:{idEmpresa:D}";
+            using (SqlCommand lockCommand = new SqlCommand(@"
+EXEC sp_getapplock
+    @Resource = @Resource,
+    @LockMode = 'Exclusive',
+    @LockOwner = 'Transaction',
+    @LockTimeout = 10000;", connection, transaction))
+            {
+                lockCommand.Parameters.AddWithValue("@Resource", lockResource);
+                await lockCommand.ExecuteNonQueryAsync();
+            }
+
+            using SqlCommand command = new SqlCommand($@"
+SELECT ISNULL(MAX(TRY_CONVERT(int, Codigo)), 0)
+FROM {tableName}
+WHERE idEmpresa = @IdEmpresa", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            int nextValue = Convert.ToInt32(await command.ExecuteScalarAsync()) + 1;
+            return nextValue.ToString(nextValue < 1000 ? "D3" : "0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private async Task<string> ObtenerCodigoCatalogoAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid id, string tableName)
+        {
+            using SqlCommand command = new SqlCommand($@"
+SELECT Codigo
+FROM {tableName}
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@Id", id);
+            object? result = await command.ExecuteScalarAsync();
+            return Convert.ToString(result)?.Trim() ?? string.Empty;
         }
 
         private static string ValidateMultimedia(List<ActivoMultimediaDto> multimedia)

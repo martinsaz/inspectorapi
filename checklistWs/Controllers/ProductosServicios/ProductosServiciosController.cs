@@ -2139,11 +2139,14 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
 
             Guid itemId = id ?? Guid.NewGuid();
             bool esNuevo = !id.HasValue || id.Value == Guid.Empty;
+            string codigoPersistido = esNuevo
+                ? await GenerateNextCatalogCodeAsync(connection, transaction, idEmpresa, tableName)
+                : await ObtenerCodigoCatalogoAsync(connection, transaction, idEmpresa, itemId, tableName);
 
-            if (await ExisteCodigoCatalogoAsync(connection, transaction, idEmpresa, codigo, esNuevo ? null : itemId, tableName))
+            if (string.IsNullOrWhiteSpace(codigoPersistido))
             {
                 transaction.Rollback();
-                return BadRequest(new ProductoServicioOperacionResponse { Mensaje = duplicateCodeMessage });
+                return NotFound(new ProductoServicioOperacionResponse { Mensaje = $"No fue posible actualizar {label}." });
             }
 
             if (!string.IsNullOrWhiteSpace(duplicateNameMessage))
@@ -2181,7 +2184,7 @@ VALUES
     (@Id, @IdEmpresa, @IdentityKey, @Codigo, @Nombre, @Descripcion, 1, @FechaCreacion, @FechaActualizacion, NULL)";
 
                 using SqlCommand insert = new SqlCommand(insertSql, connection, transaction);
-                AddCatalogoParameters(insert, itemId, idEmpresa, codigo, nombre, descripcion, ahora, abreviatura, permiteDecimales, aplicaA);
+                AddCatalogoParameters(insert, itemId, idEmpresa, codigoPersistido, nombre, descripcion, ahora, abreviatura, permiteDecimales, aplicaA);
                 await insert.ExecuteNonQueryAsync();
             }
             else
@@ -2190,7 +2193,6 @@ VALUES
                     ? $@"
 UPDATE {tableName}
 SET
-    Codigo = @Codigo,
     Nombre = @Nombre,
     Abreviatura = @Abreviatura,
     PermiteDecimales = @PermiteDecimales,
@@ -2200,7 +2202,6 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id"
                         ? $@"
 UPDATE {tableName}
 SET
-    Codigo = @Codigo,
     Nombre = @Nombre,
     Descripcion = @Descripcion,
     AplicaA = @AplicaA,
@@ -2209,14 +2210,13 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id"
                         : $@"
 UPDATE {tableName}
 SET
-    Codigo = @Codigo,
     Nombre = @Nombre,
     Descripcion = @Descripcion,
     FechaActualizacion = @FechaActualizacion
 WHERE idEmpresa = @IdEmpresa AND id = @Id";
 
                 using SqlCommand update = new SqlCommand(updateSql, connection, transaction);
-                AddCatalogoParameters(update, itemId, idEmpresa, codigo, nombre, descripcion, ahora, abreviatura, permiteDecimales, aplicaA);
+                AddCatalogoParameters(update, itemId, idEmpresa, codigoPersistido, nombre, descripcion, ahora, abreviatura, permiteDecimales, aplicaA);
                 int rowsAffected = await update.ExecuteNonQueryAsync();
                 if (rowsAffected == 0)
                 {
@@ -2226,7 +2226,13 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id";
             }
 
             transaction.Commit();
-            return Ok(new ProductoServicioOperacionResponse { Mensaje = esNuevo ? $"Se registró {label}." : $"Se actualizó {label}." });
+            return Ok(new ProductoServicioOperacionResponse
+            {
+                Mensaje = esNuevo ? $"Se registró {label}." : $"Se actualizó {label}.",
+                Id = itemId,
+                Codigo = codigoPersistido,
+                Nombre = nombre.Trim()
+            });
         }
 
         private async Task<IActionResult> CambiarEstatusCatalogoBasicoAsync(Guid idEmpresa, Guid id, string tableName, string label, bool activar)
@@ -2866,6 +2872,41 @@ WHERE idEmpresa = @IdEmpresa AND Codigo = @Codigo AND (@ExcludeId IS NULL OR id 
             return Convert.ToInt32(await command.ExecuteScalarAsync()) > 0;
         }
 
+        private async Task<string> GenerateNextCatalogCodeAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, string tableName)
+        {
+            string lockResource = $"ticket05:{tableName}:{idEmpresa:D}";
+            using (SqlCommand lockCommand = new SqlCommand(@"
+EXEC sp_getapplock
+    @Resource = @Resource,
+    @LockMode = 'Exclusive',
+    @LockOwner = 'Transaction',
+    @LockTimeout = 10000;", connection, transaction))
+            {
+                lockCommand.Parameters.AddWithValue("@Resource", lockResource);
+                await lockCommand.ExecuteNonQueryAsync();
+            }
+
+            using SqlCommand command = new SqlCommand($@"
+SELECT ISNULL(MAX(TRY_CONVERT(int, Codigo)), 0)
+FROM {tableName}
+WHERE idEmpresa = @IdEmpresa", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            int nextValue = Convert.ToInt32(await command.ExecuteScalarAsync()) + 1;
+            return nextValue.ToString(nextValue < 1000 ? "D3" : "0", CultureInfo.InvariantCulture);
+        }
+
+        private async Task<string> ObtenerCodigoCatalogoAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid itemId, string tableName)
+        {
+            using SqlCommand command = new SqlCommand($@"
+SELECT Codigo
+FROM {tableName}
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@Id", itemId);
+            object? result = await command.ExecuteScalarAsync();
+            return Convert.ToString(result)?.Trim() ?? string.Empty;
+        }
+
         private async Task<bool> ExisteNombreCatalogoAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, string nombre, Guid? excludeId, string tableName)
         {
             using SqlCommand command = new SqlCommand($@"
@@ -3068,7 +3109,7 @@ WHERE idEmpresa = @IdEmpresa
 
         private static string ValidateCategoriaRequest(ProductoServicioCategoriaGuardarRequest request, Guid idEmpresa)
         {
-            string baseValidation = ValidateCatalogoBasico(idEmpresa, request.IdEmpresa, request.Codigo, request.Nombre, request.Descripcion);
+            string baseValidation = ValidateCatalogoBasico(idEmpresa, request.IdEmpresa, request.Nombre, request.Descripcion);
             if (!string.IsNullOrWhiteSpace(baseValidation))
             {
                 return baseValidation;
@@ -3084,7 +3125,7 @@ WHERE idEmpresa = @IdEmpresa
 
         private static string ValidateMarcaRequest(ProductoServicioMarcaGuardarRequest request, Guid idEmpresa)
         {
-            return ValidateCatalogoBasico(idEmpresa, request.IdEmpresa, request.Codigo, request.Nombre, request.Descripcion);
+            return ValidateCatalogoBasico(idEmpresa, request.IdEmpresa, request.Nombre, request.Descripcion);
         }
 
         private static string ValidateUnidadRequest(ProductoServicioUnidadMedidaGuardarRequest request, Guid idEmpresa)
@@ -3092,11 +3133,6 @@ WHERE idEmpresa = @IdEmpresa
             if (request.IdEmpresa == Guid.Empty || request.IdEmpresa != idEmpresa)
             {
                 return "No fue posible resolver la empresa activa.";
-            }
-
-            if (string.IsNullOrWhiteSpace(request.Codigo) || request.Codigo.Trim().Length > UnidadCodigoLength)
-            {
-                return $"Captura un código válido de hasta {UnidadCodigoLength} caracteres.";
             }
 
             if (string.IsNullOrWhiteSpace(request.Nombre) || request.Nombre.Trim().Length > UnidadNombreLength)
@@ -3117,16 +3153,11 @@ WHERE idEmpresa = @IdEmpresa
             return string.Empty;
         }
 
-        private static string ValidateCatalogoBasico(Guid idEmpresaEsperado, Guid idEmpresaRequest, string codigo, string nombre, string descripcion)
+        private static string ValidateCatalogoBasico(Guid idEmpresaEsperado, Guid idEmpresaRequest, string nombre, string descripcion)
         {
             if (idEmpresaRequest == Guid.Empty || idEmpresaEsperado != idEmpresaRequest)
             {
                 return "No fue posible resolver la empresa activa.";
-            }
-
-            if (string.IsNullOrWhiteSpace(codigo) || codigo.Trim().Length > CodigoLength)
-            {
-                return $"Captura un código válido de hasta {CodigoLength} caracteres.";
             }
 
             if (string.IsNullOrWhiteSpace(nombre) || nombre.Trim().Length > NombreLength)

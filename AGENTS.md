@@ -143,3 +143,18 @@
   - `sazapi` obtiene catálogo SAT desde API externa con rutas `GetClaveProdServ4` y `GetTodoClaveUnidad`
   - la API CheckApp debe consumir esa fuente de manera server-to-server y nunca exponerla directamente al navegador
   - `H87` debe preservarse como unidad base segura cuando no exista otra selección
+- Cierre funcional Ticket 05 del `2026-08-24` en backend/API:
+  - se conserva la regla de desconfianza hacia `idEmpresa`, `empresa`, `cadena` y `correo` enviados por cliente
+  - el endurecimiento multiempresa de Activos sigue vigente con validación de empresa firmada por proxy MVC
+  - se agregó script idempotente versionado:
+    - `checklistWs/Scripts/activos-catalogos-unique-codigos-up.sql`
+  - ejecución real certificada:
+    - sin duplicados previos por `(idEmpresa, Codigo)` en `dbo.ActivosMarcas`
+    - sin duplicados previos por `(idEmpresa, Codigo)` en `dbo.ActivosProveedores`
+    - índices creados:
+      - `UX_ActivosMarcas_IdEmpresa_Codigo`
+      - `UX_ActivosProveedores_IdEmpresa_Codigo`
+    - históricos eliminados solo por autorización y con `0` referencias:
+      - `ORD-QA-27`
+      - `VIS-QA-27`
+  - build final de `checklistWs.csproj` correcto; se mantienen warnings legacy de paquetes existentes

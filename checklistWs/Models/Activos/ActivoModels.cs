@@ -170,6 +170,9 @@ namespace checklistWs.Models.Activos
     public class ActivoOperacionResponse
     {
         public string Mensaje { get; set; } = string.Empty;
+        public Guid? Id { get; set; }
+        public string Codigo { get; set; } = string.Empty;
+        public string Nombre { get; set; } = string.Empty;
     }
 
     public class ActivoMultimediaTemporalResponse : ActivoOperacionResponse

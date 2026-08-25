@@ -581,6 +581,9 @@ namespace checklistWs.Models.ProductosServicios
     public class ProductoServicioOperacionResponse
     {
         public string Mensaje { get; set; } = string.Empty;
+        public Guid? Id { get; set; }
+        public string Codigo { get; set; } = string.Empty;
+        public string Nombre { get; set; } = string.Empty;
     }
 
     public class ProductoServicioColeccionOperacionResponse : ProductoServicioOperacionResponse
