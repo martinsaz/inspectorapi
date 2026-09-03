@@ -102,7 +102,7 @@ BEGIN TRY
             Codigo NVARCHAR(50) NOT NULL,
             Tag NVARCHAR(100) NULL,
             Nombre NVARCHAR(150) NOT NULL,
-            Descripcion NVARCHAR(1000) NULL,
+            Descripcion NVARCHAR(MAX) NULL,
             idCategoria UNIQUEIDENTIFIER NOT NULL,
             idMarca UNIQUEIDENTIFIER NULL,
             idUnidadMedida UNIQUEIDENTIFIER NOT NULL,
@@ -137,6 +137,18 @@ BEGIN TRY
                     )
                 )
         );
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM sys.columns
+        WHERE object_id = OBJECT_ID(N'dbo.ProductosServicios')
+          AND name = N'Descripcion'
+          AND max_length <> -1
+    )
+    BEGIN
+        ALTER TABLE dbo.ProductosServicios
+        ALTER COLUMN Descripcion NVARCHAR(MAX) NULL;
     END;
 
     IF OBJECT_ID(N'dbo.ProductosServiciosExistencias', N'U') IS NULL

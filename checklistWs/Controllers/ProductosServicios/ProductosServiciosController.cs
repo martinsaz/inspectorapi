@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using checklistWs.Models.ProductosServicios;
 using checklistWs.Utiles;
 using Firebase.Auth;
@@ -36,7 +37,7 @@ namespace checklistWs.Controllers.ProductosServicios
         private const byte MovimientoAjusteNegativo = 5;
         private const int CodigoLength = 50;
         private const int NombreLength = 150;
-        private const int DescripcionLength = 1000;
+        private const int ObservacionesLength = 1000;
         private const int DescripcionCatalogoLength = 500;
         private const int TagLength = 100;
         private const int UnidadCodigoLength = 30;
@@ -1854,13 +1855,25 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validation });
                 }
 
+                request.Descripcion = NormalizeDescripcionCatalogo(request.Descripcion);
+
                 using SqlConnection connection = CreateConnection();
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
                 Guid id = request.Id ?? Guid.NewGuid();
                 bool esNuevo = !request.Id.HasValue || request.Id.Value == Guid.Empty;
-                if (await ExisteNumeroColeccionAsync(connection, transaction, context.IdEmpresa, request.Numero.Trim(), esNuevo ? null : id))
+                string numeroPersistido = esNuevo
+                    ? await GenerateNextCollectionNumberAsync(connection, transaction, context.IdEmpresa)
+                    : await ObtenerNumeroColeccionAsync(connection, transaction, context.IdEmpresa, id);
+
+                if (string.IsNullOrWhiteSpace(numeroPersistido))
+                {
+                    transaction.Rollback();
+                    return NotFound(new ProductoServicioOperacionResponse { Mensaje = "No fue posible guardar la colección." });
+                }
+
+                if (await ExisteNumeroColeccionAsync(connection, transaction, context.IdEmpresa, numeroPersistido, esNuevo ? null : id))
                 {
                     transaction.Rollback();
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Ya existe una colección con este número." });
@@ -1883,9 +1896,9 @@ VALUES
                     insert.Parameters.AddWithValue("@Id", id);
                     insert.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
                     insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
-                    insert.Parameters.AddWithValue("@Numero", request.Numero.Trim());
+                    insert.Parameters.AddWithValue("@Numero", numeroPersistido);
                     insert.Parameters.AddWithValue("@Nombre", request.Nombre.Trim());
-                    insert.Parameters.AddWithValue("@Descripcion", string.IsNullOrWhiteSpace(request.Descripcion) ? DBNull.Value : request.Descripcion.Trim());
+                    insert.Parameters.AddWithValue("@Descripcion", string.IsNullOrWhiteSpace(request.Descripcion) ? DBNull.Value : request.Descripcion);
                     insert.Parameters.AddWithValue("@FechaCreacion", ahora);
                     insert.Parameters.AddWithValue("@FechaActualizacion", ahora);
                     await insert.ExecuteNonQueryAsync();
@@ -1901,9 +1914,9 @@ SET Numero = @Numero,
 WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     update.Parameters.AddWithValue("@Id", id);
                     update.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
-                    update.Parameters.AddWithValue("@Numero", request.Numero.Trim());
+                    update.Parameters.AddWithValue("@Numero", numeroPersistido);
                     update.Parameters.AddWithValue("@Nombre", request.Nombre.Trim());
-                    update.Parameters.AddWithValue("@Descripcion", string.IsNullOrWhiteSpace(request.Descripcion) ? DBNull.Value : request.Descripcion.Trim());
+                    update.Parameters.AddWithValue("@Descripcion", string.IsNullOrWhiteSpace(request.Descripcion) ? DBNull.Value : request.Descripcion);
                     update.Parameters.AddWithValue("@FechaActualizacion", ahora);
                     await update.ExecuteNonQueryAsync();
                 }
@@ -1915,9 +1928,9 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     Coleccion = new ProductoServicioCatalogoComboDto
                     {
                         Id = id,
-                        Numero = request.Numero.Trim(),
+                        Numero = numeroPersistido,
                         Nombre = request.Nombre.Trim(),
-                        Descripcion = string.IsNullOrWhiteSpace(request.Descripcion) ? string.Empty : request.Descripcion.Trim(),
+                        Descripcion = string.IsNullOrWhiteSpace(request.Descripcion) ? string.Empty : request.Descripcion,
                         Activo = true
                     }
                 });
@@ -3319,7 +3332,7 @@ VALUES
             command.Parameters.AddWithValue("@ExistenciaPosterior", existenciaPosterior);
             command.Parameters.AddWithValue("@CostoUnitario", costoUnitario.HasValue ? costoUnitario.Value : DBNull.Value);
             command.Parameters.AddWithValue("@Referencia", Truncate(referencia, ReferenciaLength));
-            command.Parameters.AddWithValue("@Observaciones", Truncate(observaciones, DescripcionLength));
+            command.Parameters.AddWithValue("@Observaciones", Truncate(observaciones, ObservacionesLength));
             command.Parameters.AddWithValue("@IdUsuario", idUsuario.HasValue ? idUsuario.Value : DBNull.Value);
             command.Parameters.AddWithValue("@FechaMovimiento", fechaMovimiento);
             await command.ExecuteNonQueryAsync();
@@ -3463,6 +3476,41 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
             return Convert.ToString(result)?.Trim() ?? string.Empty;
         }
 
+        private async Task<string> GenerateNextCollectionNumberAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa)
+        {
+            string lockResource = $"productos-servicios-colecciones-numero-{idEmpresa:D}";
+            using (SqlCommand lockCommand = new SqlCommand(@"
+EXEC sp_getapplock
+    @Resource = @Resource,
+    @LockMode = 'Exclusive',
+    @LockOwner = 'Transaction',
+    @LockTimeout = 10000;", connection, transaction))
+            {
+                lockCommand.Parameters.AddWithValue("@Resource", lockResource);
+                await lockCommand.ExecuteNonQueryAsync();
+            }
+
+            using SqlCommand command = new SqlCommand(@"
+SELECT ISNULL(MAX(TRY_CONVERT(int, Numero)), 0)
+FROM dbo.ProductosServiciosColecciones
+WHERE idEmpresa = @IdEmpresa", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            int nextValue = Convert.ToInt32(await command.ExecuteScalarAsync()) + 1;
+            return nextValue.ToString(nextValue < 1000 ? "D3" : "0", CultureInfo.InvariantCulture);
+        }
+
+        private async Task<string> ObtenerNumeroColeccionAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid itemId)
+        {
+            using SqlCommand command = new SqlCommand(@"
+SELECT Numero
+FROM dbo.ProductosServiciosColecciones
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@Id", itemId);
+            object? result = await command.ExecuteScalarAsync();
+            return Convert.ToString(result)?.Trim() ?? string.Empty;
+        }
+
         private async Task<bool> ExisteNombreCatalogoAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, string nombre, Guid? excludeId, string tableName)
         {
             using SqlCommand command = new SqlCommand($@"
@@ -3539,11 +3587,6 @@ WHERE idEmpresa = @IdEmpresa
                         return $"Cada etiqueta debe tener como máximo {TagLength} caracteres.";
                     }
                 }
-            }
-
-            if ((request.Descripcion ?? string.Empty).Trim().Length > DescripcionLength)
-            {
-                return $"La descripción no puede exceder {DescripcionLength} caracteres.";
             }
 
             if ((request.ClaveProductoSat ?? string.Empty).Trim().Length > ClaveSatProductoLength)
@@ -3810,9 +3853,9 @@ WHERE idEmpresa = @IdEmpresa
                 return $"La referencia no puede exceder {ReferenciaLength} caracteres.";
             }
 
-            if ((request.Observaciones ?? string.Empty).Trim().Length > DescripcionLength)
+            if ((request.Observaciones ?? string.Empty).Trim().Length > ObservacionesLength)
             {
-                return $"Las observaciones no pueden exceder {DescripcionLength} caracteres.";
+                return $"Las observaciones no pueden exceder {ObservacionesLength} caracteres.";
             }
 
             return string.Empty;
@@ -4035,7 +4078,7 @@ WHERE idEmpresa = @IdEmpresa
                 Codigo = request.Codigo.Trim(),
                 Tag = ResolveLegacyTagShadow(normalizedTags, request.Tag),
                 Nombre = request.Nombre.Trim(),
-                Descripcion = (request.Descripcion ?? string.Empty).Trim(),
+                Descripcion = SanitizeRichTextHtml(request.Descripcion),
                 IdCategoria = request.IdCategoria,
                 IdMarca = request.IdMarca.HasValue && request.IdMarca.Value != Guid.Empty ? request.IdMarca : null,
                 IdUnidadMedida = request.IdUnidadMedida,
@@ -4376,9 +4419,9 @@ WHERE idEmpresa = @IdEmpresa
                 return "No fue posible resolver la empresa activa.";
             }
 
-            if (string.IsNullOrWhiteSpace(request.Numero) || request.Numero.Trim().Length > NumeroColeccionLength)
+            if (!string.IsNullOrWhiteSpace(request.Numero) && request.Numero.Trim().Length > NumeroColeccionLength)
             {
-                return $"Captura un número válido de hasta {NumeroColeccionLength} caracteres.";
+                return $"El número de colección no puede exceder {NumeroColeccionLength} caracteres.";
             }
 
             if (string.IsNullOrWhiteSpace(request.Nombre) || request.Nombre.Trim().Length > NombreLength)
@@ -5898,6 +5941,215 @@ VALUES
             return TiposMultimediaPermitidos.Contains(normalized) ? normalized : string.Empty;
         }
 
+        private static string NormalizeDescripcionCatalogo(string? value)
+        {
+            return (value ?? string.Empty).Trim();
+        }
+
+        private static string SanitizeRichTextHtml(string? value)
+        {
+            string html = (value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(html))
+            {
+                return string.Empty;
+            }
+
+            html = html.Replace("\0", string.Empty);
+            html = Regex.Replace(html, "<!--[\\s\\S]*?-->", string.Empty, RegexOptions.IgnoreCase);
+            html = Regex.Replace(html, "<(script|style|iframe|object|embed|form|input|button|textarea|select)[\\s\\S]*?</\\1>", string.Empty, RegexOptions.IgnoreCase);
+            html = Regex.Replace(html, "<[^>]+>", match => SanitizeAllowedHtmlTag(match.Value), RegexOptions.IgnoreCase);
+            return html.Trim();
+        }
+
+        private static string SanitizeAllowedHtmlTag(string rawTag)
+        {
+            Match nameMatch = Regex.Match(rawTag, @"^<\s*/?\s*([a-z0-9]+)", RegexOptions.IgnoreCase);
+            if (!nameMatch.Success)
+            {
+                return string.Empty;
+            }
+
+            string tagName = nameMatch.Groups[1].Value.ToLowerInvariant();
+            HashSet<string> allowedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "h2", "h3", "blockquote", "code", "pre", "a"
+            };
+
+            if (!allowedTags.Contains(tagName))
+            {
+                return string.Empty;
+            }
+
+            bool isClosing = rawTag.Contains("</", StringComparison.Ordinal);
+            bool selfClosing = rawTag.EndsWith("/>", StringComparison.Ordinal);
+            if (isClosing)
+            {
+                return $"</{tagName}>";
+            }
+
+            if (!string.Equals(tagName, "a", StringComparison.OrdinalIgnoreCase))
+            {
+                return selfClosing ? $"<{tagName} />" : $"<{tagName}>";
+            }
+
+            string href = ExtractAttributeValue(rawTag, "href");
+            if (!IsSafeHref(href))
+            {
+                href = string.Empty;
+            }
+
+            string title = WebUtility.HtmlEncode(ExtractAttributeValue(rawTag, "title"));
+            bool openBlank = string.Equals(ExtractAttributeValue(rawTag, "target"), "_blank", StringComparison.OrdinalIgnoreCase);
+            StringBuilder builder = new StringBuilder("<a");
+
+            if (!string.IsNullOrWhiteSpace(href))
+            {
+                builder.Append(" href=\"").Append(WebUtility.HtmlEncode(href)).Append('"');
+            }
+
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                builder.Append(" title=\"").Append(title).Append('"');
+            }
+
+            if (openBlank)
+            {
+                builder.Append(" target=\"_blank\" rel=\"noopener noreferrer\"");
+            }
+
+            builder.Append('>');
+            return builder.ToString();
+        }
+
+        private static string ExtractAttributeValue(string tag, string attributeName)
+        {
+            Match match = Regex.Match(tag, attributeName + "\\s*=\\s*(['\"])(.*?)\\1", RegexOptions.IgnoreCase);
+            return match.Success ? match.Groups[2].Value.Trim() : string.Empty;
+        }
+
+        private static bool IsSafeHref(string? href)
+        {
+            string normalized = (href ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return false;
+            }
+
+            if (normalized.StartsWith("#", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (!Uri.TryCreate(normalized, UriKind.RelativeOrAbsolute, out Uri? uri))
+            {
+                return false;
+            }
+
+            if (!uri.IsAbsoluteUri)
+            {
+                return normalized.StartsWith("/", StringComparison.Ordinal);
+            }
+
+            return uri.Scheme == Uri.UriSchemeHttp
+                || uri.Scheme == Uri.UriSchemeHttps
+                || uri.Scheme == Uri.UriSchemeMailto
+                || string.Equals(uri.Scheme, "tel", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string HtmlToPlainText(string? value)
+        {
+            string html = (value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(html))
+            {
+                return string.Empty;
+            }
+
+            string withBreaks = Regex.Replace(html, @"<(br|/p|/li|/h2|/h3)\s*/?>", "\n", RegexOptions.IgnoreCase);
+            string withoutTags = Regex.Replace(withBreaks, "<[^>]+>", string.Empty, RegexOptions.IgnoreCase);
+            string decoded = WebUtility.HtmlDecode(withoutTags);
+            return Regex.Replace(decoded, @"\n{3,}", "\n\n").Trim();
+        }
+
+        private static void AppendRichTextToPdf(TextDescriptor text, string? value)
+        {
+            string html = (value ?? string.Empty).Trim();
+            bool bold = false;
+            bool italic = false;
+            bool hasContent = false;
+
+            foreach (Match token in Regex.Matches(html, @"<[^>]+>|[^<]+"))
+            {
+                string part = token.Value;
+                if (!part.StartsWith("<", StringComparison.Ordinal))
+                {
+                    string plainText = WebUtility.HtmlDecode(part);
+                    if (!string.IsNullOrEmpty(plainText))
+                    {
+                        TextSpanDescriptor span = text.Span(plainText);
+                        if (bold)
+                        {
+                            span.Bold();
+                        }
+
+                        if (italic)
+                        {
+                            span.Italic();
+                        }
+
+                        hasContent = true;
+                    }
+
+                    continue;
+                }
+
+                string tag = Regex.Replace(part, @"[<>\s/]", string.Empty).ToLowerInvariant();
+                bool closing = part.StartsWith("</", StringComparison.Ordinal);
+                switch (tag)
+                {
+                    case "strong":
+                    case "b":
+                        bold = !closing;
+                        break;
+                    case "em":
+                    case "i":
+                        italic = !closing;
+                        break;
+                    case "br":
+                        text.Line("");
+                        hasContent = false;
+                        break;
+                    case "p":
+                    case "h2":
+                    case "h3":
+                    case "ul":
+                    case "ol":
+                        if (closing && hasContent)
+                        {
+                            text.Line("");
+                            hasContent = false;
+                        }
+                        break;
+                    case "li":
+                        if (!closing)
+                        {
+                            if (hasContent)
+                            {
+                                text.Line("");
+                            }
+
+                            text.Span("• ");
+                            hasContent = true;
+                        }
+                        else if (hasContent)
+                        {
+                            text.Line("");
+                            hasContent = false;
+                        }
+                        break;
+                }
+            }
+        }
+
         private static string ValidateTemporalMultimediaUpload(string tipoMultimedia, IFormFile archivo)
         {
             if (archivo.Length <= 0)
@@ -6627,7 +6879,11 @@ VALUES
                             details.Item().Text($"Estatus: {FichaTextOrDash(ficha.EstatusNombre)}");
                             if (!string.IsNullOrWhiteSpace(ficha.Descripcion))
                             {
-                                details.Item().Text($"Descripción: {ficha.Descripcion.Trim()}");
+                                details.Item().Text(text =>
+                                {
+                                    text.Span("Descripción: ").SemiBold();
+                                    AppendRichTextToPdf(text, ficha.Descripcion);
+                                });
                             }
 
                             details.Item().Text($"Categoría: {FichaTextOrDash(ficha.Categoria)}");
