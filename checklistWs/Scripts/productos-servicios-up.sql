@@ -550,6 +550,18 @@ BEGIN TRY
         ADD PrecioUnitarioMonto DECIMAL(18, 6) NULL;
     END;
 
+    IF COL_LENGTH('dbo.ProductosServicios', 'PrecioUnitarioCantidadTotal') IS NULL
+    BEGIN
+        ALTER TABLE dbo.ProductosServicios
+        ADD PrecioUnitarioCantidadTotal DECIMAL(18, 6) NULL;
+    END;
+
+    IF COL_LENGTH('dbo.ProductosServicios', 'PrecioUnitarioUnidadTotal') IS NULL
+    BEGIN
+        ALTER TABLE dbo.ProductosServicios
+        ADD PrecioUnitarioUnidadTotal NVARCHAR(20) NULL;
+    END;
+
     IF COL_LENGTH('dbo.ProductosServicios', 'PrecioUnitarioBaseCantidad') IS NULL
     BEGIN
         ALTER TABLE dbo.ProductosServicios
@@ -562,10 +574,23 @@ BEGIN TRY
         ADD PrecioUnitarioUnidad NVARCHAR(20) NULL;
     END;
 
+    IF COL_LENGTH('dbo.ProductosServicios', 'PrecioUnitarioUnidadBase') IS NULL
+    BEGIN
+        ALTER TABLE dbo.ProductosServicios
+        ADD PrecioUnitarioUnidadBase NVARCHAR(20) NULL;
+    END;
+
     IF COL_LENGTH('dbo.ProductosServicios', 'ObjetoImpuesto') IS NULL
     BEGIN
         ALTER TABLE dbo.ProductosServicios
         ADD ObjetoImpuesto NVARCHAR(4) NULL;
+    END;
+
+    IF COL_LENGTH('dbo.ProductosServicios', 'PorcentajeIVA') IS NULL
+    BEGIN
+        ALTER TABLE dbo.ProductosServicios
+        ADD PorcentajeIVA DECIMAL(5, 2) NOT NULL
+            CONSTRAINT DF_ProductosServicios_PorcentajeIVA DEFAULT (0);
     END;
 
     IF COL_LENGTH('dbo.ProductosServicios', 'ClaveProductoSat') IS NULL

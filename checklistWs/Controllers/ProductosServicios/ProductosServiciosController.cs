@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using checklistWs.Models.ProductosServicios;
+using checklistWs.Services.ProductosServicios;
 using checklistWs.Utiles;
 using Firebase.Auth;
 using Firebase.Auth.Providers;
@@ -49,6 +50,8 @@ namespace checklistWs.Controllers.ProductosServicios
         private const int ClaveSatUnidadLength = 10;
         private const int ObjetoImpuestoLength = 4;
         private const int PrecioUnitarioUnidadLength = 20;
+        private const int PrecioUnitarioUnidadTotalLength = 20;
+        private const int PrecioUnitarioUnidadBaseLength = 20;
         private const int TipoPaqueteLength = 30;
         private const decimal FactorVolumetricoDefault = 5000m;
         private const int AtributoNombreLength = 100;
@@ -151,9 +154,13 @@ SELECT
     ps.PrecioPublico,
     ps.PrecioComparacion,
     ps.PrecioUnitarioMonto,
+    ps.PrecioUnitarioCantidadTotal,
+    ISNULL(ps.PrecioUnitarioUnidadTotal, '') AS PrecioUnitarioUnidadTotal,
     ps.PrecioUnitarioBaseCantidad,
     ISNULL(ps.PrecioUnitarioUnidad, '') AS PrecioUnitarioUnidad,
+    ISNULL(ps.PrecioUnitarioUnidadBase, '') AS PrecioUnitarioUnidadBase,
     ISNULL(ps.ObjetoImpuesto, '') AS ObjetoImpuesto,
+    ISNULL(ps.PorcentajeIVA, 0) AS PorcentajeIVA,
     ISNULL(ps.ClaveProductoSat, '') AS ClaveProductoSat,
     ISNULL(ps.ClaveUnidadSat, '') AS ClaveUnidadSat,
     ps.EsProductoFisico,
@@ -321,9 +328,13 @@ SELECT
     ps.PrecioPublico,
     ps.PrecioComparacion,
     ps.PrecioUnitarioMonto,
+    ps.PrecioUnitarioCantidadTotal,
+    ISNULL(ps.PrecioUnitarioUnidadTotal, '') AS PrecioUnitarioUnidadTotal,
     ps.PrecioUnitarioBaseCantidad,
     ISNULL(ps.PrecioUnitarioUnidad, '') AS PrecioUnitarioUnidad,
+    ISNULL(ps.PrecioUnitarioUnidadBase, '') AS PrecioUnitarioUnidadBase,
     ISNULL(ps.ObjetoImpuesto, '') AS ObjetoImpuesto,
+    ISNULL(ps.PorcentajeIVA, 0) AS PorcentajeIVA,
     ISNULL(ps.ClaveProductoSat, '') AS ClaveProductoSat,
     ISNULL(ps.ClaveUnidadSat, '') AS ClaveUnidadSat,
     ps.EsProductoFisico,
@@ -419,9 +430,13 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
                             PrecioPublico = baseItem.PrecioPublico,
                             PrecioComparacion = baseItem.PrecioComparacion,
                             PrecioUnitarioMonto = baseItem.PrecioUnitarioMonto,
+                            PrecioUnitarioCantidadTotal = baseItem.PrecioUnitarioCantidadTotal,
+                            PrecioUnitarioUnidadTotal = baseItem.PrecioUnitarioUnidadTotal,
                             PrecioUnitarioBaseCantidad = baseItem.PrecioUnitarioBaseCantidad,
                             PrecioUnitarioUnidad = baseItem.PrecioUnitarioUnidad,
+                            PrecioUnitarioUnidadBase = baseItem.PrecioUnitarioUnidadBase,
                             ObjetoImpuesto = baseItem.ObjetoImpuesto,
+                            PorcentajeIVA = baseItem.PorcentajeIVA,
                             ClaveProductoSat = baseItem.ClaveProductoSat,
                             ClaveUnidadSat = baseItem.ClaveUnidadSat,
                             EsProductoFisico = baseItem.EsProductoFisico,
@@ -461,6 +476,9 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
                 detalle.OpcionesVariante = await ObtenerOpcionesVarianteProductoAsync(connection, context.IdEmpresa, idProductoServicio);
                 detalle.Variantes = await ObtenerVariantesProductoAsync(connection, context.IdEmpresa, idProductoServicio);
                 detalle.Multimedia = await ObtenerMultimediaProductoAsync(connection, context.IdEmpresa, idProductoServicio);
+                detalle.PresentacionesVenta = detalle.Tipo == TipoProducto
+                    ? await ObtenerPresentacionesVentaAsync(connection, null, context.IdEmpresa, idProductoServicio, true)
+                    : new List<ProductoServicioPresentacionVentaDto>();
                 ApplyLogisticsMetrics(detalle);
                 return Ok(detalle);
             }
@@ -571,11 +589,15 @@ SELECT TOP (1)
     ps.PrecioPublico,
     ps.PrecioComparacion,
     ps.PrecioUnitarioMonto,
+    ps.PrecioUnitarioCantidadTotal,
+    ISNULL(ps.PrecioUnitarioUnidadTotal, '') AS PrecioUnitarioUnidadTotal,
     ps.PrecioUnitarioBaseCantidad,
     ISNULL(ps.PrecioUnitarioUnidad, '') AS PrecioUnitarioUnidad,
+    ISNULL(ps.PrecioUnitarioUnidadBase, '') AS PrecioUnitarioUnidadBase,
     ISNULL(ps.ClaveProductoSat, '') AS ClaveProductoSat,
     ISNULL(ps.ClaveUnidadSat, '') AS ClaveUnidadSat,
     ISNULL(ps.ObjetoImpuesto, '') AS ObjetoImpuesto,
+    ISNULL(ps.PorcentajeIVA, 0) AS PorcentajeIVA,
     ps.EsProductoFisico,
     ps.PesoKg,
     ps.LargoCm,
@@ -644,11 +666,15 @@ WHERE ps.idEmpresa = @IdEmpresa
                         PrecioPublico = ReadDecimal(reader, "PrecioPublico"),
                         PrecioComparacion = ReadNullableDecimal(reader, "PrecioComparacion"),
                         PrecioUnitarioMonto = ReadNullableDecimal(reader, "PrecioUnitarioMonto"),
+                        PrecioUnitarioCantidadTotal = ReadNullableDecimal(reader, "PrecioUnitarioCantidadTotal"),
+                        PrecioUnitarioUnidadTotal = ReadString(reader, "PrecioUnitarioUnidadTotal"),
                         PrecioUnitarioBaseCantidad = ReadNullableDecimal(reader, "PrecioUnitarioBaseCantidad"),
                         PrecioUnitarioUnidad = ReadString(reader, "PrecioUnitarioUnidad"),
+                        PrecioUnitarioUnidadBase = ReadString(reader, "PrecioUnitarioUnidadBase"),
                         ClaveProductoSat = ReadString(reader, "ClaveProductoSat"),
                         ClaveUnidadSat = ReadString(reader, "ClaveUnidadSat"),
                         ObjetoImpuesto = ReadString(reader, "ObjetoImpuesto"),
+                        PorcentajeIVA = ReadDecimal(reader, "PorcentajeIVA"),
                         EsProductoFisico = ReadBool(reader, "EsProductoFisico"),
                         PesoKg = ReadNullableDecimal(reader, "PesoKg"),
                         LargoCm = ReadNullableDecimal(reader, "LargoCm"),
@@ -668,11 +694,19 @@ WHERE ps.idEmpresa = @IdEmpresa
                 return null;
             }
 
+            ficha.PresentacionesVenta = ficha.Tipo == TipoProducto
+                ? await ObtenerPresentacionesVentaAsync(connection, null, idEmpresa, idProductoServicio, true)
+                : new List<ProductoServicioPresentacionVentaDto>();
             ficha.Tags = await ObtenerTagsProductoAsync(connection, idEmpresa, idProductoServicio, string.Empty);
             ficha.Atributos = await ObtenerAtributosProductoAsync(connection, idEmpresa, idProductoServicio);
             ficha.Variantes = await ObtenerVariantesProductoAsync(connection, idEmpresa, idProductoServicio);
             ficha.Multimedia = await ObtenerMultimediaProductoAsync(connection, idEmpresa, idProductoServicio);
-            ficha.PrecioUnitarioResumen = BuildPrecioUnitarioResumen(ficha.PrecioUnitarioMonto, ficha.PrecioUnitarioBaseCantidad, ficha.PrecioUnitarioUnidad);
+            ficha.PrecioUnitarioResumen = BuildPrecioUnitarioResumen(
+                ficha.PrecioPublico,
+                ficha.PrecioUnitarioCantidadTotal,
+                ficha.PrecioUnitarioUnidadTotal,
+                ficha.PrecioUnitarioBaseCantidad,
+                ficha.PrecioUnitarioUnidadBase);
             ApplyLogisticsMetrics(ficha);
             await EnriquecerFichaSatAsync(ficha);
             return ficha;
@@ -792,14 +826,60 @@ WHERE ps.idEmpresa = @IdEmpresa
             ficha.PesoFacturableKg = metrics.PesoFacturableKg;
         }
 
-        private static string BuildPrecioUnitarioResumen(decimal? monto, decimal? baseCantidad, string unidad)
+        private static string BuildPrecioUnitarioResumen(decimal precioPublico, decimal? cantidadTotal, string unidadTotal, decimal? baseCantidad, string unidadBase)
         {
-            if (!monto.HasValue || monto.Value <= 0 || !baseCantidad.HasValue || baseCantidad.Value <= 0 || string.IsNullOrWhiteSpace(unidad))
+            if (!cantidadTotal.HasValue || cantidadTotal.Value <= 0 || !baseCantidad.HasValue || baseCantidad.Value <= 0 || string.IsNullOrWhiteSpace(unidadTotal) || string.IsNullOrWhiteSpace(unidadBase))
             {
                 return string.Empty;
             }
 
-            return $"{monto.Value.ToString("C2", CultureInfo.GetCultureInfo("es-MX"))} por {baseCantidad.Value.ToString("0.####", CultureInfo.InvariantCulture)} {unidad.Trim()}";
+            decimal? unitPrice = CalculateUnitPrice(precioPublico, cantidadTotal.Value, unidadTotal, baseCantidad.Value, unidadBase);
+            if (!unitPrice.HasValue)
+            {
+                return string.Empty;
+            }
+
+            string baseText = baseCantidad.Value == 1m ? string.Empty : baseCantidad.Value.ToString("0.####", CultureInfo.InvariantCulture);
+            return $"{unitPrice.Value.ToString("C2", CultureInfo.GetCultureInfo("es-MX"))}/{baseText}{unidadBase.Trim()}";
+        }
+
+        private static decimal? CalculateUnitPrice(decimal precioPublico, decimal cantidadTotal, string unidadTotal, decimal medidaBase, string unidadBase)
+        {
+            if (precioPublico <= 0 || cantidadTotal <= 0 || medidaBase <= 0)
+            {
+                return null;
+            }
+
+            UnitPriceUnitMeta? totalMeta = ResolveUnitPriceUnitMeta(unidadTotal);
+            UnitPriceUnitMeta? baseMeta = ResolveUnitPriceUnitMeta(unidadBase);
+            if (totalMeta == null || baseMeta == null || totalMeta.Family != baseMeta.Family)
+            {
+                return null;
+            }
+
+            decimal totalNormalizado = cantidadTotal * totalMeta.Factor;
+            decimal baseNormalizada = medidaBase * baseMeta.Factor;
+            if (totalNormalizado <= 0 || baseNormalizada <= 0)
+            {
+                return null;
+            }
+
+            return (precioPublico / totalNormalizado) * baseNormalizada;
+        }
+
+        private static UnitPriceUnitMeta? ResolveUnitPriceUnitMeta(string unidad)
+        {
+            return (unidad ?? string.Empty).Trim().ToLowerInvariant() switch
+            {
+                "kg" => new UnitPriceUnitMeta("mass", 1000m),
+                "g" => new UnitPriceUnitMeta("mass", 1m),
+                "lb" => new UnitPriceUnitMeta("mass", 453.59237m),
+                "l" => new UnitPriceUnitMeta("volume", 1000m),
+                "ml" => new UnitPriceUnitMeta("volume", 1m),
+                "pz" => new UnitPriceUnitMeta("piece", 1m),
+                "m" => new UnitPriceUnitMeta("length", 1m),
+                _ => null
+            };
         }
 
         private async Task<string> ResolveSatCatalogDescriptionAsync(string clave, Func<string, Task<List<ProductoServicioOpcionDto>>> search)
@@ -1099,6 +1179,20 @@ WHERE ps.idEmpresa = @IdEmpresa
                         return BadRequest(new ProductoServicioOperacionResponse { Mensaje = catalogoValidation });
                     }
 
+                    if (existente != null && existente.Tipo == TipoProducto && existente.IdUnidadMedida != normalized.IdUnidadMedida &&
+                        await ContarPresentacionesVentaActivasAsync(connection, transaction, context.IdEmpresa, productoId) > 0)
+                    {
+                        transaction.Rollback();
+                        return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "No puedes cambiar la unidad base porque existen presentaciones de venta configuradas." });
+                    }
+
+                    if (existente != null && existente.Tipo == TipoProducto && normalized.Tipo != TipoProducto &&
+                        await ContarPresentacionesVentaActivasAsync(connection, transaction, context.IdEmpresa, productoId) > 0)
+                    {
+                        transaction.Rollback();
+                        return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "El producto tiene presentaciones de venta configuradas. Elimínalas antes de cambiarlo a servicio." });
+                    }
+
                     ProductoServicioExistenciaDto? existenciaActual = existente == null || existente.IdExistencia == null
                         ? null
                         : await ObtenerExistenciaInternaAsync(connection, transaction, context.IdEmpresa, productoId);
@@ -1121,9 +1215,9 @@ WHERE ps.idEmpresa = @IdEmpresa
                     {
                         using SqlCommand insert = new SqlCommand(@"
 INSERT INTO dbo.ProductosServicios
-    (id, idEmpresa, identityKey, Tipo, Codigo, Tag, Nombre, Descripcion, idCategoria, idMarca, idUnidadMedida, idColeccion, idPaquete, Costo, PrecioPublico, PrecioComparacion, PrecioUnitarioMonto, PrecioUnitarioBaseCantidad, PrecioUnitarioUnidad, ObjetoImpuesto, ClaveProductoSat, ClaveUnidadSat, EsProductoFisico, PesoKg, LargoCm, AnchoCm, AltoCm, UsaNumeroSerie, CausaInventario, PermiteVentaSinExistencia, ImagenUrl, ImagenNombre, Activo, FechaCreacion, FechaActualizacion, FechaArchivado)
+    (id, idEmpresa, identityKey, Tipo, Codigo, Tag, Nombre, Descripcion, idCategoria, idMarca, idUnidadMedida, idColeccion, idPaquete, Costo, PrecioPublico, PrecioComparacion, PrecioUnitarioMonto, PrecioUnitarioCantidadTotal, PrecioUnitarioUnidadTotal, PrecioUnitarioBaseCantidad, PrecioUnitarioUnidad, PrecioUnitarioUnidadBase, ObjetoImpuesto, PorcentajeIVA, ClaveProductoSat, ClaveUnidadSat, EsProductoFisico, PesoKg, LargoCm, AnchoCm, AltoCm, UsaNumeroSerie, CausaInventario, PermiteVentaSinExistencia, ImagenUrl, ImagenNombre, Activo, FechaCreacion, FechaActualizacion, FechaArchivado)
 VALUES
-    (@Id, @IdEmpresa, @IdentityKey, @Tipo, @Codigo, @Tag, @Nombre, @Descripcion, @IdCategoria, @IdMarca, @IdUnidadMedida, @IdColeccion, @IdPaquete, @Costo, @PrecioPublico, @PrecioComparacion, @PrecioUnitarioMonto, @PrecioUnitarioBaseCantidad, @PrecioUnitarioUnidad, @ObjetoImpuesto, @ClaveProductoSat, @ClaveUnidadSat, @EsProductoFisico, @PesoKg, @LargoCm, @AnchoCm, @AltoCm, @UsaNumeroSerie, @CausaInventario, @PermiteVentaSinExistencia, @ImagenUrl, @ImagenNombre, @Activo, @FechaCreacion, @FechaActualizacion, NULL)", connection, transaction);
+    (@Id, @IdEmpresa, @IdentityKey, @Tipo, @Codigo, @Tag, @Nombre, @Descripcion, @IdCategoria, @IdMarca, @IdUnidadMedida, @IdColeccion, @IdPaquete, @Costo, @PrecioPublico, @PrecioComparacion, @PrecioUnitarioMonto, @PrecioUnitarioCantidadTotal, @PrecioUnitarioUnidadTotal, @PrecioUnitarioBaseCantidad, @PrecioUnitarioUnidad, @PrecioUnitarioUnidadBase, @ObjetoImpuesto, @PorcentajeIVA, @ClaveProductoSat, @ClaveUnidadSat, @EsProductoFisico, @PesoKg, @LargoCm, @AnchoCm, @AltoCm, @UsaNumeroSerie, @CausaInventario, @PermiteVentaSinExistencia, @ImagenUrl, @ImagenNombre, @Activo, @FechaCreacion, @FechaActualizacion, NULL)", connection, transaction);
 
                         AddProductoServicioParameters(insert, productoId, context.IdEmpresa, normalized, imageMutation, ahora, true);
                         await insert.ExecuteNonQueryAsync();
@@ -1146,10 +1240,15 @@ SET
     Costo = @Costo,
     PrecioPublico = @PrecioPublico,
     PrecioComparacion = @PrecioComparacion,
-    PrecioUnitarioMonto = @PrecioUnitarioMonto,
-    PrecioUnitarioBaseCantidad = @PrecioUnitarioBaseCantidad,
-    PrecioUnitarioUnidad = @PrecioUnitarioUnidad,
+    -- LEGACY - REEMPLAZADO POR PRESENTACIONES DE VENTA. Conservar valores históricos al editar.
+    PrecioUnitarioMonto = COALESCE(@PrecioUnitarioMonto, PrecioUnitarioMonto),
+    PrecioUnitarioCantidadTotal = COALESCE(@PrecioUnitarioCantidadTotal, PrecioUnitarioCantidadTotal),
+    PrecioUnitarioUnidadTotal = COALESCE(@PrecioUnitarioUnidadTotal, PrecioUnitarioUnidadTotal),
+    PrecioUnitarioBaseCantidad = COALESCE(@PrecioUnitarioBaseCantidad, PrecioUnitarioBaseCantidad),
+    PrecioUnitarioUnidad = COALESCE(@PrecioUnitarioUnidad, PrecioUnitarioUnidad),
+    PrecioUnitarioUnidadBase = COALESCE(@PrecioUnitarioUnidadBase, PrecioUnitarioUnidadBase),
     ObjetoImpuesto = @ObjetoImpuesto,
+    PorcentajeIVA = @PorcentajeIVA,
     ClaveProductoSat = @ClaveProductoSat,
     ClaveUnidadSat = @ClaveUnidadSat,
     EsProductoFisico = @EsProductoFisico,
@@ -1175,6 +1274,11 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                         }
                     }
 
+                    if (esNuevo && normalized.Tipo == TipoProducto && normalized.PresentacionesVenta.Count > 0)
+                    {
+                        await GuardarPresentacionesInicialesAsync(connection, transaction, context.IdEmpresa, productoId, normalized.IdUnidadMedida, normalized.PresentacionesVenta, ahora);
+                    }
+                    await EnsureAndSynchronizeBasePresentationAsync(connection, transaction, context.IdEmpresa, productoId, normalized.Tipo, normalized.IdUnidadMedida, normalized.PrecioPublico, ahora);
                     await SynchronizeInventoryForSaveAsync(connection, transaction, productoId, context.IdEmpresa, normalized, existente, existenciaActual, movimientosHistoricos, usuarioId, ahora);
                     await SynchronizeProductoTagsAsync(connection, transaction, context.IdEmpresa, productoId, normalized.Tags, ahora);
                     await SynchronizeProductoAtributosAsync(connection, transaction, context.IdEmpresa, productoId, normalized.Atributos, ahora);
@@ -1232,6 +1336,132 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
             }
 
             return await CambiarEstatusProductoServicioAsync(context.IdEmpresa, idProductoServicio, true);
+        }
+
+        [HttpPost("GuardarPresentacionVentaProductoServicio")]
+        public async Task<IActionResult> GuardarPresentacionVentaProductoServicio([FromBody] ProductoServicioPresentacionVentaGuardarRequest request, Guid idEmpresa)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            if (request.IdProductoServicio == Guid.Empty || request.IdUnidadVenta == Guid.Empty || request.CantidadVenta <= 0 || request.EquivalenciaBase <= 0 || request.Precio < 0 || request.Orden < 0)
+                return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Los datos de la presentación no son válidos." });
+
+            try
+            {
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+                using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+                ProductoServicioSnapshot? producto = await ObtenerProductoServicioSnapshotAsync(connection, transaction, context.IdEmpresa, request.IdProductoServicio);
+                if (producto == null || producto.Tipo != TipoProducto)
+                {
+                    transaction.Rollback();
+                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Las presentaciones de venta solo aplican a productos disponibles." });
+                }
+
+                if (request.IdUnidadVenta == producto.IdUnidadMedida)
+                {
+                    transaction.Rollback();
+                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = UnidadBasePresentacionMensaje });
+                }
+                ProductoServicioUnidadMedidaDto? unidad = await ObtenerUnidadInternaAsync(connection, transaction, context.IdEmpresa, producto.IdUnidadMedida);
+                if (unidad == null || (!unidad.PermiteDecimales && decimal.Truncate(request.EquivalenciaBase) != request.EquivalenciaBase))
+                {
+                    transaction.Rollback();
+                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "La equivalencia no cumple con la precisión de la unidad base." });
+                }
+                ProductoServicioUnidadMedidaDto? unidadVenta = await ObtenerUnidadInternaAsync(connection, transaction, context.IdEmpresa, request.IdUnidadVenta);
+                if (unidadVenta == null || !unidadVenta.Activo || (!unidadVenta.PermiteDecimales && decimal.Truncate(request.CantidadVenta) != request.CantidadVenta))
+                {
+                    transaction.Rollback(); return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "La unidad o cantidad de venta no es válida." });
+                }
+                request.Nombre = Truncate(unidadVenta.Nombre, 100); // Compatibility with the legacy column; authoritative catalog name.
+                bool conversionFisica = unidad.Convertible && unidadVenta.Convertible && unidad.TipoUnidad == unidadVenta.TipoUnidad && unidad.TipoUnidad != "OTHER";
+                bool conversionManual = unidadVenta.TipoUnidad == "OTHER";
+                if (!conversionFisica && !conversionManual)
+                {
+                    transaction.Rollback(); return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "La unidad de venta no es compatible con la unidad base." });
+                }
+                if (conversionFisica)
+                {
+                    request.EquivalenciaBase = decimal.Round(request.CantidadVenta * unidadVenta.FactorConversion!.Value / unidad.FactorConversion!.Value, 4, MidpointRounding.AwayFromZero);
+                }
+
+                DateTime ahora = DateTime.UtcNow;
+                Guid id = request.Id.GetValueOrDefault();
+                bool esNueva = id == Guid.Empty;
+                List<ProductoServicioPresentacionVentaDto> activas = await ObtenerPresentacionesVentaAsync(connection, transaction, context.IdEmpresa, producto.Id, true);
+                ProductoServicioPresentacionVentaDto? actual = esNueva ? null : activas.FirstOrDefault(item => item.Id == id);
+                if (!esNueva && actual == null)
+                {
+                    transaction.Rollback();
+                    return NotFound(new ProductoServicioOperacionResponse { Mensaje = "La presentación no está disponible." });
+                }
+                if ((actual != null && EsPresentacionBase(actual, producto.IdUnidadMedida))
+                    || (request.IdUnidadVenta == producto.IdUnidadMedida && request.CantidadVenta == 1 && request.EquivalenciaBase == 1))
+                {
+                    transaction.Rollback();
+                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "La presentación base se administra automáticamente desde Unidad base y Precio público." });
+                }
+                if (activas.Any(item => item.Id != id && EsPresentacionDuplicada(item, request)))
+                {
+                    transaction.Rollback();
+                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = PresentacionDuplicadaMensaje });
+                }
+                bool makeDefault = false;
+
+                if (esNueva)
+                {
+                    id = Guid.NewGuid();
+                    using SqlCommand insert = new SqlCommand(@"INSERT INTO dbo.ProductosServiciosPresentacionesVenta (id, idEmpresa, identityKey, idProductoServicio, Nombre, CantidadVenta, idUnidadVenta, EquivalenciaBase, Precio, EsPredeterminada, Orden, Activo, FechaCreacion, FechaActualizacion) VALUES (@Id, @IdEmpresa, NEWID(), @ProductoId, @Nombre, @CantidadVenta, @IdUnidadVenta, @EquivalenciaBase, @Precio, @Predeterminada, @Orden, 1, @Ahora, @Ahora)", connection, transaction);
+                    AddPresentacionParameters(insert, id, context.IdEmpresa, producto.Id, request, makeDefault, ahora);
+                    await insert.ExecuteNonQueryAsync();
+                }
+                else
+                {
+                    using SqlCommand update = new SqlCommand(@"UPDATE dbo.ProductosServiciosPresentacionesVenta SET Nombre = @Nombre, CantidadVenta = @CantidadVenta, idUnidadVenta = @IdUnidadVenta, EquivalenciaBase = @EquivalenciaBase, Precio = @Precio, EsPredeterminada = @Predeterminada, Orden = @Orden, FechaActualizacion = @Ahora WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+                    AddPresentacionParameters(update, id, context.IdEmpresa, producto.Id, request, makeDefault, ahora);
+                    await update.ExecuteNonQueryAsync();
+                }
+
+                await EnsureAndSynchronizeBasePresentationAsync(connection, transaction, context.IdEmpresa, producto.Id, producto.Tipo, producto.IdUnidadMedida, producto.PrecioPublico, ahora);
+                transaction.Commit();
+                return Ok(new ProductoServicioOperacionResponse { Id = id, Mensaje = esNueva ? "La presentación fue registrada." : "La presentación fue actualizada." });
+            }
+            catch (Exception ex) { return HandleException(ex, "GuardarPresentacionVentaProductoServicio", "No fue posible guardar la presentación de venta."); }
+        }
+
+        [HttpPost("BajaPresentacionVentaProductoServicio")]
+        public async Task<IActionResult> BajaPresentacionVentaProductoServicio(Guid idEmpresa, Guid idPresentacionVenta)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            try
+            {
+                using SqlConnection connection = CreateConnection(); await connection.OpenAsync(); using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+                List<ProductoServicioPresentacionVentaDto> item = await ObtenerPresentacionesVentaPorIdAsync(connection, transaction, context.IdEmpresa, idPresentacionVenta);
+                ProductoServicioPresentacionVentaDto? presentacion = item.FirstOrDefault();
+                if (presentacion == null) { transaction.Rollback(); return NotFound(new ProductoServicioOperacionResponse { Mensaje = "La presentación no está disponible." }); }
+                ProductoServicioSnapshot? producto = await ObtenerProductoServicioSnapshotAsync(connection, transaction, context.IdEmpresa, presentacion.IdProductoServicio);
+                if (producto != null && EsPresentacionBase(presentacion, producto.IdUnidadMedida)) { transaction.Rollback(); return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "La presentación base no se puede dar de baja; se mantiene desde el producto." }); }
+                using SqlCommand archive = new SqlCommand(@"UPDATE dbo.ProductosServiciosPresentacionesVenta SET Activo = 0, FechaArchivado = @Ahora, FechaActualizacion = @Ahora WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+                archive.Parameters.AddWithValue("@Ahora", DateTime.UtcNow); archive.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa); archive.Parameters.AddWithValue("@Id", idPresentacionVenta);
+                await archive.ExecuteNonQueryAsync(); transaction.Commit();
+                return Ok(new ProductoServicioOperacionResponse { Mensaje = "La presentación fue dada de baja." });
+            }
+            catch (Exception ex) { return HandleException(ex, "BajaPresentacionVentaProductoServicio", "No fue posible dar de baja la presentación de venta."); }
+        }
+
+        [HttpPost("CalcularPresentacionesVentaProductoServicio")]
+        public async Task<IActionResult> CalcularPresentacionesVentaProductoServicio([FromBody] ProductoServicioPresentacionesVentaCalcularRequest request, Guid idEmpresa)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            try
+            {
+                using SqlConnection connection = CreateConnection(); await connection.OpenAsync();
+                ProductoServicioDetalleDto? producto = await ObtenerProductoServicioParaCalculoAsync(connection, context.IdEmpresa, request.IdProductoServicio);
+                if (producto == null || producto.Tipo != TipoProducto) return NotFound(new ProductoServicioOperacionResponse { Mensaje = "El producto no está disponible." });
+                List<ProductoServicioPresentacionVentaDto> presentaciones = await ObtenerPresentacionesVentaAsync(connection, null, context.IdEmpresa, producto.Id, true);
+                return Ok(new ProductoPresentacionVentaPricingEngine().Calcular(request.CantidadUnidadBase, producto.UnidadPermiteDecimales, presentaciones));
+            }
+            catch (Exception ex) { return HandleException(ex, "CalcularPresentacionesVentaProductoServicio", "No fue posible calcular las presentaciones de venta."); }
         }
 
         [HttpGet("ObtenerCombosProductosServicios")]
@@ -1773,19 +2003,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validacion });
                 }
 
-                return await GuardarCatalogoBasicoAsync(
-                    request.Id,
-                    context.IdEmpresa,
-                    "dbo.ProductosServiciosUnidadesMedida",
-                    "la unidad de medida",
-                    "Ya existe una unidad de medida con este código.",
-                    request.Codigo,
-                    request.Nombre,
-                    request.Descripcion,
-                    request.Abreviatura,
-                    request.PermiteDecimales,
-                    true,
-                    duplicateNameMessage: "Ya existe una unidad de medida con este nombre.");
+                return await GuardarUnidadControladaAsync(request, context.IdEmpresa);
             }
             catch (Exception ex)
             {
@@ -2529,7 +2747,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
-SELECT id, idEmpresa, identityKey, Codigo, Nombre, N'' AS Descripcion, Abreviatura, PermiteDecimales, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+SELECT id, idEmpresa, identityKey, Codigo, Nombre, N'' AS Descripcion, Abreviatura, PermiteDecimales, TipoUnidad, EsSistema, EsPersonalizada, FactorConversion, Convertible, ISNULL(ClaveSistema, '') AS ClaveSistema, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
 FROM dbo.ProductosServiciosUnidadesMedida
 WHERE idEmpresa = @IdEmpresa");
 
@@ -2561,7 +2779,7 @@ WHERE idEmpresa = @IdEmpresa");
             await connection.OpenAsync();
 
             using SqlCommand command = new SqlCommand(@"
-SELECT id, idEmpresa, identityKey, Codigo, Nombre, N'' AS Descripcion, Abreviatura, PermiteDecimales, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+SELECT id, idEmpresa, identityKey, Codigo, Nombre, N'' AS Descripcion, Abreviatura, PermiteDecimales, TipoUnidad, EsSistema, EsPersonalizada, FactorConversion, Convertible, ISNULL(ClaveSistema, '') AS ClaveSistema, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
 FROM dbo.ProductosServiciosUnidadesMedida
 WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
 
@@ -2712,6 +2930,17 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id";
             {
                 using SqlConnection connection = CreateConnection();
                 await connection.OpenAsync();
+
+                if (tableName == "dbo.ProductosServiciosUnidadesMedida")
+                {
+                    using SqlCommand systemUnit = new SqlCommand("SELECT COUNT(1) FROM dbo.ProductosServiciosUnidadesMedida WHERE idEmpresa=@IdEmpresa AND id=@Id AND EsSistema=1", connection);
+                    systemUnit.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                    systemUnit.Parameters.AddWithValue("@Id", id);
+                    if (Convert.ToInt32(await systemUnit.ExecuteScalarAsync()) > 0)
+                    {
+                        return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Las unidades del sistema no pueden cambiar de estatus." });
+                    }
+                }
 
                 using SqlCommand command = new SqlCommand($@"
 UPDATE {tableName}
@@ -2918,7 +3147,7 @@ ORDER BY t.Nombre ASC", connection);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
-SELECT id, Codigo, Nombre, N'' AS Descripcion, Activo, CAST(NULL AS tinyint) AS AplicaA, Abreviatura, PermiteDecimales
+SELECT id, Codigo, Nombre, N'' AS Descripcion, Activo, CAST(NULL AS tinyint) AS AplicaA, Abreviatura, PermiteDecimales, TipoUnidad, EsSistema, EsPersonalizada, FactorConversion, Convertible
 FROM dbo.ProductosServiciosUnidadesMedida
 WHERE idEmpresa = @IdEmpresa AND Activo = 1");
 
@@ -3001,6 +3230,7 @@ SELECT
     ps.idCategoria,
     ps.idMarca,
     ps.idUnidadMedida,
+    ps.PrecioPublico,
     ps.idColeccion,
     ps.idPaquete,
     ps.EsProductoFisico,
@@ -3032,6 +3262,7 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @Id", connection, transaction);
                 IdCategoria = ReadGuid(reader, "idCategoria"),
                 IdMarca = ReadNullableGuid(reader, "idMarca"),
                 IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
+                PrecioPublico = ReadDecimal(reader, "PrecioPublico"),
                 IdColeccion = ReadNullableGuid(reader, "idColeccion"),
                 IdPaquete = ReadNullableGuid(reader, "idPaquete"),
                 EsProductoFisico = ReadBool(reader, "EsProductoFisico"),
@@ -3042,6 +3273,125 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @Id", connection, transaction);
                 ImagenNombre = ReadString(reader, "ImagenNombre"),
                 IdExistencia = ReadNullableGuid(reader, "IdExistencia")
             };
+        }
+
+        private static void AddPresentacionParameters(SqlCommand command, Guid id, Guid idEmpresa, Guid productoId, ProductoServicioPresentacionVentaGuardarRequest request, bool predeterminada, DateTime ahora)
+        {
+            command.Parameters.AddWithValue("@Id", id);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@ProductoId", productoId);
+            command.Parameters.AddWithValue("@Nombre", request.Nombre.Trim());
+            command.Parameters.AddWithValue("@CantidadVenta", request.CantidadVenta);
+            command.Parameters.AddWithValue("@IdUnidadVenta", request.IdUnidadVenta);
+            command.Parameters.AddWithValue("@EquivalenciaBase", request.EquivalenciaBase);
+            command.Parameters.AddWithValue("@Precio", request.Precio);
+            command.Parameters.AddWithValue("@Predeterminada", predeterminada);
+            command.Parameters.AddWithValue("@Orden", request.Orden);
+            command.Parameters.AddWithValue("@Ahora", ahora);
+        }
+
+        private async Task<int> ContarPresentacionesVentaActivasAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid productoId)
+        {
+            using SqlCommand command = new SqlCommand(@"SELECT COUNT(1) FROM dbo.ProductosServiciosPresentacionesVenta WITH (UPDLOCK, HOLDLOCK) WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @ProductoId AND Activo = 1", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@ProductoId", productoId);
+            return Convert.ToInt32(await command.ExecuteScalarAsync());
+        }
+
+        private const string UnidadBasePresentacionMensaje = "Esta unidad ya es la unidad base. La unidad base ya tiene su propia presentación. Selecciona una unidad de venta diferente.";
+        private const string PresentacionDuplicadaMensaje = "Esta presentación ya existe. Ya existe una presentación con la misma cantidad, unidad y equivalencia en inventario. Edita la presentación existente si deseas cambiar su precio.";
+
+        private static bool EsPresentacionDuplicada(ProductoServicioPresentacionVentaDto item, ProductoServicioPresentacionVentaGuardarRequest request)
+            => item.IdUnidadVenta == request.IdUnidadVenta
+                && item.CantidadVenta == decimal.Round(request.CantidadVenta, 4, MidpointRounding.AwayFromZero)
+                && item.EquivalenciaBase == decimal.Round(request.EquivalenciaBase, 4, MidpointRounding.AwayFromZero);
+
+        private static bool EsPresentacionBase(ProductoServicioPresentacionVentaDto item, Guid unidadId)
+            => item.IdUnidadVenta == unidadId && item.CantidadVenta == 1 && item.EquivalenciaBase == 1;
+
+        private async Task EnsureAndSynchronizeBasePresentationAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid productoId, byte tipo, Guid unidadId, decimal precioPublico, DateTime ahora)
+        {
+            if (tipo != TipoProducto) return;
+            List<ProductoServicioPresentacionVentaDto> activas = await ObtenerPresentacionesVentaAsync(connection, transaction, idEmpresa, productoId, true);
+            ProductoServicioPresentacionVentaDto? basePresentation = activas.FirstOrDefault(item => EsPresentacionBase(item, unidadId));
+            // Keep the legacy flag as a derived base marker, never as a price source.
+            using SqlCommand unset = new SqlCommand(@"UPDATE dbo.ProductosServiciosPresentacionesVenta SET EsPredeterminada = 0, FechaActualizacion = @Ahora WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @ProductoId AND Activo = 1 AND EsPredeterminada = 1 AND (@BaseId IS NULL OR id <> @BaseId)", connection, transaction);
+            unset.Parameters.AddWithValue("@IdEmpresa", idEmpresa); unset.Parameters.AddWithValue("@ProductoId", productoId); unset.Parameters.AddWithValue("@Ahora", ahora); unset.Parameters.AddWithValue("@BaseId", (object?)basePresentation?.Id ?? DBNull.Value);
+            await unset.ExecuteNonQueryAsync();
+            if (basePresentation == null)
+            {
+                ProductoServicioUnidadMedidaDto? unidad = await ObtenerUnidadInternaAsync(connection, transaction, idEmpresa, unidadId);
+                if (unidad == null) throw new ProductoServicioValidationException("La unidad base no está disponible.");
+                using SqlCommand insert = new SqlCommand(@"INSERT INTO dbo.ProductosServiciosPresentacionesVenta (id, idEmpresa, identityKey, idProductoServicio, Nombre, CantidadVenta, idUnidadVenta, EquivalenciaBase, Precio, EsPredeterminada, Orden, Activo, FechaCreacion, FechaActualizacion) VALUES (NEWID(), @IdEmpresa, NEWID(), @ProductoId, @Nombre, 1, @UnidadId, 1, @Precio, 1, 0, 1, @Ahora, @Ahora)", connection, transaction);
+                insert.Parameters.AddWithValue("@IdEmpresa", idEmpresa); insert.Parameters.AddWithValue("@ProductoId", productoId); insert.Parameters.AddWithValue("@UnidadId", unidadId); insert.Parameters.AddWithValue("@Nombre", Truncate(unidad.Nombre, 100)); insert.Parameters.AddWithValue("@Precio", precioPublico); insert.Parameters.AddWithValue("@Ahora", ahora);
+                await insert.ExecuteNonQueryAsync();
+                return;
+            }
+            using SqlCommand update = new SqlCommand(@"UPDATE dbo.ProductosServiciosPresentacionesVenta SET Precio = @Precio, EsPredeterminada = 1, FechaActualizacion = @Ahora WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+            update.Parameters.AddWithValue("@Precio", precioPublico); update.Parameters.AddWithValue("@Ahora", ahora); update.Parameters.AddWithValue("@IdEmpresa", idEmpresa); update.Parameters.AddWithValue("@Id", basePresentation.Id);
+            await update.ExecuteNonQueryAsync();
+        }
+
+        private async Task GuardarPresentacionesInicialesAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid productoId, Guid unidadId, List<ProductoServicioPresentacionVentaGuardarRequest> presentaciones, DateTime ahora)
+        {
+            ProductoServicioUnidadMedidaDto? unidad = await ObtenerUnidadInternaAsync(connection, transaction, idEmpresa, unidadId);
+            if (unidad == null) throw new ProductoServicioValidationException("La unidad base no está disponible.");
+
+            foreach (ProductoServicioPresentacionVentaGuardarRequest presentacion in presentaciones)
+            {
+                if (presentacion.IdUnidadVenta == unidadId) throw new ProductoServicioValidationException(UnidadBasePresentacionMensaje);
+                ProductoServicioUnidadMedidaDto? unidadVenta = await ObtenerUnidadInternaAsync(connection, transaction, idEmpresa, presentacion.IdUnidadVenta);
+                bool fisica = unidadVenta != null && unidad.Convertible && unidadVenta.Convertible && unidad.TipoUnidad == unidadVenta.TipoUnidad && unidad.TipoUnidad != "OTHER";
+                bool manual = unidadVenta != null && unidadVenta.TipoUnidad == "OTHER";
+                if (!fisica && !manual) throw new ProductoServicioValidationException("La unidad de venta no es compatible con la unidad base.");
+                presentacion.Nombre = Truncate(unidadVenta!.Nombre, 100); // No manual presentation name is required.
+                if (fisica) presentacion.EquivalenciaBase = decimal.Round(presentacion.CantidadVenta * unidadVenta!.FactorConversion!.Value / unidad.FactorConversion!.Value, 4, MidpointRounding.AwayFromZero);
+                if (presentacion.IdUnidadVenta == unidadId) throw new ProductoServicioValidationException(UnidadBasePresentacionMensaje);
+                if (!unidad.PermiteDecimales && decimal.Truncate(presentacion.EquivalenciaBase) != presentacion.EquivalenciaBase)
+                {
+                    throw new ProductoServicioValidationException("La equivalencia no cumple con la precisión de la unidad base.");
+                }
+
+                List<ProductoServicioPresentacionVentaDto> existentes = await ObtenerPresentacionesVentaAsync(connection, transaction, idEmpresa, productoId, true);
+                if (existentes.Any(item => EsPresentacionDuplicada(item, presentacion)))
+                    throw new ProductoServicioValidationException(PresentacionDuplicadaMensaje);
+
+                presentacion.CantidadVenta = presentacion.CantidadVenta <= 0 ? 1 : presentacion.CantidadVenta;
+                presentacion.IdUnidadVenta = presentacion.IdUnidadVenta == Guid.Empty ? unidadId : presentacion.IdUnidadVenta;
+                using SqlCommand insert = new SqlCommand(@"INSERT INTO dbo.ProductosServiciosPresentacionesVenta (id, idEmpresa, identityKey, idProductoServicio, Nombre, CantidadVenta, idUnidadVenta, EquivalenciaBase, Precio, EsPredeterminada, Orden, Activo, FechaCreacion, FechaActualizacion) VALUES (@Id, @IdEmpresa, NEWID(), @ProductoId, @Nombre, @CantidadVenta, @IdUnidadVenta, @EquivalenciaBase, @Precio, @Predeterminada, @Orden, 1, @Ahora, @Ahora)", connection, transaction);
+                AddPresentacionParameters(insert, Guid.NewGuid(), idEmpresa, productoId, presentacion, false, ahora);
+                await insert.ExecuteNonQueryAsync();
+            }
+        }
+
+        private async Task<List<ProductoServicioPresentacionVentaDto>> ObtenerPresentacionesVentaAsync(SqlConnection connection, SqlTransaction? transaction, Guid idEmpresa, Guid productoId, bool soloActivas)
+        {
+            using SqlCommand command = new SqlCommand(@"SELECT pv.id, pv.idProductoServicio, pv.Nombre, pv.CantidadVenta, pv.idUnidadVenta, uv.Nombre AS UnidadVenta, uv.Abreviatura AS UnidadVentaAbreviatura, pv.EquivalenciaBase, pv.Precio, pv.EsPredeterminada, pv.Orden, pv.Activo FROM dbo.ProductosServiciosPresentacionesVenta pv INNER JOIN dbo.ProductosServiciosUnidadesMedida uv ON uv.idEmpresa=pv.idEmpresa AND uv.id=pv.idUnidadVenta WHERE pv.idEmpresa = @IdEmpresa AND pv.idProductoServicio = @ProductoId AND (@SoloActivas = 0 OR pv.Activo = 1) ORDER BY pv.Activo DESC, pv.EsPredeterminada DESC, pv.Orden, pv.Nombre, pv.id", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa); command.Parameters.AddWithValue("@ProductoId", productoId); command.Parameters.AddWithValue("@SoloActivas", soloActivas);
+            List<ProductoServicioPresentacionVentaDto> result = new();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new ProductoServicioPresentacionVentaDto { Id = ReadGuid(reader, "id"), IdProductoServicio = ReadGuid(reader, "idProductoServicio"), Nombre = ReadString(reader, "Nombre"), CantidadVenta = ReadDecimal(reader, "CantidadVenta"), IdUnidadVenta = ReadGuid(reader, "idUnidadVenta"), UnidadVenta = ReadString(reader, "UnidadVenta"), UnidadVentaAbreviatura = ReadString(reader, "UnidadVentaAbreviatura"), EquivalenciaBase = ReadDecimal(reader, "EquivalenciaBase"), Precio = ReadDecimal(reader, "Precio"), EsPredeterminada = ReadBool(reader, "EsPredeterminada"), Orden = reader.GetInt32(reader.GetOrdinal("Orden")), Activo = ReadBool(reader, "Activo") });
+            }
+            return result;
+        }
+
+        private async Task<List<ProductoServicioPresentacionVentaDto>> ObtenerPresentacionesVentaPorIdAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid id)
+        {
+            using SqlCommand command = new SqlCommand(@"SELECT id, idProductoServicio, Nombre, CantidadVenta, idUnidadVenta, EquivalenciaBase, Precio, EsPredeterminada, Orden, Activo FROM dbo.ProductosServiciosPresentacionesVenta WHERE idEmpresa = @IdEmpresa AND id = @Id AND Activo = 1", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa); command.Parameters.AddWithValue("@Id", id);
+            List<ProductoServicioPresentacionVentaDto> result = new(); using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) result.Add(new ProductoServicioPresentacionVentaDto { Id = ReadGuid(reader, "id"), IdProductoServicio = ReadGuid(reader, "idProductoServicio"), Nombre = ReadString(reader, "Nombre"), CantidadVenta = ReadDecimal(reader, "CantidadVenta"), IdUnidadVenta = ReadGuid(reader, "idUnidadVenta"), EquivalenciaBase = ReadDecimal(reader, "EquivalenciaBase"), Precio = ReadDecimal(reader, "Precio"), EsPredeterminada = ReadBool(reader, "EsPredeterminada"), Orden = reader.GetInt32(reader.GetOrdinal("Orden")), Activo = ReadBool(reader, "Activo") });
+            return result;
+        }
+
+        private async Task<ProductoServicioDetalleDto?> ObtenerProductoServicioParaCalculoAsync(SqlConnection connection, Guid idEmpresa, Guid productoId)
+        {
+            using SqlCommand command = new SqlCommand(@"SELECT ps.id, ps.Tipo, um.PermiteDecimales FROM dbo.ProductosServicios ps INNER JOIN dbo.ProductosServiciosUnidadesMedida um ON um.idEmpresa = ps.idEmpresa AND um.id = ps.idUnidadMedida WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @Id", connection);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa); command.Parameters.AddWithValue("@Id", productoId);
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            return await reader.ReadAsync() ? new ProductoServicioDetalleDto { Id = ReadGuid(reader, "id"), Tipo = ReadByte(reader, "Tipo"), UnidadPermiteDecimales = ReadBool(reader, "PermiteDecimales") } : null;
         }
 
         private async Task<ProductoServicioExistenciaDto?> ObtenerExistenciaInternaAsync(SqlConnection connection, SqlTransaction? transaction, Guid idEmpresa, Guid idProductoServicio, bool lockRow = false)
@@ -3408,7 +3758,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         private async Task<ProductoServicioUnidadMedidaDto?> ObtenerUnidadInternaAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idUnidadMedida)
         {
             using SqlCommand command = new SqlCommand(@"
-SELECT id, idEmpresa, identityKey, Codigo, Nombre, N'' AS Descripcion, Abreviatura, PermiteDecimales, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+SELECT id, idEmpresa, identityKey, Codigo, Nombre, N'' AS Descripcion, Abreviatura, PermiteDecimales, TipoUnidad, EsSistema, EsPersonalizada, FactorConversion, Convertible, ISNULL(ClaveSistema, '') AS ClaveSistema, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
 FROM dbo.ProductosServiciosUnidadesMedida
 WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
             command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
@@ -3604,6 +3954,17 @@ WHERE idEmpresa = @IdEmpresa
                 return $"El objeto de impuesto no puede exceder {ObjetoImpuestoLength} caracteres.";
             }
 
+            string objetoImpuesto = (request.ObjetoImpuesto ?? string.Empty).Trim();
+            if (objetoImpuesto == "01" && request.PorcentajeIVA != 0)
+            {
+                return "Cuando no aplica IVA, el porcentaje debe ser 0.";
+            }
+
+            if (objetoImpuesto == "02" && (request.PorcentajeIVA < 0 || request.PorcentajeIVA > 100))
+            {
+                return "El porcentaje de IVA debe estar entre 0 y 100.";
+            }
+
             if (request.PrecioPublico < 0)
             {
                 return "El precio público no puede ser negativo.";
@@ -3619,36 +3980,23 @@ WHERE idEmpresa = @IdEmpresa
                 return "El precio de comparación no puede ser negativo.";
             }
 
-            if (request.PrecioUnitarioMonto.HasValue && request.PrecioUnitarioMonto.Value < 0)
+            if (request.PrecioComparacion.HasValue && request.PrecioComparacion.Value > 0 && request.PrecioComparacion.Value <= request.PrecioPublico)
             {
-                return "El precio unitario no puede ser negativo.";
+                return "El precio de comparación debe ser mayor que el precio público.";
             }
 
-            bool tieneMontoUnitario = request.PrecioUnitarioMonto.HasValue;
-            bool tieneBaseUnitaria = request.PrecioUnitarioBaseCantidad.HasValue;
-            bool tieneUnidadBase = !string.IsNullOrWhiteSpace(request.PrecioUnitarioUnidad);
-            if (tieneMontoUnitario || tieneBaseUnitaria || tieneUnidadBase)
+            List<ProductoServicioPresentacionVentaGuardarRequest> presentaciones = request.PresentacionesVenta ?? new List<ProductoServicioPresentacionVentaGuardarRequest>();
+            if (presentaciones.Count > 0 && request.Tipo != TipoProducto)
             {
-                if (!tieneMontoUnitario)
-                {
-                    return "Captura el importe total del precio unitario.";
-                }
-
-                if (!tieneBaseUnitaria)
-                {
-                    return "Captura la medida base del precio unitario.";
-                }
-
-                if (!tieneUnidadBase)
-                {
-                    return "Selecciona la unidad base del precio unitario.";
-                }
+                return "Las presentaciones de venta solo aplican a productos.";
             }
 
-            if (request.PrecioUnitarioBaseCantidad.HasValue && request.PrecioUnitarioBaseCantidad.Value <= 0)
+            if (presentaciones.Any(p => p == null || p.CantidadVenta <= 0 || p.IdUnidadVenta == Guid.Empty || p.EquivalenciaBase <= 0 || p.Precio < 0 || p.Orden < 0))
             {
-                return "La base del precio unitario debe ser mayor que cero.";
+                return "Los datos de la presentación no son válidos.";
             }
+
+            // LEGACY - REEMPLAZADO POR PRESENTACIONES DE VENTA. No validar ni usar estos campos en guardados nuevos.
 
             if (request.ExistenciaInicial.HasValue && request.ExistenciaInicial.Value < 0)
             {
@@ -3784,6 +4132,58 @@ WHERE idEmpresa = @IdEmpresa
             }
 
             return string.Empty;
+        }
+
+        private async Task<IActionResult> GuardarUnidadControladaAsync(ProductoServicioUnidadMedidaGuardarRequest request, Guid idEmpresa)
+        {
+            using SqlConnection connection = CreateConnection();
+            await connection.OpenAsync();
+            using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+            Guid id = request.Id.GetValueOrDefault();
+            bool nueva = id == Guid.Empty;
+            ProductoServicioUnidadMedidaDto? existente = nueva ? null : await ObtenerUnidadInternaAsync(connection, transaction, idEmpresa, id);
+            if (!nueva && existente == null) { transaction.Rollback(); return NotFound(new ProductoServicioOperacionResponse { Mensaje = "La unidad de medida no está disponible." }); }
+            if (existente?.EsSistema == true) { transaction.Rollback(); return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Las unidades del sistema no pueden modificarse." }); }
+            string nombre = request.Nombre.Trim();
+            string abreviatura = request.Abreviatura.Trim();
+            using SqlCommand duplicate = new SqlCommand(@"SELECT TOP (1) CAST(EsSistema AS int) FROM dbo.ProductosServiciosUnidadesMedida WHERE idEmpresa=@Empresa AND (UPPER(LTRIM(RTRIM(Nombre)))=UPPER(@Nombre) OR UPPER(LTRIM(RTRIM(Abreviatura)))=UPPER(@Abreviatura)) AND (@Id IS NULL OR id<>@Id) ORDER BY EsSistema DESC", connection, transaction);
+            duplicate.Parameters.AddWithValue("@Empresa", idEmpresa); duplicate.Parameters.AddWithValue("@Nombre", nombre); duplicate.Parameters.AddWithValue("@Abreviatura", abreviatura); duplicate.Parameters.AddWithValue("@Id", nueva ? DBNull.Value : id);
+            object? duplicadaSistema = await duplicate.ExecuteScalarAsync();
+            if (duplicadaSistema != null)
+            {
+                transaction.Rollback();
+                return BadRequest(new ProductoServicioOperacionResponse
+                {
+                    Mensaje = Convert.ToInt32(duplicadaSistema) == 1
+                        ? "Esta unidad ya está disponible\nLa unidad que intentas crear ya forma parte de las unidades estándar de CheckApp."
+                        : "Ya existe una unidad con ese nombre o abreviatura."
+                });
+            }
+            DateTime ahora = DateTime.UtcNow;
+            if (nueva)
+            {
+                id = Guid.NewGuid();
+                string codigo = await GenerateNextUnitCodeAsync(connection, transaction, idEmpresa);
+                using SqlCommand insert = new SqlCommand(@"INSERT INTO dbo.ProductosServiciosUnidadesMedida (id,idEmpresa,identityKey,Codigo,Nombre,Abreviatura,PermiteDecimales,TipoUnidad,EsSistema,EsPersonalizada,FactorConversion,Convertible,ClaveSistema,Activo,FechaCreacion,FechaActualizacion) VALUES (@Id,@Empresa,NEWID(),@Codigo,@Nombre,@Abreviatura,@Decimales,N'OTHER',0,1,NULL,0,NULL,1,@Ahora,@Ahora)", connection, transaction);
+                insert.Parameters.AddWithValue("@Id", id); insert.Parameters.AddWithValue("@Empresa", idEmpresa); insert.Parameters.AddWithValue("@Codigo", codigo); insert.Parameters.AddWithValue("@Nombre", nombre); insert.Parameters.AddWithValue("@Abreviatura", abreviatura); insert.Parameters.AddWithValue("@Decimales", request.PermiteDecimales); insert.Parameters.AddWithValue("@Ahora", ahora); await insert.ExecuteNonQueryAsync();
+            }
+            else
+            {
+                using SqlCommand update = new SqlCommand(@"UPDATE dbo.ProductosServiciosUnidadesMedida SET Nombre=@Nombre,Abreviatura=@Abreviatura,PermiteDecimales=@Decimales,FechaActualizacion=@Ahora WHERE idEmpresa=@Empresa AND id=@Id", connection, transaction);
+                update.Parameters.AddWithValue("@Id", id); update.Parameters.AddWithValue("@Empresa", idEmpresa); update.Parameters.AddWithValue("@Nombre", nombre); update.Parameters.AddWithValue("@Abreviatura", abreviatura); update.Parameters.AddWithValue("@Decimales", request.PermiteDecimales); update.Parameters.AddWithValue("@Ahora", ahora); await update.ExecuteNonQueryAsync();
+            }
+            transaction.Commit();
+            return Ok(new ProductoServicioOperacionResponse { Id = id, Mensaje = nueva ? "La unidad personalizada fue registrada." : "La unidad personalizada fue actualizada." });
+        }
+
+        private static bool EsTipoUnidadValido(string? tipo) => new[] { "WEIGHT", "VOLUME", "LENGTH", "AREA", "ITEM", "TIME", "OTHER" }.Contains((tipo ?? string.Empty).Trim().ToUpperInvariant());
+        private static string GetTipoUnidadNombre(string tipo) => tipo switch { "WEIGHT" => "Peso", "VOLUME" => "Volumen", "LENGTH" => "Longitud", "AREA" => "Área", "ITEM" => "Por artículo", "TIME" => "Tiempo", _ => "Otra" };
+
+        private static async Task<string> GenerateNextUnitCodeAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa)
+        {
+            using SqlCommand command = new SqlCommand(@"SELECT ISNULL(MAX(TRY_CONVERT(int, Codigo)), 0) + 1 FROM dbo.ProductosServiciosUnidadesMedida WITH (UPDLOCK,HOLDLOCK) WHERE idEmpresa=@Empresa", connection, transaction);
+            command.Parameters.AddWithValue("@Empresa", idEmpresa);
+            return Convert.ToInt32(await command.ExecuteScalarAsync()).ToString("D3");
         }
 
         private static string ValidateCatalogoBasico(Guid idEmpresaEsperado, Guid idEmpresaRequest, string nombre, string descripcion)
@@ -4087,10 +4487,18 @@ WHERE idEmpresa = @IdEmpresa
                 Costo = request.Costo,
                 PrecioPublico = request.PrecioPublico,
                 PrecioComparacion = request.PrecioComparacion,
-                PrecioUnitarioMonto = request.PrecioUnitarioMonto,
-                PrecioUnitarioBaseCantidad = request.PrecioUnitarioBaseCantidad,
-                PrecioUnitarioUnidad = Truncate(request.PrecioUnitarioUnidad ?? string.Empty, PrecioUnitarioUnidadLength),
-                ObjetoImpuesto = Truncate(request.ObjetoImpuesto ?? string.Empty, ObjetoImpuestoLength),
+                // LEGACY - REEMPLAZADO POR PRESENTACIONES DE VENTA. El update conserva los valores históricos existentes.
+                PrecioUnitarioMonto = null,
+                PrecioUnitarioCantidadTotal = null,
+                PrecioUnitarioUnidadTotal = string.Empty,
+                PrecioUnitarioBaseCantidad = null,
+                PrecioUnitarioUnidad = string.Empty,
+                PrecioUnitarioUnidadBase = string.Empty,
+                // Legacy records without fiscal data are normalized as IVA OFF on every save.
+                ObjetoImpuesto = string.Equals((request.ObjetoImpuesto ?? string.Empty).Trim(), "02", StringComparison.Ordinal) ? "02" : "01",
+                PorcentajeIVA = string.Equals((request.ObjetoImpuesto ?? string.Empty).Trim(), "02", StringComparison.Ordinal)
+                    ? Math.Round(request.PorcentajeIVA, 2, MidpointRounding.AwayFromZero)
+                    : 0,
                 ClaveProductoSat = Truncate(request.ClaveProductoSat ?? string.Empty, ClaveSatProductoLength),
                 ClaveUnidadSat = Truncate(request.ClaveUnidadSat ?? string.Empty, ClaveSatUnidadLength),
                 EsProductoFisico = request.EsProductoFisico,
@@ -4110,7 +4518,20 @@ WHERE idEmpresa = @IdEmpresa
                 Atributos = request.Atributos ?? new List<ProductoServicioAtributoGuardarRequest>(),
                 OpcionesVariante = request.OpcionesVariante ?? new List<ProductoServicioOpcionVarianteGuardarRequest>(),
                 Variantes = request.Variantes ?? new List<ProductoServicioVarianteGuardarRequest>(),
-                Multimedia = request.Multimedia ?? new List<ProductoServicioMultimediaGuardarRequest>()
+                Multimedia = request.Multimedia ?? new List<ProductoServicioMultimediaGuardarRequest>(),
+                PresentacionesVenta = (request.PresentacionesVenta ?? new List<ProductoServicioPresentacionVentaGuardarRequest>())
+                    .Select(presentacion => new ProductoServicioPresentacionVentaGuardarRequest
+                    {
+                        Nombre = string.Empty, // Derived from the authoritative sale unit when persisted.
+                        CantidadVenta = presentacion.CantidadVenta,
+                        IdUnidadVenta = presentacion.IdUnidadVenta,
+                        EquivalenciaBase = presentacion.EquivalenciaBase,
+                        Precio = presentacion.Precio,
+                        EsPredeterminada = presentacion.EsPredeterminada,
+                        Orden = presentacion.Orden
+                    })
+                    .OrderBy(presentacion => presentacion.Orden)
+                    .ToList()
             };
 
             if (normalized.Tipo == TipoServicio)
@@ -4177,9 +4598,13 @@ WHERE idEmpresa = @IdEmpresa
             command.Parameters.AddWithValue("@PrecioPublico", request.PrecioPublico);
             command.Parameters.AddWithValue("@PrecioComparacion", request.PrecioComparacion.HasValue ? request.PrecioComparacion.Value : DBNull.Value);
             command.Parameters.AddWithValue("@PrecioUnitarioMonto", request.PrecioUnitarioMonto.HasValue ? request.PrecioUnitarioMonto.Value : DBNull.Value);
+            command.Parameters.AddWithValue("@PrecioUnitarioCantidadTotal", request.PrecioUnitarioCantidadTotal.HasValue ? request.PrecioUnitarioCantidadTotal.Value : DBNull.Value);
+            command.Parameters.AddWithValue("@PrecioUnitarioUnidadTotal", string.IsNullOrWhiteSpace(request.PrecioUnitarioUnidadTotal) ? DBNull.Value : request.PrecioUnitarioUnidadTotal);
             command.Parameters.AddWithValue("@PrecioUnitarioBaseCantidad", request.PrecioUnitarioBaseCantidad.HasValue ? request.PrecioUnitarioBaseCantidad.Value : DBNull.Value);
             command.Parameters.AddWithValue("@PrecioUnitarioUnidad", string.IsNullOrWhiteSpace(request.PrecioUnitarioUnidad) ? DBNull.Value : request.PrecioUnitarioUnidad);
+            command.Parameters.AddWithValue("@PrecioUnitarioUnidadBase", string.IsNullOrWhiteSpace(request.PrecioUnitarioUnidadBase) ? DBNull.Value : request.PrecioUnitarioUnidadBase);
             command.Parameters.AddWithValue("@ObjetoImpuesto", string.IsNullOrWhiteSpace(request.ObjetoImpuesto) ? DBNull.Value : request.ObjetoImpuesto);
+            command.Parameters.AddWithValue("@PorcentajeIVA", request.PorcentajeIVA);
             command.Parameters.AddWithValue("@ClaveProductoSat", string.IsNullOrWhiteSpace(request.ClaveProductoSat) ? DBNull.Value : request.ClaveProductoSat);
             command.Parameters.AddWithValue("@ClaveUnidadSat", string.IsNullOrWhiteSpace(request.ClaveUnidadSat) ? DBNull.Value : request.ClaveUnidadSat);
             command.Parameters.AddWithValue("@EsProductoFisico", request.EsProductoFisico);
@@ -5487,8 +5912,12 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
             deleteAtributos.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
             await deleteAtributos.ExecuteNonQueryAsync();
 
-            foreach (ProductoServicioAtributoGuardarRequest atributo in atributos.OrderBy(x => x.Orden))
+            // One product/attribute relation owns all its selected elements, including
+            // elements submitted separately by older clients after reopening a product.
+            var grupos = atributos.OrderBy(x => x.Orden).GroupBy(x => x.IdAtributo);
+            foreach (var grupo in grupos)
             {
+                ProductoServicioAtributoGuardarRequest atributo = grupo.First();
                 Guid idProductoAtributo = Guid.NewGuid();
                 using SqlCommand insert = new SqlCommand(@"
 INSERT INTO dbo.ProductosServiciosProductoAtributos
@@ -5505,9 +5934,15 @@ VALUES
                 insert.Parameters.AddWithValue("@FechaActualizacion", ahora);
                 await insert.ExecuteNonQueryAsync();
 
-                foreach (ProductoServicioAtributoValorGuardarRequest valor in atributo.Valores.OrderBy(x => x.Orden))
+                var valoresInsertados = new HashSet<Guid>();
+                int ordenValor = 0;
+                foreach (ProductoServicioAtributoValorGuardarRequest valor in grupo.SelectMany(x => x.Valores.OrderBy(v => v.Orden)))
                 {
                     Guid idValor = await EnsureAtributoValorAsync(connection, transaction, idEmpresa, atributo.IdAtributo, valor, ahora);
+                    if (!valoresInsertados.Add(idValor))
+                    {
+                        throw new ProductoServicioValidationException("Esa relación atributo / elemento ya fue agregada al producto.");
+                    }
                     using SqlCommand insertValor = new SqlCommand(@"
 INSERT INTO dbo.ProductosServiciosProductoAtributoValores
     (id, idEmpresa, identityKey, idProductoAtributo, idAtributoValor, Orden, Activo, FechaCreacion, FechaActualizacion)
@@ -5518,7 +5953,7 @@ VALUES
                     insertValor.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
                     insertValor.Parameters.AddWithValue("@IdProductoAtributo", idProductoAtributo);
                     insertValor.Parameters.AddWithValue("@IdAtributoValor", idValor);
-                    insertValor.Parameters.AddWithValue("@Orden", valor.Orden);
+                    insertValor.Parameters.AddWithValue("@Orden", ++ordenValor);
                     insertValor.Parameters.AddWithValue("@FechaCreacion", ahora);
                     insertValor.Parameters.AddWithValue("@FechaActualizacion", ahora);
                     await insertValor.ExecuteNonQueryAsync();
@@ -6595,9 +7030,13 @@ VALUES
                 PrecioPublico = ReadDecimal(reader, "PrecioPublico"),
                 PrecioComparacion = ReadNullableDecimal(reader, "PrecioComparacion"),
                 PrecioUnitarioMonto = ReadNullableDecimal(reader, "PrecioUnitarioMonto"),
+                PrecioUnitarioCantidadTotal = ReadNullableDecimal(reader, "PrecioUnitarioCantidadTotal"),
+                PrecioUnitarioUnidadTotal = ReadString(reader, "PrecioUnitarioUnidadTotal"),
                 PrecioUnitarioBaseCantidad = ReadNullableDecimal(reader, "PrecioUnitarioBaseCantidad"),
                 PrecioUnitarioUnidad = ReadString(reader, "PrecioUnitarioUnidad"),
+                PrecioUnitarioUnidadBase = ReadString(reader, "PrecioUnitarioUnidadBase"),
                 ObjetoImpuesto = ReadString(reader, "ObjetoImpuesto"),
+                PorcentajeIVA = ReadDecimal(reader, "PorcentajeIVA"),
                 ClaveProductoSat = ReadString(reader, "ClaveProductoSat"),
                 ClaveUnidadSat = ReadString(reader, "ClaveUnidadSat"),
                 EsProductoFisico = ReadBool(reader, "EsProductoFisico"),
@@ -6673,6 +7112,13 @@ VALUES
                 Descripcion = ReadString(reader, "Descripcion"),
                 Abreviatura = ReadString(reader, "Abreviatura"),
                 PermiteDecimales = ReadBool(reader, "PermiteDecimales"),
+                TipoUnidad = HasColumn(reader, "TipoUnidad") ? ReadString(reader, "TipoUnidad") : "OTHER",
+                TipoUnidadNombre = GetTipoUnidadNombre(HasColumn(reader, "TipoUnidad") ? ReadString(reader, "TipoUnidad") : "OTHER"),
+                EsSistema = HasColumn(reader, "EsSistema") && ReadBool(reader, "EsSistema"),
+                EsPersonalizada = !HasColumn(reader, "EsPersonalizada") || ReadBool(reader, "EsPersonalizada"),
+                FactorConversion = HasColumn(reader, "FactorConversion") ? ReadNullableDecimal(reader, "FactorConversion") : null,
+                Convertible = HasColumn(reader, "Convertible") && ReadBool(reader, "Convertible"),
+                ClaveSistema = HasColumn(reader, "ClaveSistema") ? ReadString(reader, "ClaveSistema") : string.Empty,
                 Activo = ReadBool(reader, "Activo"),
                 FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
                 FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),
@@ -6699,6 +7145,11 @@ VALUES
                 AltoCm = HasColumn(reader, "AltoCm") ? ReadNullableDecimal(reader, "AltoCm") : null,
                 PesoEmpaqueVacioKg = HasColumn(reader, "PesoEmpaqueVacioKg") ? ReadNullableDecimal(reader, "PesoEmpaqueVacioKg") : null,
                 EsPredeterminado = HasColumn(reader, "EsPredeterminado") ? ReadNullableBool(reader, "EsPredeterminado") : null
+                ,TipoUnidad = HasColumn(reader, "TipoUnidad") ? ReadString(reader, "TipoUnidad") : string.Empty
+                ,EsSistema = HasColumn(reader, "EsSistema") ? ReadNullableBool(reader, "EsSistema") : null
+                ,EsPersonalizada = HasColumn(reader, "EsPersonalizada") ? ReadNullableBool(reader, "EsPersonalizada") : null
+                ,FactorConversion = HasColumn(reader, "FactorConversion") ? ReadNullableDecimal(reader, "FactorConversion") : null
+                ,Convertible = HasColumn(reader, "Convertible") ? ReadNullableBool(reader, "Convertible") : null
             };
         }
 
@@ -6754,175 +7205,255 @@ VALUES
                 document.Page(page =>
                 {
                     page.Size(PageSizes.A4);
-                    page.Margin(28);
-                    page.DefaultTextStyle(style => style.FontFamily(Fonts.Calibri).FontSize(10).FontColor("#20304A"));
+                    page.Margin(24);
+                    page.DefaultTextStyle(style => style.FontFamily(Fonts.Calibri).FontSize(9).FontColor(FichaInk));
 
-                    page.Header().Column(column =>
+                    page.Header().PaddingBottom(10).Row(row =>
                     {
-                        column.Spacing(10);
-                        column.Item().Row(row =>
+                        row.RelativeItem().Column(brand =>
                         {
-                            row.RelativeItem().Column(left =>
-                            {
-                                left.Spacing(4);
-                                if (logo != null)
-                                {
-                                    left.Item().Height(24).Image(logo).FitHeight();
-                                }
-
-                                left.Item().Text("FICHA TÉCNICA").SemiBold().FontSize(20).FontColor("#0F172A");
-                                left.Item().Text("CheckApp").FontSize(9).FontColor("#64748B");
-                            });
-
-                            row.ConstantItem(210).Element(card =>
-                            {
-                                card
-                                    .Border(1)
-                                    .BorderColor("#D7E0EA")
-                                    .CornerRadius(12)
-                                    .Background("#F8FAFC")
-                                    .Padding(12)
-                                    .Column(info =>
-                                    {
-                                        info.Spacing(4);
-                                        info.Item().Text(ficha.Nombre).SemiBold().FontSize(13).FontColor("#0F172A");
-                                        info.Item().Text($"Código: {FichaTextOrDash(ficha.Codigo)}").FontColor("#334155");
-                                        info.Item().Text($"{FichaTextOrDash(ficha.TipoNombre)} · {FichaTextOrDash(ficha.EstatusNombre)}").FontColor("#334155");
-                                    });
-                            });
+                            if (logo != null) brand.Item().Width(112).Height(25).Image(logo).FitArea();
+                            brand.Item().PaddingTop(3).Text("Tu operación, más simple.").FontSize(8).FontColor(FichaMuted);
+                        });
+                        row.RelativeItem().AlignRight().Column(title =>
+                        {
+                            title.Item().AlignRight().Text("FICHA TÉCNICA").Bold().FontSize(13);
+                            title.Item().AlignRight().Text(ficha.Tipo == TipoServicio ? "Servicio" : "Producto").FontSize(8).FontColor(FichaMuted);
                         });
                     });
 
                     page.Content().Column(content =>
                     {
-                        content.Spacing(12);
+                        if (ficha.Tipo == TipoServicio)
+                        {
+                            content.Spacing(15);
+                            content.Item().Element(container => ComposeFichaServiceHero(container, ficha, imagenPrincipal));
+                            content.Item().Element(container => ComposeFichaServiceDescription(container, ficha));
+                            content.Item().Element(container => ComposeFichaServiceMetadata(container, ficha));
+                            content.Item().Element(container => ComposeFichaCommercialSection(container, ficha));
+                            content.Item().Element(container => ComposeFichaFiscalSection(container, ficha));
+                            if (hasMultimediaSection)
+                                content.Item().Element(container => ComposeFichaMultimediaSection(container, ficha.Multimedia));
+                            return;
+                        }
+
+                        content.Spacing(10);
                         content.Item().Element(container => ComposeFichaGeneralSection(container, ficha, imagenPrincipal));
                         content.Item().Element(container => ComposeFichaCommercialSection(container, ficha));
-                        content.Item().Element(container => ComposeFichaFiscalSection(container, ficha));
-
-                        if (hasPhysicalSection)
-                        {
-                            content.Item().Element(container => ComposeFichaPhysicalSection(container, ficha));
-                        }
-
-                        if (hasInventorySection)
-                        {
-                            content.Item().Element(container => ComposeFichaInventorySection(container, ficha));
-                        }
-
-                        if (hasAttributesSection)
-                        {
-                            content.Item().Element(container => ComposeFichaAttributesSection(container, ficha.Atributos));
-                        }
-
-                        if (hasVariantsSection)
-                        {
-                            content.Item().Element(container => ComposeFichaVariantsSection(container, ficha.Variantes, imagenesVariantes));
-                        }
-
+                        if (hasInventorySection || hasAttributesSection)
+                            content.Item().Row(row =>
+                            {
+                                row.Spacing(10);
+                                if (hasInventorySection) row.RelativeItem().Element(box => ComposeFichaInventorySection(box, ficha));
+                                if (hasAttributesSection) row.RelativeItem().Element(box => ComposeFichaAttributesSection(box, ficha.Atributos));
+                            });
+                        if (ficha.PresentacionesVenta.Count > 0 || hasVariantsSection)
+                            content.Item().Row(row =>
+                            {
+                                row.Spacing(10);
+                                if (ficha.PresentacionesVenta.Count > 0) row.RelativeItem().Element(box => ComposeFichaPresentationsSection(box, ficha));
+                                if (hasVariantsSection) row.RelativeItem().Element(box => ComposeFichaVariantsSection(box, ficha.Variantes, imagenesVariantes));
+                            });
+                        content.Item().Element(container => ComposeFichaCombinedTechnical(container, ficha, hasPhysicalSection));
                         if (hasMultimediaSection)
-                        {
                             content.Item().Element(container => ComposeFichaMultimediaSection(container, ficha.Multimedia));
-                        }
                     });
 
-                    page.Footer().AlignCenter().Text(text =>
+                    page.Footer().PaddingTop(6).Row(footer =>
                     {
-                        text.DefaultTextStyle(style => style.FontSize(8).FontColor("#64748B"));
-                        text.Span("CheckApp · Ficha técnica · ");
-                        text.CurrentPageNumber();
-                        text.Span(" / ");
-                        text.TotalPages();
+                        footer.RelativeItem().Text(ficha.Tipo == TipoServicio ? "CheckApp · Ficha técnica de servicio" : "CheckApp · Ficha técnica de producto").FontSize(7).FontColor(FichaMuted);
+                        footer.ConstantItem(42).Text(text =>
+                        {
+                            text.DefaultTextStyle(style => style.FontSize(7).FontColor(FichaMuted));
+                            text.CurrentPageNumber(); text.Span(" / "); text.TotalPages();
+                        });
+                        footer.ConstantItem(60).AlignRight().Text(DateTime.Now.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture)).FontSize(7).FontColor(FichaMuted);
                     });
                 });
             }).GeneratePdf();
         }
 
-        private static void ComposeFichaGeneralSection(IContainer container, ProductoServicioFichaTecnicaDto ficha, byte[]? imagenPrincipal)
+        // PDF palette mirrors checkapp-theme.css; branding remains in the shared logo.
+        private const string FichaInk = "#20304A";
+        private const string FichaMuted = "#6B7280";
+        private const string FichaSurface = "#F3F6F8";
+        private const string FichaRule = "#D7E0EA";
+        // Dominant orange sampled from the existing shared CheckApp logo.
+        private const string FichaAccent = "#FF9231";
+
+        private static void ComposeFichaServiceHero(IContainer container, ProductoServicioFichaTecnicaDto ficha, byte[]? image)
         {
-            container
-                .Border(1)
-                .BorderColor("#D7E0EA")
-                .CornerRadius(14)
-                .Padding(14)
-                .Column(column =>
+            container.EnsureSpace(165).Row(row =>
+            {
+                row.RelativeItem(4.8f).PaddingRight(16).Height(155).Element(visual =>
                 {
-                    column.Spacing(10);
-                    column.Item().Text("Información general").SemiBold().FontSize(13).FontColor("#0F172A");
-                    column.Item().Row(row =>
+                    if (image != null)
+                        visual.AlignMiddle().Image(image).FitArea();
+                    else
                     {
-                        row.ConstantItem(150).Element(box =>
+                        string initials = string.Concat((ficha.Nombre ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                            .Take(2).Select(word => word.Substring(0, 1))).ToUpperInvariant();
+                        visual.Background(FichaSurface).Padding(16).AlignCenter().AlignMiddle().Column(fallback =>
                         {
-                            IContainer imageBox = box
-                                .Border(1)
-                                .BorderColor("#D7E0EA")
-                                .CornerRadius(10)
-                                .Padding(8)
-                                .Height(132);
-
-                            if (imagenPrincipal != null)
-                            {
-                                imageBox.Image(imagenPrincipal).FitArea();
-                            }
-                            else
-                            {
-                                imageBox.AlignCenter().AlignMiddle().Text("Sin imagen").FontColor("#94A3B8");
-                            }
-                        });
-
-                        row.RelativeItem().PaddingLeft(12).Column(details =>
-                        {
-                            details.Spacing(6);
-                            details.Item().Text($"Nombre: {FichaTextOrDash(ficha.Nombre)}").FontColor("#0F172A");
-                            details.Item().Text($"Código: {FichaTextOrDash(ficha.Codigo)}");
-                            details.Item().Text($"Tipo: {FichaTextOrDash(ficha.TipoNombre)}");
-                            details.Item().Text($"Estatus: {FichaTextOrDash(ficha.EstatusNombre)}");
-                            if (!string.IsNullOrWhiteSpace(ficha.Descripcion))
-                            {
-                                details.Item().Text(text =>
-                                {
-                                    text.Span("Descripción: ").SemiBold();
-                                    AppendRichTextToPdf(text, ficha.Descripcion);
-                                });
-                            }
-
-                            details.Item().Text($"Categoría: {FichaTextOrDash(ficha.Categoria)}");
-                            if (ficha.Tipo == TipoProducto && !string.IsNullOrWhiteSpace(ficha.Marca))
-                            {
-                                details.Item().Text($"Marca: {ficha.Marca.Trim()}");
-                            }
-
-                            string coleccion = BuildColeccionLabel(ficha.ColeccionNumero, ficha.ColeccionNombre);
-                            if (!string.IsNullOrWhiteSpace(coleccion))
-                            {
-                                details.Item().Text($"Colección: {coleccion}");
-                            }
-                        });
-                    });
-
-                    if (ficha.Tags.Any())
-                    {
-                        column.Item().Element(box =>
-                        {
-                            box.Column(tagColumn =>
-                            {
-                                tagColumn.Spacing(6);
-                                tagColumn.Item().Text("Etiquetas").SemiBold().FontSize(10).FontColor("#475569");
-                                tagColumn.Item().Text(string.Join(" • ", ficha.Tags
-                                    .Select(tag => FichaTextOrDash(tag.Nombre))
-                                    .Where(nombre => !string.IsNullOrWhiteSpace(nombre))))
-                                    .FontColor("#1D4ED8");
-                            });
+                            fallback.Spacing(6);
+                            fallback.Item().AlignCenter().Text(initials.Length > 0 ? initials : "S").SemiBold().FontSize(36).FontColor(FichaMuted);
+                            fallback.Item().AlignCenter().Text(string.IsNullOrWhiteSpace(ficha.Categoria) ? "Servicio" : ficha.Categoria).FontSize(9).FontColor(FichaMuted);
                         });
                     }
                 });
+                row.RelativeItem(5.2f).AlignMiddle().Column(identity =>
+                {
+                    identity.Spacing(9);
+                    if (!string.IsNullOrWhiteSpace(ficha.Categoria))
+                        identity.Item().Text(ficha.Categoria.ToUpperInvariant()).FontSize(8).FontColor(FichaAccent);
+                    identity.Item().Text(FichaTextOrDash(ficha.Nombre)).Bold().FontSize(23).LineHeight(1.05f);
+                    identity.Item().Text($"Servicio {FichaTextOrDash(ficha.Codigo)}").FontSize(10).FontColor(FichaMuted);
+                    identity.Item().Row(badges =>
+                    {
+                        badges.AutoItem().Background(FichaSurface).PaddingVertical(4).PaddingHorizontal(8)
+                            .Text("SERVICIO").SemiBold().FontSize(7.5f);
+                        badges.AutoItem().PaddingLeft(6).Border(0.5f).BorderColor(FichaRule).PaddingVertical(4).PaddingHorizontal(8)
+                            .Text(text => { text.Span("● ").FontColor(ficha.Activo ? "#16A34A" : FichaMuted); text.Span(FichaTextOrDash(ficha.EstatusNombre).ToUpperInvariant()).SemiBold().FontSize(7.5f); });
+                    });
+
+                });
+            });
+        }
+
+        private static void ComposeFichaServiceDescription(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            FichaCompactSection(container, "Descripción del servicio").PaddingTop(3).Text(text =>
+            {
+                text.DefaultTextStyle(style => style.FontSize(9).LineHeight(1.2f));
+                if (string.IsNullOrWhiteSpace(ficha.Descripcion)) text.Span("—");
+                else AppendRichTextToPdf(text, ficha.Descripcion);
+            });
+        }
+
+        private static void ComposeFichaServiceMetadata(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            var fields = new List<(string Label, string Value)>
+            {
+                ("Código", FichaTextOrDash(ficha.Codigo)),
+                ("Tipo", FichaTextOrDash(ficha.TipoNombre)),
+                ("Estatus", FichaTextOrDash(ficha.EstatusNombre)),
+                ("Categoría", FichaTextOrDash(ficha.Categoria)),
+                ("Unidad base", BuildUnidadLabel(ficha.UnidadMedida, ficha.UnidadAbreviatura)),
+                ("Etiquetas", string.Join(" · ", ficha.Tags.Select(tag => FichaTextOrDash(tag.Nombre))))
+            };
+            if (!string.IsNullOrWhiteSpace(ficha.Marca)) fields.Add(("Marca", ficha.Marca));
+            string collection = BuildColeccionLabel(ficha.ColeccionNumero, ficha.ColeccionNombre);
+            if (!string.IsNullOrWhiteSpace(collection)) fields.Add(("Colección", collection));
+            FichaCompactSection(container, "Información general").Table(table =>
+            {
+                table.ColumnsDefinition(cols => { cols.RelativeColumn(); cols.RelativeColumn(); cols.RelativeColumn(); });
+                foreach (var field in fields)
+                    table.Cell().PaddingVertical(5).PaddingRight(12).Column(value =>
+                    {
+                        value.Item().Text(field.Label).FontSize(8).FontColor(FichaMuted);
+                        value.Item().Text(FichaTextOrDash(field.Value)).SemiBold().FontSize(10);
+                    });
+            });
+        }
+
+        private static void ComposeFichaGeneralSection(IContainer container, ProductoServicioFichaTecnicaDto ficha, byte[]? imagenPrincipal)
+        {
+            container.EnsureSpace(190).Row(row =>
+            {
+                row.RelativeItem(3.4f).PaddingRight(14).Height(190).Background(FichaSurface).CornerRadius(5).Padding(9).Element(image =>
+                {
+                    if (imagenPrincipal != null) image.Image(imagenPrincipal).FitArea();
+                    else image.AlignCenter().AlignMiddle().Text("Sin imagen").FontColor(FichaMuted);
+                });
+                row.RelativeItem(6.6f).Column(details =>
+                {
+                    details.Spacing(5);
+                    if (!string.IsNullOrWhiteSpace(ficha.Categoria)) details.Item().Text(ficha.Categoria.ToUpperInvariant()).FontSize(8).FontColor(FichaAccent);
+                    details.Item().Text(FichaTextOrDash(ficha.Nombre)).Bold().FontSize(22).LineHeight(1.05f);
+                    if (!string.IsNullOrWhiteSpace(ficha.Descripcion))
+                        details.Item().Text(text => AppendRichTextToPdf(text, ficha.Descripcion));
+                    var metadata = new List<(string Label, string Value)>
+                    {
+                        ("Código", FichaTextOrDash(ficha.Codigo)),
+                        ("Tipo", FichaTextOrDash(ficha.TipoNombre)),
+                        ("Estatus", FichaTextOrDash(ficha.EstatusNombre))
+                    };
+                    if (!string.IsNullOrWhiteSpace(ficha.Marca)) metadata.Add(("Marca", ficha.Marca));
+                    string collection = BuildColeccionLabel(ficha.ColeccionNumero, ficha.ColeccionNombre);
+                    if (!string.IsNullOrWhiteSpace(collection)) metadata.Add(("Colección", collection));
+                    details.Item().Table(table =>
+                    {
+                        table.ColumnsDefinition(cols => { cols.RelativeColumn(); cols.RelativeColumn(); cols.RelativeColumn(); });
+                        foreach (var field in metadata)
+                            table.Cell().Padding(2).Background(FichaSurface).Border(0.4f).BorderColor(FichaRule).CornerRadius(4).Padding(5)
+                                .Element(box => ComposeFichaGeneralField(box, field.Label, field.Value));
+                    });
+                    if (ficha.Tags.Any())
+                    {
+                        details.Item().Text("Etiquetas").FontSize(7).FontColor(FichaMuted);
+                        details.Item().Inlined(chips =>
+                        {
+                            chips.Spacing(3);
+                            foreach (var tag in ficha.Tags)
+                                chips.Item().Background("#EEF2FF").CornerRadius(7).PaddingVertical(3).PaddingHorizontal(5)
+                                    .Text(FichaTextOrDash(tag.Nombre)).FontSize(6.5f).FontColor("#1D4ED8");
+                        });
+                    }
+                });
+            });
+        }
+
+        private static void ComposeFichaGeneralField(IContainer container, string label, string value)
+        {
+            container.PaddingVertical(2).PaddingRight(8).Column(field =>
+            {
+                field.Item().Text(label).FontSize(7.5f).FontColor(FichaMuted);
+                field.Item().Text(value).FontSize(9);
+            });
+        }
+
+        // Keep the section title with its first content, while allowing long tables to flow.
+        private static IContainer FichaCompactSection(IContainer container, string title)
+        {
+            IContainer body = null!;
+            container.EnsureSpace(50).Border(0.5f).BorderColor(FichaRule).CornerRadius(5).Column(column =>
+            {
+                column.Item().Background(FichaSurface).PaddingVertical(6).PaddingHorizontal(8).Row(header =>
+                {
+                    header.ConstantItem(16).Height(16).Element(icon => ComposeFichaSectionIcon(icon, title));
+                    header.RelativeItem().PaddingLeft(6).AlignMiddle().Text(title).SemiBold().FontSize(10);
+                    if (title == "Precios y Costos" || title == "Precio y rentabilidad")
+                        header.ConstantItem(65).AlignRight().AlignMiddle().Text("Valores en MXN").FontSize(6.5f).FontColor(FichaMuted);
+                });
+                body = column.Item().Padding(7);
+            });
+            return body;
+        }
+
+        private static void ComposeFichaSectionIcon(IContainer container, string title)
+        {
+            string path = title.Contains("Precio") ? "M8 2v12M11 4H6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H4"
+                : title == "Atributos" ? "M2 3h6l6 6-5 5-7-7zM5 5h.1"
+                : title == "Variantes" ? "M8 2v12M2 8h12M4 4l8 8M4 12l8-8"
+                : "M3 4h10v10H3zM5 2h6v4H5zM6 8h4M6 11h4";
+            container.Svg($"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'><rect width='18' height='18' rx='4' fill='{FichaAccent}'/><path d='{path}' transform='translate(1 1)' fill='none' stroke='white' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+        }
+
+        private static void ComposeFichaMetricGrid(IContainer container, IReadOnlyCollection<(string Label, string Value)> rows, int columns)
+        {
+            container.Table(table =>
+            {
+                table.ColumnsDefinition(cols => { for (int i = 0; i < columns; i++) cols.RelativeColumn(); });
+                foreach (var item in rows)
+                    table.Cell().Element(box => ComposeFichaGeneralField(box, item.Label, FichaTextOrDash(item.Value)));
+            });
         }
 
         private static void ComposeFichaCommercialSection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
         {
             List<(string Label, string Value)> rows = new List<(string Label, string Value)>
             {
-                ("Unidad", BuildUnidadLabel(ficha.UnidadMedida, ficha.UnidadAbreviatura)),
+                ("Unidad Base", BuildUnidadLabel(ficha.UnidadMedida, ficha.UnidadAbreviatura)),
                 ("Precio público", FichaFormatCurrency(ficha.PrecioPublico))
             };
 
@@ -6936,15 +7467,61 @@ VALUES
                 rows.Add(("Precio de comparación", FichaFormatCurrency(ficha.PrecioComparacion.Value)));
             }
 
-            if (!string.IsNullOrWhiteSpace(ficha.PrecioUnitarioResumen))
+            if (ficha.Costo.HasValue)
             {
-                rows.Add(("Precio unitario", ficha.PrecioUnitarioResumen));
+                decimal ganancia = ficha.PrecioPublico - ficha.Costo.Value;
+                rows.Add(("Ganancia", FichaFormatCurrency(ganancia)));
+                if (ficha.PrecioPublico > 0) rows.Add(("Margen", (ganancia / ficha.PrecioPublico * 100).ToString("0.00", CultureInfo.InvariantCulture) + "%"));
             }
 
-            ComposeFichaInfoTable(container, "Información comercial", rows);
+            var order = new[] { "Precio público", "Costo", "Ganancia", "Margen", "Precio de comparación", "Unidad Base" };
+            if (ficha.Tipo == TipoServicio) rows.RemoveAll(item => item.Label == "Unidad Base");
+            rows = rows.OrderBy(item => Array.IndexOf(order, item.Label)).ToList();
+            FichaCompactSection(container, ficha.Tipo == TipoServicio ? "Precio y rentabilidad" : "Precios y Costos").Row(cards =>
+            {
+                cards.Spacing(5);
+                foreach (var metric in rows)
+                {
+                    bool main = metric.Label == "Precio público";
+                    cards.RelativeItem(main ? 1.65f : 1).Background(main ? "#FFF4EA" : FichaSurface)
+                        .Border(0.5f).BorderColor(main ? FichaAccent : FichaRule).CornerRadius(4).Padding(7).Column(field =>
+                        {
+                            field.Spacing(3);
+                            field.Item().Text(metric.Label).FontSize(7).FontColor(main ? FichaAccent : FichaMuted);
+                            field.Item().Text(metric.Value).SemiBold().FontSize(main ? 21 : 10);
+                        });
+                }
+            });
+        }
+
+        private static void ComposeFichaPresentationsSection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            FichaCompactSection(container, "Presentaciones de venta").Table(table =>
+            {
+                table.ColumnsDefinition(cols => { cols.RelativeColumn(1.3f); cols.RelativeColumn(); cols.RelativeColumn(); });
+                table.Header(header =>
+                {
+                    header.Cell().Element(x => FichaTableHeaderCell(x, "Venta"));
+                    header.Cell().Element(x => FichaTableHeaderCell(x, "Equivale en inventario"));
+                    header.Cell().Element(x => FichaTableHeaderCell(x, "Precio", true));
+                });
+                foreach (var item in ficha.PresentacionesVenta)
+                {
+                    string venta = item.CantidadVenta.ToString("0.####", CultureInfo.InvariantCulture) + " " + item.UnidadVenta + (EsPresentacionBase(item, ficha.IdUnidadMedida) ? " Base" : "");
+                    table.Cell().Element(x => FichaTableBodyCell(x, venta));
+                    table.Cell().Element(x => FichaTableBodyCell(x, item.EquivalenciaBase.ToString("0.####", CultureInfo.InvariantCulture) + " " + ficha.UnidadAbreviatura));
+                    table.Cell().Element(x => FichaTableBodyCell(x, FichaFormatCurrency(item.Precio), true, true));
+                }
+            });
         }
 
         private static void ComposeFichaFiscalSection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            var rows = GetFichaFiscalRows(ficha);
+            if (rows.Count > 0) ComposeFichaMetricGrid(FichaCompactSection(container, "Información fiscal"), rows, 3);
+        }
+
+        private static List<(string Label, string Value)> GetFichaFiscalRows(ProductoServicioFichaTecnicaDto ficha)
         {
             List<(string Label, string Value)> rows = new List<(string Label, string Value)>();
 
@@ -6960,18 +7537,36 @@ VALUES
 
             if (!string.IsNullOrWhiteSpace(ficha.ObjetoImpuesto))
             {
-                rows.Add(("Objeto de impuesto", ficha.ObjetoImpuesto.Trim()));
+                // Representación del catálogo vigente; no depende del porcentaje de IVA.
+                string objetoImpuesto = ficha.ObjetoImpuesto.Trim() switch
+                {
+                    "01" => "No",
+                    "02" or "03" or "04" => "Sí",
+                    _ => ""
+                };
+                if (objetoImpuesto.Length > 0) rows.Add(("Objeto de impuesto", objetoImpuesto));
+            }
+
+            if (ficha.PorcentajeIVA > 0)
+            {
+                rows.Add(("IVA", ficha.PorcentajeIVA.ToString("0.##", CultureInfo.InvariantCulture) + "%"));
             }
 
             if (!rows.Any())
             {
-                return;
+                return rows;
             }
 
-            ComposeFichaInfoTable(container, "Información fiscal", rows);
+            return rows;
         }
 
         private static void ComposeFichaPhysicalSection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
+        {
+            var rows = GetFichaPhysicalRows(ficha);
+            if (rows.Count > 0) ComposeFichaMetricGrid(FichaCompactSection(container, "Información física y logística"), rows, 3);
+        }
+
+        private static List<(string Label, string Value)> GetFichaPhysicalRows(ProductoServicioFichaTecnicaDto ficha)
         {
             List<(string Label, string Value)> rows = new List<(string Label, string Value)>();
 
@@ -7005,10 +7600,23 @@ VALUES
 
             if (!rows.Any())
             {
-                return;
+                return rows;
             }
 
-            ComposeFichaInfoTable(container, "Información física y logística", rows);
+            return rows;
+        }
+
+        private static void ComposeFichaCombinedTechnical(IContainer container, ProductoServicioFichaTecnicaDto ficha, bool physical)
+        {
+            var fiscal = GetFichaFiscalRows(ficha);
+            var logistics = physical ? GetFichaPhysicalRows(ficha) : new List<(string Label, string Value)>();
+            if (fiscal.Count == 0 && logistics.Count == 0) return;
+            FichaCompactSection(container, "Información fiscal, física y logística").Row(row =>
+            {
+                row.Spacing(10);
+                if (fiscal.Count > 0) row.RelativeItem(1.2f).Element(box => ComposeFichaMetricGrid(box, fiscal, 1));
+                if (logistics.Count > 0) row.RelativeItem(3).Element(box => ComposeFichaMetricGrid(box, logistics, 3));
+            });
         }
 
         private static void ComposeFichaInventorySection(IContainer container, ProductoServicioFichaTecnicaDto ficha)
@@ -7027,61 +7635,44 @@ VALUES
 
             rows.Add(("Permite venta sin existencia", ficha.PermiteVentaSinExistencia ? "Sí" : "No"));
 
-            ComposeFichaInfoTable(container, "Inventario", rows);
+            FichaCompactSection(container, "Inventario").Table(table =>
+            {
+                table.ColumnsDefinition(cols => { cols.RelativeColumn(); cols.RelativeColumn(); cols.RelativeColumn(); });
+                foreach (var item in rows)
+                    table.Cell().Padding(2).Border(0.4f).BorderColor(FichaRule).CornerRadius(4).Padding(5).Column(metric =>
+                    {
+                        metric.Item().Text(item.Label == "Permite venta sin existencia" ? "Venta sin existencia" : item.Label).FontSize(7).FontColor(FichaMuted);
+                        metric.Item().Text(item.Value).SemiBold().FontSize(item.Label == "Existencia actual" ? 16 : 10);
+                    });
+            });
         }
 
         private static void ComposeFichaAttributesSection(IContainer container, IReadOnlyCollection<ProductoServicioAtributoSeleccionDto> atributos)
         {
-            container
-                .Border(1)
-                .BorderColor("#D7E0EA")
-                .CornerRadius(14)
-                .Padding(14)
-                .Column(column =>
+            var rows = atributos.Select(atributo => (
+                Label: FichaTextOrDash(atributo.Nombre),
+                Value: FichaTextOrDash(string.Join(", ", atributo.Valores.OrderBy(v => v.Orden).Select(v => v.Valor).Where(v => !string.IsNullOrWhiteSpace(v)))))).ToList();
+            FichaCompactSection(container, "Atributos").Table(table =>
+            {
+                table.ColumnsDefinition(cols => { cols.RelativeColumn(); cols.RelativeColumn(1.7f); });
+                foreach (var item in rows)
                 {
-                    column.Spacing(10);
-                    column.Item().Text("Atributos").SemiBold().FontSize(13).FontColor("#0F172A");
+                    table.Cell().Element(box => FichaTableBodyCell(box, item.Label));
+                    table.Cell().Element(box => FichaTableBodyCell(box, item.Value));
+                }
+            });
+        }
+
+        private static void ComposeFichaVariantsSection(IContainer container, IReadOnlyCollection<ProductoServicioVarianteDto> variantes, IReadOnlyDictionary<Guid, byte[]?> imagenesVariantes)
+        {
+            FichaCompactSection(container.EnsureSpace(90), "Variantes").Column(column =>
+                {
                     column.Item().Table(table =>
                     {
                         table.ColumnsDefinition(columns =>
                         {
                             columns.RelativeColumn(1.2f);
-                            columns.RelativeColumn(2.8f);
-                        });
-
-                        table.Header(header =>
-                        {
-                            header.Cell().Element(x => FichaTableHeaderCell(x, "Atributo"));
-                            header.Cell().Element(x => FichaTableHeaderCell(x, "Elemento(s)"));
-                        });
-
-                        foreach (ProductoServicioAtributoSeleccionDto atributo in atributos)
-                        {
-                            string valores = string.Join(", ", atributo.Valores.OrderBy(v => v.Orden).Select(v => v.Valor).Where(v => !string.IsNullOrWhiteSpace(v)));
-                            table.Cell().Element(x => FichaTableBodyCell(x, FichaTextOrDash(atributo.Nombre)));
-                            table.Cell().Element(x => FichaTableBodyCell(x, FichaTextOrDash(valores)));
-                        }
-                    });
-                });
-        }
-
-        private static void ComposeFichaVariantsSection(IContainer container, IReadOnlyCollection<ProductoServicioVarianteDto> variantes, IReadOnlyDictionary<Guid, byte[]?> imagenesVariantes)
-        {
-            container
-                .Border(1)
-                .BorderColor("#D7E0EA")
-                .CornerRadius(14)
-                .Padding(14)
-                .Column(column =>
-                {
-                    column.Spacing(10);
-                    column.Item().Text("Variantes").SemiBold().FontSize(13).FontColor("#0F172A");
-                    column.Item().Table(table =>
-                    {
-                        table.ColumnsDefinition(columns =>
-                        {
-                            columns.RelativeColumn(2.2f);
-                            columns.ConstantColumn(64);
+                            columns.ConstantColumn(36);
                             columns.RelativeColumn(1f);
                             columns.RelativeColumn(1f);
                         });
@@ -7090,8 +7681,8 @@ VALUES
                         {
                             header.Cell().Element(x => FichaTableHeaderCell(x, "Variante"));
                             header.Cell().Element(x => FichaTableHeaderCell(x, "Imagen"));
-                            header.Cell().Element(x => FichaTableHeaderCell(x, "Costo"));
-                            header.Cell().Element(x => FichaTableHeaderCell(x, "Precio"));
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Costo", true));
+                            header.Cell().Element(x => FichaTableHeaderCell(x, "Precio", true));
                         });
 
                         foreach (ProductoServicioVarianteDto variante in variantes.OrderBy(v => v.Orden))
@@ -7102,22 +7693,22 @@ VALUES
                             {
                                 IContainer imageCell = cell
                                     .BorderBottom(1)
-                                    .BorderColor("#D7E0EA")
-                                    .Padding(6)
+                                    .BorderColor(FichaRule)
+                                    .Padding(3)
                                     .AlignCenter()
                                     .AlignMiddle();
 
                                 if (imagenesVariantes.TryGetValue(variante.Id, out byte[]? imageBytes) && imageBytes != null)
                                 {
-                                    imageCell.Height(46).Image(imageBytes).FitArea();
+                                    imageCell.Height(32).Image(imageBytes).FitArea();
                                 }
                                 else
                                 {
-                                    imageCell.Text("—").FontColor("#94A3B8");
+                                    imageCell.Width(22).Height(26).Background(FichaSurface).CornerRadius(3).AlignCenter().AlignMiddle().Text("▧").FontSize(12).FontColor(FichaMuted);
                                 }
                             });
                             table.Cell().Element(x => FichaTableBodyCell(x, variante.Costo.HasValue ? FichaFormatCurrency(variante.Costo.Value) : "—", true));
-                            table.Cell().Element(x => FichaTableBodyCell(x, variante.PrecioPublico.HasValue ? FichaFormatCurrency(variante.PrecioPublico.Value) : "—", true));
+                            table.Cell().Element(x => FichaTableBodyCell(x, variante.PrecioPublico.HasValue ? FichaFormatCurrency(variante.PrecioPublico.Value) : "—", true, true));
                         }
                     });
                 });
@@ -7161,14 +7752,14 @@ VALUES
             }
 
             container
-                .Border(1)
-                .BorderColor("#D7E0EA")
-                .CornerRadius(14)
-                .Padding(14)
+                .Border(0.5f)
+                .BorderColor(FichaRule)
+                .CornerRadius(4)
+                .Padding(7)
                 .Column(column =>
                 {
-                    column.Spacing(10);
-                    column.Item().Text(title).SemiBold().FontSize(13).FontColor("#0F172A");
+                    column.Spacing(4);
+                    column.Item().Text(title).SemiBold().FontSize(10).FontColor("#0F172A");
                     column.Item().Table(table =>
                     {
                         table.ColumnsDefinition(columns =>
@@ -7186,41 +7777,25 @@ VALUES
                 });
         }
 
-        private static void FichaTableHeaderCell(IContainer container, string text)
+        private static void FichaTableHeaderCell(IContainer container, string text, bool alignRight = false)
         {
-            container
-                .Background("#EEF2FF")
-                .PaddingVertical(7)
-                .PaddingHorizontal(8)
-                .Text(text)
-                .SemiBold()
-                .FontSize(9)
-                .FontColor("#1E3A8A");
+            IContainer cell = container.Background(FichaSurface).PaddingVertical(5).PaddingHorizontal(5);
+            cell = alignRight ? cell.AlignRight() : cell.AlignLeft();
+            cell.Text(text).SemiBold().FontSize(7).FontColor(FichaInk);
         }
 
         private static void FichaTableLabelCell(IContainer container, string text)
         {
-            container
-                .BorderBottom(1)
-                .BorderColor("#D7E0EA")
-                .PaddingVertical(7)
-                .PaddingHorizontal(8)
-                .Text(text)
-                .SemiBold()
-                .FontSize(9)
-                .FontColor("#475569");
+            container.BorderBottom(0.5f).BorderColor(FichaRule).PaddingVertical(3).PaddingHorizontal(5)
+                .Text(text).FontSize(8).FontColor(FichaMuted);
         }
 
-        private static void FichaTableBodyCell(IContainer container, string text, bool alignRight = false)
+        private static void FichaTableBodyCell(IContainer container, string text, bool alignRight = false, bool emphasized = false)
         {
-            IContainer body = container
-                .BorderBottom(1)
-                .BorderColor("#D7E0EA")
-                .PaddingVertical(7)
-                .PaddingHorizontal(8);
-
+            IContainer body = container.BorderBottom(0.5f).BorderColor(FichaRule).PaddingVertical(3).PaddingHorizontal(5).AlignMiddle();
             body = alignRight ? body.AlignRight() : body.AlignLeft();
-            body.Text(FichaTextOrDash(text)).FontSize(9).FontColor("#0F172A");
+            var value = body.Text(FichaTextOrDash(text)).FontSize(8).FontColor(FichaInk);
+            if (emphasized) value.SemiBold();
         }
 
         private static string FichaTextOrDash(string? value)
@@ -7520,9 +8095,13 @@ VALUES
             public decimal PrecioPublico { get; set; }
             public decimal? PrecioComparacion { get; set; }
             public decimal? PrecioUnitarioMonto { get; set; }
+            public decimal? PrecioUnitarioCantidadTotal { get; set; }
+            public string PrecioUnitarioUnidadTotal { get; set; } = string.Empty;
             public decimal? PrecioUnitarioBaseCantidad { get; set; }
             public string PrecioUnitarioUnidad { get; set; } = string.Empty;
+            public string PrecioUnitarioUnidadBase { get; set; } = string.Empty;
             public string ObjetoImpuesto { get; set; } = string.Empty;
+            public decimal PorcentajeIVA { get; set; }
             public string ClaveProductoSat { get; set; } = string.Empty;
             public string ClaveUnidadSat { get; set; } = string.Empty;
             public bool EsProductoFisico { get; set; }
@@ -7543,6 +8122,7 @@ VALUES
             public List<ProductoServicioOpcionVarianteGuardarRequest> OpcionesVariante { get; set; } = new List<ProductoServicioOpcionVarianteGuardarRequest>();
             public List<ProductoServicioVarianteGuardarRequest> Variantes { get; set; } = new List<ProductoServicioVarianteGuardarRequest>();
             public List<ProductoServicioMultimediaGuardarRequest> Multimedia { get; set; } = new List<ProductoServicioMultimediaGuardarRequest>();
+            public List<ProductoServicioPresentacionVentaGuardarRequest> PresentacionesVenta { get; set; } = new List<ProductoServicioPresentacionVentaGuardarRequest>();
         }
 
         private sealed class ProductoServicioSnapshot
@@ -7554,6 +8134,7 @@ VALUES
             public Guid IdCategoria { get; set; }
             public Guid? IdMarca { get; set; }
             public Guid IdUnidadMedida { get; set; }
+            public decimal PrecioPublico { get; set; }
             public Guid? IdColeccion { get; set; }
             public Guid? IdPaquete { get; set; }
             public bool EsProductoFisico { get; set; }
@@ -7600,6 +8181,18 @@ VALUES
             public Guid Id { get; set; }
             public string Nombre { get; set; } = string.Empty;
             public Dictionary<string, Guid> Valores { get; set; } = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private sealed class UnitPriceUnitMeta
+        {
+            public UnitPriceUnitMeta(string family, decimal factor)
+            {
+                Family = family;
+                Factor = factor;
+            }
+
+            public string Family { get; }
+            public decimal Factor { get; }
         }
 
         private enum ImageOperationMode

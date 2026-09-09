@@ -29,9 +29,13 @@ namespace checklistWs.Models.ProductosServicios
         public decimal PrecioPublico { get; set; }
         public decimal? PrecioComparacion { get; set; }
         public decimal? PrecioUnitarioMonto { get; set; }
+        public decimal? PrecioUnitarioCantidadTotal { get; set; }
         public decimal? PrecioUnitarioBaseCantidad { get; set; }
         public string PrecioUnitarioUnidad { get; set; } = string.Empty;
+        public string PrecioUnitarioUnidadTotal { get; set; } = string.Empty;
+        public string PrecioUnitarioUnidadBase { get; set; } = string.Empty;
         public string ObjetoImpuesto { get; set; } = string.Empty;
+        public decimal PorcentajeIVA { get; set; }
         public string ClaveProductoSat { get; set; } = string.Empty;
         public string ClaveUnidadSat { get; set; } = string.Empty;
         public bool EsProductoFisico { get; set; }
@@ -74,10 +78,67 @@ namespace checklistWs.Models.ProductosServicios
         public List<ProductoServicioOpcionVarianteDto> OpcionesVariante { get; set; } = new List<ProductoServicioOpcionVarianteDto>();
         public List<ProductoServicioVarianteDto> Variantes { get; set; } = new List<ProductoServicioVarianteDto>();
         public List<ProductoServicioMultimediaDto> Multimedia { get; set; } = new List<ProductoServicioMultimediaDto>();
+        public List<ProductoServicioPresentacionVentaDto> PresentacionesVenta { get; set; } = new List<ProductoServicioPresentacionVentaDto>();
+    }
+
+    public class ProductoServicioPresentacionVentaDto
+    {
+        public Guid Id { get; set; }
+        public Guid IdProductoServicio { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public decimal CantidadVenta { get; set; } = 1;
+        public Guid IdUnidadVenta { get; set; }
+        public string UnidadVenta { get; set; } = string.Empty;
+        public string UnidadVentaAbreviatura { get; set; } = string.Empty;
+        public decimal EquivalenciaBase { get; set; }
+        public decimal Precio { get; set; }
+        public bool EsPredeterminada { get; set; }
+        public int Orden { get; set; }
+        public bool Activo { get; set; }
+    }
+
+    public class ProductoServicioPresentacionVentaGuardarRequest
+    {
+        public Guid? Id { get; set; }
+        public Guid IdProductoServicio { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public decimal CantidadVenta { get; set; } = 1;
+        public Guid IdUnidadVenta { get; set; }
+        public decimal EquivalenciaBase { get; set; }
+        public decimal Precio { get; set; }
+        public bool EsPredeterminada { get; set; }
+        public int Orden { get; set; }
+    }
+
+    public class ProductoServicioPresentacionesVentaCalcularRequest
+    {
+        public Guid IdProductoServicio { get; set; }
+        public decimal CantidadUnidadBase { get; set; }
+    }
+
+    public class ProductoServicioPresentacionVentaCalculoLineaDto
+    {
+        public Guid IdPresentacion { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public decimal EquivalenciaBase { get; set; }
+        public decimal Precio { get; set; }
+        public int Cantidad { get; set; }
+        public decimal Subtotal { get; set; }
+    }
+
+    public class ProductoServicioPresentacionesVentaCalculoDto
+    {
+        public bool TieneCombinacionExacta { get; set; }
+        public string Mensaje { get; set; } = string.Empty;
+        public decimal CantidadSolicitadaUnidadBase { get; set; }
+        public decimal UnidadesBaseCubiertas { get; set; }
+        public decimal PrecioTotal { get; set; }
+        public List<ProductoServicioPresentacionVentaCalculoLineaDto> Combinacion { get; set; } = new List<ProductoServicioPresentacionVentaCalculoLineaDto>();
     }
 
     public class ProductoServicioFichaTecnicaDto
     {
+        public List<ProductoServicioPresentacionVentaDto> PresentacionesVenta { get; set; } = new();
         public Guid Id { get; set; }
         public Guid IdEmpresa { get; set; }
         public byte Tipo { get; set; }
@@ -110,14 +171,18 @@ namespace checklistWs.Models.ProductosServicios
         public decimal PrecioPublico { get; set; }
         public decimal? PrecioComparacion { get; set; }
         public decimal? PrecioUnitarioMonto { get; set; }
+        public decimal? PrecioUnitarioCantidadTotal { get; set; }
         public decimal? PrecioUnitarioBaseCantidad { get; set; }
         public string PrecioUnitarioUnidad { get; set; } = string.Empty;
+        public string PrecioUnitarioUnidadTotal { get; set; } = string.Empty;
+        public string PrecioUnitarioUnidadBase { get; set; } = string.Empty;
         public string PrecioUnitarioResumen { get; set; } = string.Empty;
         public string ClaveProductoSat { get; set; } = string.Empty;
         public string ClaveProductoSatDescripcion { get; set; } = string.Empty;
         public string ClaveUnidadSat { get; set; } = string.Empty;
         public string ClaveUnidadSatDescripcion { get; set; } = string.Empty;
         public string ObjetoImpuesto { get; set; } = string.Empty;
+        public decimal PorcentajeIVA { get; set; }
         public bool EsProductoFisico { get; set; }
         public decimal? PesoKg { get; set; }
         public decimal? LargoCm { get; set; }
@@ -155,9 +220,14 @@ namespace checklistWs.Models.ProductosServicios
         public decimal PrecioPublico { get; set; }
         public decimal? PrecioComparacion { get; set; }
         public decimal? PrecioUnitarioMonto { get; set; }
+        public decimal? PrecioUnitarioCantidadTotal { get; set; }
         public decimal? PrecioUnitarioBaseCantidad { get; set; }
         public string PrecioUnitarioUnidad { get; set; } = string.Empty;
+        public string PrecioUnitarioUnidadTotal { get; set; } = string.Empty;
+        public string PrecioUnitarioUnidadBase { get; set; } = string.Empty;
+        public bool PrecioUnitarioModificado { get; set; }
         public string ObjetoImpuesto { get; set; } = string.Empty;
+        public decimal PorcentajeIVA { get; set; }
         public string ClaveProductoSat { get; set; } = string.Empty;
         public string ClaveUnidadSat { get; set; } = string.Empty;
         public bool EsProductoFisico { get; set; }
@@ -178,6 +248,7 @@ namespace checklistWs.Models.ProductosServicios
         public List<ProductoServicioOpcionVarianteGuardarRequest> OpcionesVariante { get; set; } = new List<ProductoServicioOpcionVarianteGuardarRequest>();
         public List<ProductoServicioVarianteGuardarRequest> Variantes { get; set; } = new List<ProductoServicioVarianteGuardarRequest>();
         public List<ProductoServicioMultimediaGuardarRequest> Multimedia { get; set; } = new List<ProductoServicioMultimediaGuardarRequest>();
+        public List<ProductoServicioPresentacionVentaGuardarRequest> PresentacionesVenta { get; set; } = new List<ProductoServicioPresentacionVentaGuardarRequest>();
     }
 
     public class ProductoServicioImagenGuardarRequest
@@ -252,6 +323,13 @@ namespace checklistWs.Models.ProductosServicios
     {
         public string Abreviatura { get; set; } = string.Empty;
         public bool PermiteDecimales { get; set; }
+        public string TipoUnidad { get; set; } = "OTHER";
+        public string TipoUnidadNombre { get; set; } = "Otra";
+        public bool EsSistema { get; set; }
+        public bool EsPersonalizada { get; set; }
+        public decimal? FactorConversion { get; set; }
+        public bool Convertible { get; set; }
+        public string ClaveSistema { get; set; } = string.Empty;
     }
 
     public class ProductoServicioColeccionDto : ProductoServicioCatalogoBasicoDto
@@ -329,6 +407,7 @@ namespace checklistWs.Models.ProductosServicios
         public string Descripcion { get; set; } = string.Empty;
         public string Abreviatura { get; set; } = string.Empty;
         public bool PermiteDecimales { get; set; }
+        public string TipoUnidad { get; set; } = "OTHER";
     }
 
     public class ProductoServicioColeccionGuardarRequest
@@ -386,6 +465,11 @@ namespace checklistWs.Models.ProductosServicios
         public decimal? AltoCm { get; set; }
         public decimal? PesoEmpaqueVacioKg { get; set; }
         public bool? EsPredeterminado { get; set; }
+        public string TipoUnidad { get; set; } = string.Empty;
+        public bool? EsSistema { get; set; }
+        public bool? EsPersonalizada { get; set; }
+        public decimal? FactorConversion { get; set; }
+        public bool? Convertible { get; set; }
     }
 
     public class ProductoServicioCombosDto
