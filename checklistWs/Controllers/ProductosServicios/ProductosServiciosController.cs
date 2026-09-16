@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using checklistWs.Models.ProductosServicios;
 using checklistWs.Services.ProductosServicios;
+using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Firebase.Auth;
 using Firebase.Auth.Providers;
@@ -70,6 +71,40 @@ namespace checklistWs.Controllers.ProductosServicios
         private static readonly string[] MimeTypesImagenPermitidos = new[] { "image/jpeg", "image/png", "image/webp" };
         private static readonly string[] ExtensionesImagenPermitidas = new[] { ".jpg", ".jpeg", ".png", ".webp" };
         private static readonly string[] TiposMultimediaPermitidos = new[] { "foto", "video", "documento" };
+        private static readonly HashSet<string> CategoriaActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Categorias",
+            "ObtenerCategoriasProductosServicios",
+            "ObtenerCategoriaProductoServicio",
+            "GuardarCategoriaProductoServicio",
+            "BajaCategoriaProductoServicio",
+            "ActivarCategoriaProductoServicio",
+            "ObtenerCatalogoCategoriasProductosServicios",
+            "ExportarCategoriasProductosServicios"
+        };
+        private static readonly HashSet<string> MarcaActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Marcas",
+            "ObtenerMarcasProductosServicios",
+            "ObtenerMarcaProductoServicio",
+            "GuardarMarcaProductoServicio",
+            "GuardarTagProductoServicio",
+            "BajaMarcaProductoServicio",
+            "ActivarMarcaProductoServicio",
+            "ObtenerCatalogoMarcasProductosServicios",
+            "ExportarMarcasProductosServicios"
+        };
+        private static readonly HashSet<string> UnidadMedidaActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "UnidadesMedida",
+            "ObtenerUnidadesMedidaProductosServicios",
+            "ObtenerUnidadMedidaProductoServicio",
+            "GuardarUnidadMedidaProductoServicio",
+            "BajaUnidadMedidaProductoServicio",
+            "ActivarUnidadMedidaProductoServicio",
+            "ObtenerCatalogoUnidadesMedidaProductosServicios",
+            "ExportarUnidadesMedidaProductosServicios"
+        };
         private static readonly string[] EmpresaClaimKeys = new[] { "idEmpresa", "empresaId", "tenantId", "companyId", "tenant", "idempresa" };
         private static readonly string[] EmpresaNombreClaimKeys = new[] { "empresa", "empresaNombre", "tenantName", "companyName", "nombreEmpresa" };
         private static readonly string[] UsuarioClaimKeys = new[] { ClaimTypes.NameIdentifier, "sub", "idUsuario", "userid", "uid" };
@@ -78,10 +113,18 @@ namespace checklistWs.Controllers.ProductosServicios
         private const string ProxyUsuarioIdHeader = "X-ProductosServicios-Proxy-UsuarioId";
         private const string ProxyTimestampHeader = "X-ProductosServicios-Proxy-Timestamp";
         private const string ProxySignatureHeader = "X-ProductosServicios-Proxy-Signature";
+        private const string AbcPermissionCode = ProductosServiciosAuthorizationDefaults.AbcPermissionCode;
+        private const string CategoriasPermissionCode = ProductosServiciosAuthorizationDefaults.CategoriasPermissionCode;
+        private const string MarcasPermissionCode = ProductosServiciosAuthorizationDefaults.MarcasPermissionCode;
+        private const string UnidadesMedidaPermissionCode = ProductosServiciosAuthorizationDefaults.UnidadesMedidaPermissionCode;
         private const string ProxyContextItemKey = "__ProductosServiciosProxyContext";
 
         private readonly IConfiguration _configuration;
-        private readonly SqlConnectionFactory _connectionFactory;
+        private readonly ITenantDatabaseResolver _tenantDatabaseResolver;
+        private readonly ITenantSqlConnectionFactory _tenantSqlConnectionFactory;
+        private readonly IProductosServiciosCompatibilityGate _compatibilityGate;
+        private readonly IProductosServiciosAuthorizationService _authorizationService;
+        private readonly IProductosServiciosCompanyBootstrapper _companyBootstrapper;
         private readonly ILogger<ProductosServiciosController> _logger;
 
         private sealed class ProductoServicioLogisticsMetrics
@@ -92,11 +135,22 @@ namespace checklistWs.Controllers.ProductosServicios
             public decimal? PesoFacturableKg { get; init; }
         }
 
-        public ProductosServiciosController(IConfiguration configuration, ILogger<ProductosServiciosController> logger)
+        public ProductosServiciosController(
+            IConfiguration configuration,
+            ILogger<ProductosServiciosController> logger,
+            ITenantDatabaseResolver tenantDatabaseResolver,
+            ITenantSqlConnectionFactory tenantSqlConnectionFactory,
+            IProductosServiciosCompatibilityGate compatibilityGate,
+            IProductosServiciosAuthorizationService authorizationService,
+            IProductosServiciosCompanyBootstrapper companyBootstrapper)
         {
             _configuration = configuration;
-            _connectionFactory = new SqlConnectionFactory(configuration);
             _logger = logger;
+            _tenantDatabaseResolver = tenantDatabaseResolver;
+            _tenantSqlConnectionFactory = tenantSqlConnectionFactory;
+            _compatibilityGate = compatibilityGate;
+            _authorizationService = authorizationService;
+            _companyBootstrapper = companyBootstrapper;
         }
 
         [HttpGet("ObtenerProductosServicios")]
@@ -110,14 +164,14 @@ namespace checklistWs.Controllers.ProductosServicios
             bool? causaInventario = null,
             string estatus = "")
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 StringBuilder query = new StringBuilder(@"
@@ -284,14 +338,14 @@ WHERE ps.idEmpresa = @IdEmpresa");
         [HttpGet("ObtenerProductoServicio")]
         public async Task<IActionResult> ObtenerProductoServicio(Guid idEmpresa, Guid idProductoServicio)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 using SqlCommand command = new SqlCommand(@"
@@ -491,7 +545,7 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
         [HttpGet("ObtenerFichaTecnicaProductoServicio")]
         public async Task<IActionResult> ObtenerFichaTecnicaProductoServicio(Guid idEmpresa, Guid idProductoServicio)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
@@ -503,7 +557,7 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 ProductoServicioFichaTecnicaDto? ficha = await ObtenerFichaTecnicaProductoAsync(connection, context.IdEmpresa, idProductoServicio);
@@ -523,7 +577,7 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
         [HttpGet("ExportarFichaTecnicaProductoServicioPdf")]
         public async Task<IActionResult> ExportarFichaTecnicaProductoServicioPdf(Guid idEmpresa, Guid idProductoServicio)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
@@ -535,7 +589,7 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 ProductoServicioFichaTecnicaDto? ficha = await ObtenerFichaTecnicaProductoAsync(connection, context.IdEmpresa, idProductoServicio);
@@ -914,7 +968,7 @@ WHERE ps.idEmpresa = @IdEmpresa
         [RequestSizeLimit(UploadTemporalRequestLimitBytes)]
         public async Task<IActionResult> SubirImagenTemporal(Guid idEmpresa, IFormFile? archivo)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -981,7 +1035,7 @@ WHERE ps.idEmpresa = @IdEmpresa
         [HttpPost("LimpiarImagenTemporal")]
         public async Task<IActionResult> LimpiarImagenTemporal(Guid idEmpresa, [FromBody] ProductoServicioImagenTemporalCleanupRequest? request)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -1021,7 +1075,7 @@ WHERE ps.idEmpresa = @IdEmpresa
         [RequestSizeLimit(UploadTemporalMultimediaRequestLimitBytes)]
         public async Task<IActionResult> SubirMultimediaTemporal(Guid idEmpresa, [FromForm] string tipoMultimedia, [FromForm] string operacionCarga, IFormFile? archivo)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -1091,7 +1145,7 @@ WHERE ps.idEmpresa = @IdEmpresa
         [HttpPost("LimpiarMultimediaTemporal")]
         public async Task<IActionResult> LimpiarMultimediaTemporal(Guid idEmpresa, [FromBody] ProductoServicioMultimediaTemporalCleanupRequest? request)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -1129,7 +1183,7 @@ WHERE ps.idEmpresa = @IdEmpresa
         [HttpPost("GuardarProductoServicio")]
         public async Task<IActionResult> GuardarProductoServicio([FromBody] ProductoServicioGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -1151,7 +1205,7 @@ WHERE ps.idEmpresa = @IdEmpresa
 
                 try
                 {
-                    using SqlConnection connection = CreateConnection();
+                    using SqlConnection connection = CreateConnection(context);
                     await connection.OpenAsync();
                     using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
@@ -1284,7 +1338,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     await SynchronizeProductoAtributosAsync(connection, transaction, context.IdEmpresa, productoId, normalized.Atributos, ahora);
                     Dictionary<string, VariantOptionReference> optionReferences = await SynchronizeProductoOpcionesVarianteAsync(connection, transaction, context.IdEmpresa, productoId, normalized.OpcionesVariante, ahora);
                     variantSync = await SynchronizeProductoVariantesAsync(connection, transaction, context, productoId, normalized.Variantes, optionReferences, ahora);
-                    await SynchronizeProductoMultimediaAsync(connection, transaction, context.IdEmpresa, productoId, preparedMultimedia.FinalItems, ahora);
+                    await SynchronizeProductoMultimediaAsync(connection, transaction, context.IdEmpresa, productoId, preparedMultimedia, ahora);
                     transaction.Commit();
 
                     await FinalizeImageOperationAfterCommitAsync(preparedImage, imageMutation.PreviousImageCleanup);
@@ -1319,35 +1373,35 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpPost("BajaProductoServicio")]
         public async Task<IActionResult> BajaProductoServicio(Guid idEmpresa, Guid idProductoServicio)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusProductoServicioAsync(context.IdEmpresa, idProductoServicio, false);
+            return await CambiarEstatusProductoServicioAsync(context, context.IdEmpresa, idProductoServicio, false);
         }
 
         [HttpPost("ActivarProductoServicio")]
         public async Task<IActionResult> ActivarProductoServicio(Guid idEmpresa, Guid idProductoServicio)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusProductoServicioAsync(context.IdEmpresa, idProductoServicio, true);
+            return await CambiarEstatusProductoServicioAsync(context, context.IdEmpresa, idProductoServicio, true);
         }
 
         [HttpPost("GuardarPresentacionVentaProductoServicio")]
         public async Task<IActionResult> GuardarPresentacionVentaProductoServicio([FromBody] ProductoServicioPresentacionVentaGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write)) return error!;
             if (request.IdProductoServicio == Guid.Empty || request.IdUnidadVenta == Guid.Empty || request.CantidadVenta <= 0 || request.EquivalenciaBase <= 0 || request.Precio < 0 || request.Orden < 0)
                 return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Los datos de la presentación no son válidos." });
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
                 ProductoServicioSnapshot? producto = await ObtenerProductoServicioSnapshotAsync(connection, transaction, context.IdEmpresa, request.IdProductoServicio);
@@ -1432,10 +1486,10 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpPost("BajaPresentacionVentaProductoServicio")]
         public async Task<IActionResult> BajaPresentacionVentaProductoServicio(Guid idEmpresa, Guid idPresentacionVenta)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write)) return error!;
             try
             {
-                using SqlConnection connection = CreateConnection(); await connection.OpenAsync(); using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+                using SqlConnection connection = CreateConnection(context); await connection.OpenAsync(); using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
                 List<ProductoServicioPresentacionVentaDto> item = await ObtenerPresentacionesVentaPorIdAsync(connection, transaction, context.IdEmpresa, idPresentacionVenta);
                 ProductoServicioPresentacionVentaDto? presentacion = item.FirstOrDefault();
                 if (presentacion == null) { transaction.Rollback(); return NotFound(new ProductoServicioOperacionResponse { Mensaje = "La presentación no está disponible." }); }
@@ -1452,10 +1506,10 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpPost("CalcularPresentacionesVentaProductoServicio")]
         public async Task<IActionResult> CalcularPresentacionesVentaProductoServicio([FromBody] ProductoServicioPresentacionesVentaCalcularRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read)) return error!;
             try
             {
-                using SqlConnection connection = CreateConnection(); await connection.OpenAsync();
+                using SqlConnection connection = CreateConnection(context); await connection.OpenAsync();
                 ProductoServicioDetalleDto? producto = await ObtenerProductoServicioParaCalculoAsync(connection, context.IdEmpresa, request.IdProductoServicio);
                 if (producto == null || producto.Tipo != TipoProducto) return NotFound(new ProductoServicioOperacionResponse { Mensaje = "El producto no está disponible." });
                 List<ProductoServicioPresentacionVentaDto> presentaciones = await ObtenerPresentacionesVentaAsync(connection, null, context.IdEmpresa, producto.Id, true);
@@ -1467,7 +1521,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpGet("ObtenerCombosProductosServicios")]
         public async Task<IActionResult> ObtenerCombosProductosServicios(Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
@@ -1477,13 +1531,13 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                 ProductoServicioCombosDto response = new ProductoServicioCombosDto
                 {
                     FactorVolumetrico = ResolveFactorVolumetrico(context.IdEmpresa),
-                    Categorias = await ObtenerCategoriasComboAsync(context.IdEmpresa, null),
-                    Marcas = await ObtenerCatalogoBasicoComboAsync(context.IdEmpresa, "dbo.ProductosServiciosMarcas"),
-                    UnidadesMedida = await ObtenerUnidadesComboAsync(context.IdEmpresa),
-                    Colecciones = await ObtenerColeccionesComboAsync(context.IdEmpresa),
-                    Paquetes = await ObtenerPaquetesComboAsync(context.IdEmpresa),
-                    Atributos = await ObtenerAtributosComboAsync(context.IdEmpresa),
-                    Tags = await ObtenerTagsCatalogoAsync(context.IdEmpresa),
+                    Categorias = await ObtenerCategoriasComboAsync(context, context.IdEmpresa, null),
+                    Marcas = await ObtenerCatalogoBasicoComboAsync(context, context.IdEmpresa, "dbo.ProductosServiciosMarcas"),
+                    UnidadesMedida = await ObtenerUnidadesComboAsync(context, context.IdEmpresa),
+                    Colecciones = await ObtenerColeccionesComboAsync(context, context.IdEmpresa),
+                    Paquetes = await ObtenerPaquetesComboAsync(context, context.IdEmpresa),
+                    Atributos = await ObtenerAtributosComboAsync(context, context.IdEmpresa),
+                    Tags = await ObtenerTagsCatalogoAsync(context, context.IdEmpresa),
                     Tipos = new List<ProductoServicioOpcionDto>
                     {
                         new ProductoServicioOpcionDto { Clave = TipoProducto.ToString(), Nombre = "Producto" },
@@ -1531,7 +1585,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpPost("GuardarTagProductoServicio")]
         public async Task<IActionResult> GuardarTagProductoServicio([FromBody] ProductoServicioTagGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -1544,7 +1598,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Captura un nombre de etiqueta." });
                 }
 
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
@@ -1570,7 +1624,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpGet("BuscarCatalogosSatProductoServicio")]
         public async Task<IActionResult> BuscarCatalogosSatProductoServicio(Guid idEmpresa, string tipo = "", string q = "", int take = 40)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
@@ -1614,14 +1668,14 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpGet("ObtenerResumenProductosServicios")]
         public async Task<IActionResult> ObtenerResumenProductosServicios(Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 using SqlCommand command = new SqlCommand(@"
@@ -1712,14 +1766,14 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpGet("ObtenerCategoriasProductosServicios")]
         public async Task<IActionResult> ObtenerCategoriasProductosServicios(Guid idEmpresa, string busqueda = "", string estatus = "")
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                return Ok(await ObtenerCategoriasListadoAsync(context.IdEmpresa, busqueda, estatus));
+                return Ok(await ObtenerCategoriasListadoAsync(context, context.IdEmpresa, busqueda, estatus));
             }
             catch (Exception ex)
             {
@@ -1730,14 +1784,14 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpGet("ObtenerCategoriaProductoServicio")]
         public async Task<IActionResult> ObtenerCategoriaProductoServicio(Guid idEmpresa, Guid idCategoria)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                ProductoServicioCategoriaDto? item = await ObtenerCategoriaAsync(context.IdEmpresa, idCategoria);
+                ProductoServicioCategoriaDto? item = await ObtenerCategoriaAsync(context, context.IdEmpresa, idCategoria);
                 if (item == null)
                 {
                     return NotFound(new ProductoServicioOperacionResponse { Mensaje = "La categoría no está disponible." });
@@ -1754,7 +1808,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpPost("GuardarCategoriaProductoServicio")]
         public async Task<IActionResult> GuardarCategoriaProductoServicio([FromBody] ProductoServicioCategoriaGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -1767,7 +1821,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validacion });
                 }
 
-                return await GuardarCategoriaAsync(request, context.IdEmpresa);
+                return await GuardarCategoriaAsync(context, request, context.IdEmpresa);
             }
             catch (Exception ex)
             {
@@ -1778,36 +1832,36 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpPost("BajaCategoriaProductoServicio")]
         public async Task<IActionResult> BajaCategoriaProductoServicio(Guid idEmpresa, Guid idCategoria)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusCatalogoBasicoAsync(context.IdEmpresa, idCategoria, "dbo.ProductosServiciosCategorias", "la categoría", false);
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idCategoria, "dbo.ProductosServiciosCategorias", "la categoría", false);
         }
 
         [HttpPost("ActivarCategoriaProductoServicio")]
         public async Task<IActionResult> ActivarCategoriaProductoServicio(Guid idEmpresa, Guid idCategoria)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusCatalogoBasicoAsync(context.IdEmpresa, idCategoria, "dbo.ProductosServiciosCategorias", "la categoría", true);
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idCategoria, "dbo.ProductosServiciosCategorias", "la categoría", true);
         }
 
         [HttpGet("ObtenerCatalogoCategoriasProductosServicios")]
         public async Task<IActionResult> ObtenerCatalogoCategoriasProductosServicios(Guid idEmpresa, byte? tipo = null, string busqueda = "")
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                return Ok(await ObtenerCategoriasComboAsync(context.IdEmpresa, tipo, busqueda));
+                return Ok(await ObtenerCategoriasComboAsync(context, context.IdEmpresa, tipo, busqueda));
             }
             catch (Exception ex)
             {
@@ -1824,14 +1878,14 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpGet("ObtenerMarcasProductosServicios")]
         public async Task<IActionResult> ObtenerMarcasProductosServicios(Guid idEmpresa, string busqueda = "", string estatus = "")
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                return Ok(await ObtenerMarcasListadoAsync(context.IdEmpresa, busqueda, estatus));
+                return Ok(await ObtenerMarcasListadoAsync(context, context.IdEmpresa, busqueda, estatus));
             }
             catch (Exception ex)
             {
@@ -1842,14 +1896,14 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpGet("ObtenerMarcaProductoServicio")]
         public async Task<IActionResult> ObtenerMarcaProductoServicio(Guid idEmpresa, Guid idMarca)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                ProductoServicioMarcaDto? item = await ObtenerMarcaAsync(context.IdEmpresa, idMarca);
+                ProductoServicioMarcaDto? item = await ObtenerMarcaAsync(context, context.IdEmpresa, idMarca);
                 if (item == null)
                 {
                     return NotFound(new ProductoServicioOperacionResponse { Mensaje = "La marca no está disponible." });
@@ -1866,7 +1920,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpPost("GuardarMarcaProductoServicio")]
         public async Task<IActionResult> GuardarMarcaProductoServicio([FromBody] ProductoServicioMarcaGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -1880,6 +1934,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
                 }
 
                 return await GuardarCatalogoBasicoAsync(
+                    context,
                     request.Id,
                     context.IdEmpresa,
                     "dbo.ProductosServiciosMarcas",
@@ -1902,36 +1957,36 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpPost("BajaMarcaProductoServicio")]
         public async Task<IActionResult> BajaMarcaProductoServicio(Guid idEmpresa, Guid idMarca)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusCatalogoBasicoAsync(context.IdEmpresa, idMarca, "dbo.ProductosServiciosMarcas", "la marca", false);
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idMarca, "dbo.ProductosServiciosMarcas", "la marca", false);
         }
 
         [HttpPost("ActivarMarcaProductoServicio")]
         public async Task<IActionResult> ActivarMarcaProductoServicio(Guid idEmpresa, Guid idMarca)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusCatalogoBasicoAsync(context.IdEmpresa, idMarca, "dbo.ProductosServiciosMarcas", "la marca", true);
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idMarca, "dbo.ProductosServiciosMarcas", "la marca", true);
         }
 
         [HttpGet("ObtenerCatalogoMarcasProductosServicios")]
         public async Task<IActionResult> ObtenerCatalogoMarcasProductosServicios(Guid idEmpresa, string busqueda = "")
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                return Ok(await ObtenerCatalogoBasicoComboAsync(context.IdEmpresa, "dbo.ProductosServiciosMarcas", busqueda));
+                return Ok(await ObtenerCatalogoBasicoComboAsync(context, context.IdEmpresa, "dbo.ProductosServiciosMarcas", busqueda));
             }
             catch (Exception ex)
             {
@@ -1948,14 +2003,14 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpGet("ObtenerUnidadesMedidaProductosServicios")]
         public async Task<IActionResult> ObtenerUnidadesMedidaProductosServicios(Guid idEmpresa, string busqueda = "", string estatus = "")
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                return Ok(await ObtenerUnidadesListadoAsync(context.IdEmpresa, busqueda, estatus));
+                return Ok(await ObtenerUnidadesListadoAsync(context, context.IdEmpresa, busqueda, estatus));
             }
             catch (Exception ex)
             {
@@ -1966,14 +2021,14 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpGet("ObtenerUnidadMedidaProductoServicio")]
         public async Task<IActionResult> ObtenerUnidadMedidaProductoServicio(Guid idEmpresa, Guid idUnidadMedida)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                ProductoServicioUnidadMedidaDto? item = await ObtenerUnidadAsync(context.IdEmpresa, idUnidadMedida);
+                ProductoServicioUnidadMedidaDto? item = await ObtenerUnidadAsync(context, context.IdEmpresa, idUnidadMedida);
                 if (item == null)
                 {
                     return NotFound(new ProductoServicioOperacionResponse { Mensaje = "La unidad de medida no está disponible." });
@@ -1990,7 +2045,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpPost("GuardarUnidadMedidaProductoServicio")]
         public async Task<IActionResult> GuardarUnidadMedidaProductoServicio([FromBody] ProductoServicioUnidadMedidaGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -2003,7 +2058,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validacion });
                 }
 
-                return await GuardarUnidadControladaAsync(request, context.IdEmpresa);
+                return await GuardarUnidadControladaAsync(context, request, context.IdEmpresa);
             }
             catch (Exception ex)
             {
@@ -2014,36 +2069,36 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpPost("BajaUnidadMedidaProductoServicio")]
         public async Task<IActionResult> BajaUnidadMedidaProductoServicio(Guid idEmpresa, Guid idUnidadMedida)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusCatalogoBasicoAsync(context.IdEmpresa, idUnidadMedida, "dbo.ProductosServiciosUnidadesMedida", "la unidad de medida", false);
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idUnidadMedida, "dbo.ProductosServiciosUnidadesMedida", "la unidad de medida", false);
         }
 
         [HttpPost("ActivarUnidadMedidaProductoServicio")]
         public async Task<IActionResult> ActivarUnidadMedidaProductoServicio(Guid idEmpresa, Guid idUnidadMedida)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await CambiarEstatusCatalogoBasicoAsync(context.IdEmpresa, idUnidadMedida, "dbo.ProductosServiciosUnidadesMedida", "la unidad de medida", true);
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idUnidadMedida, "dbo.ProductosServiciosUnidadesMedida", "la unidad de medida", true);
         }
 
         [HttpGet("ObtenerCatalogoUnidadesMedidaProductosServicios")]
         public async Task<IActionResult> ObtenerCatalogoUnidadesMedidaProductosServicios(Guid idEmpresa, string busqueda = "")
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                return Ok(await ObtenerUnidadesComboAsync(context.IdEmpresa, busqueda));
+                return Ok(await ObtenerUnidadesComboAsync(context, context.IdEmpresa, busqueda));
             }
             catch (Exception ex)
             {
@@ -2060,7 +2115,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
         [HttpPost("GuardarColeccionProductoServicio")]
         public async Task<IActionResult> GuardarColeccionProductoServicio([FromBody] ProductoServicioColeccionGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -2075,7 +2130,7 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
 
                 request.Descripcion = NormalizeDescripcionCatalogo(request.Descripcion);
 
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
@@ -2162,7 +2217,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpPost("GuardarPaqueteProductoServicio")]
         public async Task<IActionResult> GuardarPaqueteProductoServicio([FromBody] ProductoServicioPaqueteGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -2175,7 +2230,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validation });
                 }
 
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
@@ -2257,7 +2312,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpPost("GuardarAtributoProductoServicio")]
         public async Task<IActionResult> GuardarAtributoProductoServicio([FromBody] ProductoServicioAtributoCatalogoGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -2270,7 +2325,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validation });
                 }
 
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
                 Guid id = request.Id ?? Guid.NewGuid();
@@ -2333,7 +2388,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
         [HttpGet("ObtenerValoresAtributoProductoServicio")]
         public async Task<IActionResult> ObtenerValoresAtributoProductoServicio(Guid idEmpresa, Guid idAtributo)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
@@ -2345,7 +2400,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 using SqlCommand command = new SqlCommand(@"
@@ -2382,7 +2437,7 @@ ORDER BY Orden, Valor", connection);
         [HttpPost("GuardarValorAtributoProductoServicio")]
         public async Task<IActionResult> GuardarValorAtributoProductoServicio([FromBody] ProductoServicioAtributoValorCatalogoGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
@@ -2395,7 +2450,7 @@ ORDER BY Orden, Valor", connection);
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validation });
                 }
 
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
@@ -2472,14 +2527,14 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND idAtributo = @IdAtributo", connect
         [HttpGet("ObtenerExistenciaProductoServicio")]
         public async Task<IActionResult> ObtenerExistenciaProductoServicio(Guid idEmpresa, Guid idProductoServicio)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 ProductoServicioExistenciaDto? item = await ObtenerExistenciaInternaAsync(connection, null, context.IdEmpresa, idProductoServicio);
@@ -2499,14 +2554,14 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND idAtributo = @IdAtributo", connect
         [HttpGet("ObtenerMovimientosInventarioProductoServicio")]
         public async Task<IActionResult> ObtenerMovimientosInventarioProductoServicio(Guid idEmpresa, Guid idProductoServicio)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
             {
                 return error!;
             }
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 return Ok(await ObtenerMovimientosInventarioInternoAsync(connection, context.IdEmpresa, idProductoServicio, null));
@@ -2520,48 +2575,48 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND idAtributo = @IdAtributo", connect
         [HttpPost("RegistrarEntradaInventarioProductoServicio")]
         public async Task<IActionResult> RegistrarEntradaInventarioProductoServicio([FromBody] ProductoServicioMovimientoGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await RegistrarMovimientoInventarioAsync(request, context.IdEmpresa, MovimientoEntrada);
+            return await RegistrarMovimientoInventarioAsync(context, request, context.IdEmpresa, MovimientoEntrada);
         }
 
         [HttpPost("RegistrarSalidaInventarioProductoServicio")]
         public async Task<IActionResult> RegistrarSalidaInventarioProductoServicio([FromBody] ProductoServicioMovimientoGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await RegistrarMovimientoInventarioAsync(request, context.IdEmpresa, MovimientoSalida);
+            return await RegistrarMovimientoInventarioAsync(context, request, context.IdEmpresa, MovimientoSalida);
         }
 
         [HttpPost("RegistrarAjustePositivoInventarioProductoServicio")]
         public async Task<IActionResult> RegistrarAjustePositivoInventarioProductoServicio([FromBody] ProductoServicioMovimientoGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await RegistrarMovimientoInventarioAsync(request, context.IdEmpresa, MovimientoAjustePositivo);
+            return await RegistrarMovimientoInventarioAsync(context, request, context.IdEmpresa, MovimientoAjustePositivo);
         }
 
         [HttpPost("RegistrarAjusteNegativoInventarioProductoServicio")]
         public async Task<IActionResult> RegistrarAjusteNegativoInventarioProductoServicio([FromBody] ProductoServicioMovimientoGuardarRequest request, Guid idEmpresa)
         {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
             {
                 return error!;
             }
 
-            return await RegistrarMovimientoInventarioAsync(request, context.IdEmpresa, MovimientoAjusteNegativo);
+            return await RegistrarMovimientoInventarioAsync(context, request, context.IdEmpresa, MovimientoAjusteNegativo);
         }
 
-        private async Task<IActionResult> RegistrarMovimientoInventarioAsync(ProductoServicioMovimientoGuardarRequest request, Guid effectiveEmpresaId, byte tipoMovimiento)
+        private async Task<IActionResult> RegistrarMovimientoInventarioAsync(RequestContext context, ProductoServicioMovimientoGuardarRequest request, Guid effectiveEmpresaId, byte tipoMovimiento)
         {
             try
             {
@@ -2571,7 +2626,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND idAtributo = @IdAtributo", connect
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validacion });
                 }
 
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
@@ -2606,7 +2661,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND idAtributo = @IdAtributo", connect
                 }
 
                 decimal existenciaPosterior = CalcularExistenciaPosterior(existencia.ExistenciaActual, request.Cantidad, tipoMovimiento);
-                await ActualizarExistenciaAsync(connection, transaction, existencia.Id, existenciaPosterior, existencia.ExistenciaMinima, request.CostoUnitario, ahora);
+                await ActualizarExistenciaAsync(connection, transaction, effectiveEmpresaId, existencia.Id, existenciaPosterior, existencia.ExistenciaMinima, request.CostoUnitario, ahora);
                 await InsertarMovimientoInventarioAsync(connection, transaction, effectiveEmpresaId, request.IdProductoServicio, tipoMovimiento, request.Cantidad, existencia.ExistenciaActual, existenciaPosterior, request.CostoUnitario, request.Referencia, request.Observaciones, usuarioId, ahora);
 
                 transaction.Commit();
@@ -2618,11 +2673,11 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND idAtributo = @IdAtributo", connect
             }
         }
 
-        private async Task<IActionResult> CambiarEstatusProductoServicioAsync(Guid effectiveEmpresaId, Guid idProductoServicio, bool activar)
+        private async Task<IActionResult> CambiarEstatusProductoServicioAsync(RequestContext context, Guid effectiveEmpresaId, Guid idProductoServicio, bool activar)
         {
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 using SqlCommand command = new SqlCommand(@"
@@ -2653,9 +2708,9 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND Activo <> @Activo", connection);
             }
         }
 
-        private async Task<List<ProductoServicioCategoriaDto>> ObtenerCategoriasListadoAsync(Guid idEmpresa, string busqueda, string estatus)
+        private async Task<List<ProductoServicioCategoriaDto>> ObtenerCategoriasListadoAsync(RequestContext context, Guid idEmpresa, string busqueda, string estatus)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
@@ -2681,9 +2736,9 @@ WHERE idEmpresa = @IdEmpresa");
             return items;
         }
 
-        private async Task<ProductoServicioCategoriaDto?> ObtenerCategoriaAsync(Guid idEmpresa, Guid idCategoria)
+        private async Task<ProductoServicioCategoriaDto?> ObtenerCategoriaAsync(RequestContext context, Guid idEmpresa, Guid idCategoria)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             using SqlCommand command = new SqlCommand(@"
@@ -2697,9 +2752,9 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
             return await reader.ReadAsync() ? MapCategoria(reader) : null;
         }
 
-        private async Task<List<ProductoServicioMarcaDto>> ObtenerMarcasListadoAsync(Guid idEmpresa, string busqueda, string estatus)
+        private async Task<List<ProductoServicioMarcaDto>> ObtenerMarcasListadoAsync(RequestContext context, Guid idEmpresa, string busqueda, string estatus)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
@@ -2725,9 +2780,9 @@ WHERE idEmpresa = @IdEmpresa");
             return items;
         }
 
-        private async Task<ProductoServicioMarcaDto?> ObtenerMarcaAsync(Guid idEmpresa, Guid idMarca)
+        private async Task<ProductoServicioMarcaDto?> ObtenerMarcaAsync(RequestContext context, Guid idEmpresa, Guid idMarca)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             using SqlCommand command = new SqlCommand(@"
@@ -2741,9 +2796,9 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
             return await reader.ReadAsync() ? MapMarca(reader) : null;
         }
 
-        private async Task<List<ProductoServicioUnidadMedidaDto>> ObtenerUnidadesListadoAsync(Guid idEmpresa, string busqueda, string estatus)
+        private async Task<List<ProductoServicioUnidadMedidaDto>> ObtenerUnidadesListadoAsync(RequestContext context, Guid idEmpresa, string busqueda, string estatus)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
@@ -2773,9 +2828,9 @@ WHERE idEmpresa = @IdEmpresa");
             return items;
         }
 
-        private async Task<ProductoServicioUnidadMedidaDto?> ObtenerUnidadAsync(Guid idEmpresa, Guid idUnidadMedida)
+        private async Task<ProductoServicioUnidadMedidaDto?> ObtenerUnidadAsync(RequestContext context, Guid idEmpresa, Guid idUnidadMedida)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             using SqlCommand command = new SqlCommand(@"
@@ -2789,9 +2844,10 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
             return await reader.ReadAsync() ? MapUnidad(reader) : null;
         }
 
-        private async Task<IActionResult> GuardarCategoriaAsync(ProductoServicioCategoriaGuardarRequest request, Guid idEmpresa)
+        private async Task<IActionResult> GuardarCategoriaAsync(RequestContext context, ProductoServicioCategoriaGuardarRequest request, Guid idEmpresa)
         {
             return await GuardarCatalogoBasicoAsync(
+                context,
                 request.Id,
                 idEmpresa,
                 "dbo.ProductosServiciosCategorias",
@@ -2808,6 +2864,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
         }
 
         private async Task<IActionResult> GuardarCatalogoBasicoAsync(
+            RequestContext context,
             Guid? id,
             Guid idEmpresa,
             string tableName,
@@ -2822,7 +2879,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
             byte? aplicaA = null,
             string? duplicateNameMessage = null)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
             using SqlTransaction transaction = connection.BeginTransaction();
 
@@ -2924,11 +2981,11 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id";
             });
         }
 
-        private async Task<IActionResult> CambiarEstatusCatalogoBasicoAsync(Guid idEmpresa, Guid id, string tableName, string label, bool activar)
+        private async Task<IActionResult> CambiarEstatusCatalogoBasicoAsync(RequestContext context, Guid idEmpresa, Guid id, string tableName, string label, bool activar)
         {
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
 
                 if (tableName == "dbo.ProductosServiciosUnidadesMedida")
@@ -2970,9 +3027,9 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND Activo <> @Activo", connection);
             }
         }
 
-        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerCategoriasComboAsync(Guid idEmpresa, byte? tipo, string busqueda = "")
+        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerCategoriasComboAsync(RequestContext context, Guid idEmpresa, byte? tipo, string busqueda = "")
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
@@ -3010,9 +3067,9 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1");
             return items;
         }
 
-        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerCatalogoBasicoComboAsync(Guid idEmpresa, string tableName, string busqueda = "")
+        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerCatalogoBasicoComboAsync(RequestContext context, Guid idEmpresa, string tableName, string busqueda = "")
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder($@"
@@ -3043,9 +3100,9 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1");
             return items;
         }
 
-        private async Task<List<ProductoServicioTagDto>> ObtenerTagsCatalogoAsync(Guid idEmpresa, string busqueda = "")
+        private async Task<List<ProductoServicioTagDto>> ObtenerTagsCatalogoAsync(RequestContext context, Guid idEmpresa, string busqueda = "")
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
@@ -3141,9 +3198,9 @@ ORDER BY t.Nombre ASC", connection);
             return items;
         }
 
-        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerUnidadesComboAsync(Guid idEmpresa, string busqueda = "")
+        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerUnidadesComboAsync(RequestContext context, Guid idEmpresa, string busqueda = "")
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
 
             StringBuilder query = new StringBuilder(@"
@@ -3566,13 +3623,13 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
 
                     if (aplicarAjuste)
                     {
-                        await ActualizarMovimientoExistenciaInicialAsync(connection, transaction, movimientoInicial!.Id, request.ExistenciaInicial!.Value, request.Costo, ahora);
+                        await ActualizarMovimientoExistenciaInicialAsync(connection, transaction, idEmpresa, movimientoInicial!.Id, request.ExistenciaInicial!.Value, request.Costo, ahora);
                     }
                 }
 
                 if (aplicarAjuste)
                 {
-                    await ActualizarExistenciaAsync(connection, transaction, existenciaActual.Id, request.ExistenciaInicial!.Value, existenciaMinima, request.Costo, ahora);
+                    await ActualizarExistenciaAsync(connection, transaction, idEmpresa, existenciaActual.Id, request.ExistenciaInicial!.Value, existenciaMinima, request.Costo, ahora);
                     return;
                 }
             }
@@ -3584,7 +3641,7 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
                 existenciaInicial > 0 &&
                 existenciaActual.ExistenciaActual == 0)
             {
-                await ActualizarExistenciaAsync(connection, transaction, existenciaActual.Id, existenciaInicial, existenciaMinima, request.Costo, ahora);
+                await ActualizarExistenciaAsync(connection, transaction, idEmpresa, existenciaActual.Id, existenciaInicial, existenciaMinima, request.Costo, ahora);
                 await InsertarMovimientoInventarioAsync(connection, transaction, idEmpresa, productoId, MovimientoExistenciaInicial, existenciaInicial, 0m, existenciaInicial, request.Costo, "Activación inventario", "Movimiento inicial generado al convertir el registro en inventariable.", usuarioId, ahora);
             }
         }
@@ -3613,7 +3670,7 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
             await delete.ExecuteNonQueryAsync();
         }
 
-        private async Task ActualizarExistenciaAsync(SqlConnection connection, SqlTransaction transaction, Guid idExistencia, decimal existenciaPosterior, decimal existenciaMinima, decimal? costoPromedio, DateTime ahora)
+        private async Task ActualizarExistenciaAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idExistencia, decimal existenciaPosterior, decimal existenciaMinima, decimal? costoPromedio, DateTime ahora)
         {
             using SqlCommand command = new SqlCommand(@"
 UPDATE dbo.ProductosServiciosExistencias
@@ -3622,8 +3679,9 @@ SET
     ExistenciaMinima = @ExistenciaMinima,
     CostoPromedio = COALESCE(@CostoPromedio, CostoPromedio),
     FechaActualizacion = @FechaActualizacion
-WHERE id = @Id", connection, transaction);
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
 
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
             command.Parameters.AddWithValue("@Id", idExistencia);
             command.Parameters.AddWithValue("@ExistenciaActual", existenciaPosterior);
             command.Parameters.AddWithValue("@ExistenciaMinima", existenciaMinima);
@@ -3632,7 +3690,7 @@ WHERE id = @Id", connection, transaction);
             await command.ExecuteNonQueryAsync();
         }
 
-        private async Task ActualizarMovimientoExistenciaInicialAsync(SqlConnection connection, SqlTransaction transaction, Guid idMovimiento, decimal cantidad, decimal? costoUnitario, DateTime ahora)
+        private async Task ActualizarMovimientoExistenciaInicialAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idMovimiento, decimal cantidad, decimal? costoUnitario, DateTime ahora)
         {
             using SqlCommand command = new SqlCommand(@"
 UPDATE dbo.ProductosServiciosMovimientosInventario
@@ -3642,8 +3700,9 @@ SET
     ExistenciaPosterior = @ExistenciaPosterior,
     CostoUnitario = @CostoUnitario,
     Observaciones = 'Movimiento inicial ajustado durante la edición del producto inventariable.'
-WHERE id = @Id", connection, transaction);
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
 
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
             command.Parameters.AddWithValue("@Id", idMovimiento);
             command.Parameters.AddWithValue("@Cantidad", cantidad);
             command.Parameters.AddWithValue("@ExistenciaPosterior", cantidad);
@@ -4134,9 +4193,9 @@ WHERE idEmpresa = @IdEmpresa
             return string.Empty;
         }
 
-        private async Task<IActionResult> GuardarUnidadControladaAsync(ProductoServicioUnidadMedidaGuardarRequest request, Guid idEmpresa)
+        private async Task<IActionResult> GuardarUnidadControladaAsync(RequestContext context, ProductoServicioUnidadMedidaGuardarRequest request, Guid idEmpresa)
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
             using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
             Guid id = request.Id.GetValueOrDefault();
@@ -4668,9 +4727,9 @@ WHERE idEmpresa = @IdEmpresa
             command.Parameters.AddWithValue("@FechaActualizacion", ahora);
         }
 
-        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerColeccionesComboAsync(Guid idEmpresa, string busqueda = "")
+        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerColeccionesComboAsync(RequestContext context, Guid idEmpresa, string busqueda = "")
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
             StringBuilder query = new StringBuilder(@"
 SELECT id, Numero AS Codigo, Nombre, ISNULL(Descripcion, '') AS Descripcion, Activo, CAST(NULL AS tinyint) AS AplicaA, '' AS Abreviatura, CAST(NULL AS bit) AS PermiteDecimales, Numero, '' AS TipoPaquete
@@ -4697,9 +4756,9 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1");
             return items;
         }
 
-        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerPaquetesComboAsync(Guid idEmpresa, string busqueda = "")
+        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerPaquetesComboAsync(RequestContext context, Guid idEmpresa, string busqueda = "")
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
             StringBuilder query = new StringBuilder(@"
 SELECT id, Nombre AS Codigo, Nombre, N'' AS Descripcion, Activo, CAST(NULL AS tinyint) AS AplicaA, '' AS Abreviatura, CAST(NULL AS bit) AS PermiteDecimales, '' AS Numero, TipoPaquete,
@@ -4727,9 +4786,9 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1");
             return items;
         }
 
-        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerAtributosComboAsync(Guid idEmpresa, string busqueda = "")
+        private async Task<List<ProductoServicioCatalogoComboDto>> ObtenerAtributosComboAsync(RequestContext context, Guid idEmpresa, string busqueda = "")
         {
-            using SqlConnection connection = CreateConnection();
+            using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
             StringBuilder query = new StringBuilder(@"
 SELECT id, Nombre AS Codigo, Nombre, N'' AS Descripcion, Activo, CAST(NULL AS tinyint) AS AplicaA, '' AS Abreviatura, CAST(NULL AS bit) AS PermiteDecimales, '' AS Numero, '' AS TipoPaquete
@@ -5532,6 +5591,7 @@ ORDER BY CASE WHEN Foto = 1 THEN 1 WHEN Video = 1 THEN 2 ELSE 3 END, Orden, Fech
 
                 if (item.Id.HasValue && item.Id.Value != Guid.Empty)
                 {
+                    operation.ExistingItemIds.Add(item.Id.Value);
                     operation.FinalItems.Add(new ProductoServicioMultimediaDto
                     {
                         Id = item.Id.Value,
@@ -5618,9 +5678,16 @@ ORDER BY CASE WHEN Foto = 1 THEN 1 WHEN Video = 1 THEN 2 ELSE 3 END, Orden, Fech
             await CleanupUploadedFirebaseFilesAsync(operation.NewFileCompensations);
         }
 
-        private async Task SynchronizeProductoMultimediaAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, List<ProductoServicioMultimediaDto> multimediaFinal, DateTime ahora)
+        private async Task SynchronizeProductoMultimediaAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, PreparedMultimediaOperation operation, DateTime ahora)
         {
             List<ProductoServicioMultimediaDto> actual = await ObtenerMultimediaProductoAsync(connection, idEmpresa, idProductoServicio, transaction);
+            HashSet<Guid> actualIds = actual.Select(x => x.Id).ToHashSet();
+            if (operation.ExistingItemIds.Any(id => !actualIds.Contains(id)))
+            {
+                throw new ProductoServicioValidationException("Se detectó una evidencia multimedia inválida para el producto.");
+            }
+
+            List<ProductoServicioMultimediaDto> multimediaFinal = operation.FinalItems;
             HashSet<Guid> finalIds = multimediaFinal.Select(x => x.Id).ToHashSet();
             if (finalIds.Count == 0)
             {
@@ -5896,6 +5963,8 @@ END", connection, transaction);
 
         private async Task SynchronizeProductoAtributosAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, List<ProductoServicioAtributoGuardarRequest> atributos, DateTime ahora)
         {
+            await ValidateProductoAtributoRequestIdsAsync(connection, transaction, idEmpresa, idProductoServicio, atributos);
+
             using SqlCommand deleteValores = new SqlCommand(@"
 DELETE pav
 FROM dbo.ProductosServiciosProductoAtributoValores pav
@@ -5963,6 +6032,8 @@ VALUES
 
         private async Task<Dictionary<string, VariantOptionReference>> SynchronizeProductoOpcionesVarianteAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, List<ProductoServicioOpcionVarianteGuardarRequest> opciones, DateTime ahora)
         {
+            await ValidateProductoOpcionVarianteRequestIdsAsync(connection, transaction, idEmpresa, idProductoServicio, opciones);
+
             using SqlCommand deleteVariantValues = new SqlCommand(@"
 DELETE vv
 FROM dbo.ProductosServiciosVarianteValores vv
@@ -6044,6 +6115,13 @@ VALUES
                 .GroupBy(x => x.ClaveCombinacion, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
             PreparedVariantSyncResult result = new PreparedVariantSyncResult();
+            foreach (Guid requestedVariantId in variantes.Where(x => x.Id.HasValue && x.Id.Value != Guid.Empty).Select(x => x.Id!.Value))
+            {
+                if (!variantesActualesPorId.ContainsKey(requestedVariantId))
+                {
+                    throw new ProductoServicioValidationException("Se detectó una variante inválida para el producto.");
+                }
+            }
 
             using SqlCommand deleteValores = new SqlCommand(@"
 DELETE vv
@@ -6258,6 +6336,80 @@ VALUES
             return id;
         }
 
+        private async Task ValidateProductoAtributoRequestIdsAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, List<ProductoServicioAtributoGuardarRequest> atributos)
+        {
+            foreach (ProductoServicioAtributoGuardarRequest atributo in atributos.Where(x => x.IdProductoAtributo.HasValue && x.IdProductoAtributo.Value != Guid.Empty))
+            {
+                using SqlCommand command = new SqlCommand(@"
+SELECT COUNT(1)
+FROM dbo.ProductosServiciosProductoAtributos
+WHERE idEmpresa = @IdEmpresa
+  AND idProductoServicio = @IdProductoServicio
+  AND idAtributo = @IdAtributo
+  AND id = @IdProductoAtributo", connection, transaction);
+                command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+                command.Parameters.AddWithValue("@IdAtributo", atributo.IdAtributo);
+                command.Parameters.AddWithValue("@IdProductoAtributo", atributo.IdProductoAtributo.GetValueOrDefault());
+                if (Convert.ToInt32(await command.ExecuteScalarAsync()) == 0)
+                {
+                    throw new ProductoServicioValidationException("Se detectó una relación de atributo inválida para el producto.");
+                }
+            }
+        }
+
+        private async Task ValidateProductoOpcionVarianteRequestIdsAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio, List<ProductoServicioOpcionVarianteGuardarRequest> opciones)
+        {
+            Dictionary<Guid, HashSet<Guid>> valoresPorOpcion = new Dictionary<Guid, HashSet<Guid>>();
+            using (SqlCommand command = new SqlCommand(@"
+SELECT ov.id AS IdOpcion, ovv.id AS IdValor
+FROM dbo.ProductosServiciosOpcionesVariante ov
+LEFT JOIN dbo.ProductosServiciosOpcionesVarianteValores ovv
+    ON ovv.idEmpresa = ov.idEmpresa AND ovv.idOpcionVariante = ov.id
+WHERE ov.idEmpresa = @IdEmpresa
+  AND ov.idProductoServicio = @IdProductoServicio", connection, transaction))
+            {
+                command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+                using SqlDataReader reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    Guid idOpcion = ReadGuid(reader, "IdOpcion");
+                    if (!valoresPorOpcion.TryGetValue(idOpcion, out HashSet<Guid>? valores))
+                    {
+                        valores = new HashSet<Guid>();
+                        valoresPorOpcion[idOpcion] = valores;
+                    }
+
+                    Guid idValor = ReadGuid(reader, "IdValor");
+                    if (idValor != Guid.Empty)
+                    {
+                        valores.Add(idValor);
+                    }
+                }
+            }
+
+            foreach (ProductoServicioOpcionVarianteGuardarRequest opcion in opciones)
+            {
+                HashSet<Guid>? valoresActuales = null;
+                if (opcion.Id.HasValue && opcion.Id.Value != Guid.Empty)
+                {
+                    if (!valoresPorOpcion.TryGetValue(opcion.Id.Value, out valoresActuales))
+                    {
+                        throw new ProductoServicioValidationException("Se detectó una opción de variante inválida para el producto.");
+                    }
+                }
+
+                foreach (ProductoServicioOpcionVarianteValorGuardarRequest valor in opcion.Valores.Where(x => x.Id.HasValue && x.Id.Value != Guid.Empty))
+                {
+                    if (valoresActuales == null || !valoresActuales.Contains(valor.Id.GetValueOrDefault()))
+                    {
+                        throw new ProductoServicioValidationException("Se detectó un valor de opción inválido para el producto.");
+                    }
+                }
+            }
+        }
+
         private static VariantOptionReference ResolveVariantOptionReference(Dictionary<string, VariantOptionReference> optionReferences, Guid idOpcionVariante, string opcion)
         {
             if (idOpcionVariante != Guid.Empty)
@@ -6280,9 +6432,14 @@ VALUES
 
         private static Guid ResolveVariantOptionValueId(VariantOptionReference option, Guid? idOpcionVarianteValor, string valor)
         {
-            if (idOpcionVarianteValor.HasValue && idOpcionVarianteValor.Value != Guid.Empty && option.Valores.Values.Contains(idOpcionVarianteValor.Value))
+            if (idOpcionVarianteValor.HasValue && idOpcionVarianteValor.Value != Guid.Empty)
             {
-                return idOpcionVarianteValor.Value;
+                if (option.Valores.Values.Contains(idOpcionVarianteValor.Value))
+                {
+                    return idOpcionVarianteValor.Value;
+                }
+
+                throw new ProductoServicioValidationException("Se detectó un valor de opción inválido para una variante.");
             }
 
             string key = NormalizeCatalogKey(valor);
@@ -6689,7 +6846,12 @@ VALUES
             return stream.ToArray();
         }
 
-        private bool TryResolveRequestContext(Guid? clientEmpresaId, string? clientEmpresaKey, out RequestContext context, out IActionResult? error)
+        private Task<bool> TryResolveRequestContextAsync(
+            Guid? clientEmpresaId,
+            string? clientEmpresaKey,
+            out RequestContext context,
+            out IActionResult? error,
+            ProductosServiciosPermissionRequirement requirement)
         {
             context = null!;
             error = null;
@@ -6698,192 +6860,261 @@ VALUES
             if (!effectiveEmpresaId.HasValue || effectiveEmpresaId.Value == Guid.Empty)
             {
                 error = Unauthorized(new ProductoServicioOperacionResponse { Mensaje = "No fue posible resolver la empresa activa." });
-                return false;
+                return Task.FromResult(false);
             }
 
             if (clientEmpresaId.HasValue && clientEmpresaId.Value != Guid.Empty && clientEmpresaId.Value != effectiveEmpresaId.Value)
             {
-                error = BadRequest(new ProductoServicioOperacionResponse { Mensaje = "La empresa solicitada no coincide con la sesión activa." });
-                return false;
+                error = StatusCode(403, new ProductoServicioOperacionResponse { Mensaje = "La empresa solicitada no coincide con la sesión activa." });
+                return Task.FromResult(false);
             }
 
             string empresaStorageKey = TryResolveEmpresaStorageKey(effectiveEmpresaId.Value, proxyEmpresaKey);
             if (!string.IsNullOrWhiteSpace(clientEmpresaKey) &&
                 !string.Equals(clientEmpresaKey.Trim(), empresaStorageKey, StringComparison.OrdinalIgnoreCase))
             {
-                error = BadRequest(new ProductoServicioOperacionResponse { Mensaje = "La empresa solicitada no coincide con la sesión activa." });
-                return false;
+                error = StatusCode(403, new ProductoServicioOperacionResponse { Mensaje = "La empresa solicitada no coincide con la sesión activa." });
+                return Task.FromResult(false);
+            }
+
+            // Unbound query/form fields must not contradict the authenticated context.
+            foreach (var item in Request.Query)
+            {
+                if (!TenantInputMatches(item.Key, item.Value, effectiveEmpresaId.Value, empresaStorageKey))
+                { error = StatusCode(403, new { code = "TENANT_INPUT_MISMATCH", message = "No fue posible autorizar la solicitud." }); return Task.FromResult(false); }
+            }
+            if (Request.HasFormContentType)
+            {
+                foreach (var item in Request.Form)
+                    if (!TenantInputMatches(item.Key, item.Value, effectiveEmpresaId.Value, empresaStorageKey))
+                    { error = StatusCode(403, new { code = "TENANT_INPUT_MISMATCH", message = "No fue posible autorizar la solicitud." }); return Task.FromResult(false); }
+            }
+
+            TenantDatabaseDescriptor tenantDatabase;
+            try
+            {
+                tenantDatabase = _tenantDatabaseResolver.ResolveAsync(
+                    new TenantDatabaseContext
+                    {
+                        EmpresaKey = empresaStorageKey,
+                        IdEmpresa = effectiveEmpresaId.Value
+                    },
+                    HttpContext.RequestAborted).GetAwaiter().GetResult();
+            }
+            catch (TenantDatabaseResolutionException ex)
+            {
+                _logger.LogWarning("Resolución tenant ProductosServicios falló. Categoria={TenantResolutionCode} EmpresaKey={EmpresaKey} IdEmpresa={IdEmpresa}",
+                    ex.Code,
+                    SanitizeEmpresaKey(empresaStorageKey),
+                    effectiveEmpresaId.Value);
+                error = ToTenantResolutionError(ex.Code);
+                return Task.FromResult(false);
+            }
+
+            SignedProxyContext? signedContext = HttpContext.Items.TryGetValue(ProxyContextItemKey, out var identity)
+                ? identity as SignedProxyContext
+                : null;
+            ProductosServiciosAuthorizationDecision authorization = _authorizationService.AuthorizeAsync(
+                new ProductosServiciosAuthorizationRequest
+                {
+                    IdEmpresa = effectiveEmpresaId.Value,
+                    UserId = signedContext?.UserId ?? string.Empty,
+                    TenantDatabase = tenantDatabase,
+                    Requirement = requirement,
+                    PermissionCode = ResolvePermissionCodeForCurrentAction()
+                },
+                HttpContext.RequestAborted).GetAwaiter().GetResult();
+            if (!authorization.IsAllowed(requirement))
+            {
+                _logger.LogWarning(
+                    "AuthZ ProductosServicios bloqueó operación. ReferenceId={ReferenceId} PermissionCode={PermissionCode} Requirement={Requirement} ReasonCode={ReasonCode}",
+                    authorization.ReferenceId,
+                    authorization.PermissionCode,
+                    requirement.ToString(),
+                    authorization.ReasonCode);
+                error = StatusCode(403, new
+                {
+                    code = requirement == ProductosServiciosPermissionRequirement.Write ? "PRODUCTOS_SERVICIOS_WRITE_FORBIDDEN" : "PRODUCTOS_SERVICIOS_ACCESS_FORBIDDEN",
+                    message = "No tienes permiso para realizar esta operación.",
+                    referenceId = authorization.ReferenceId
+                });
+                return Task.FromResult(false);
+            }
+
+            CompatibilityDecision compatibility = _compatibilityGate.EvaluateAsync(tenantDatabase, DatabaseScopes.ProductosServicios, HttpContext.RequestAborted).GetAwaiter().GetResult();
+            if (!compatibility.IsAllowed)
+            {
+                _logger.LogWarning("Gate ProductosServicios bloqueó operación. ReferenceId={ReferenceId} Identity={DatabaseIdentity} Scope={Scope} ReasonCode={ReasonCode} CurrentVersion={CurrentVersion} SchemaResult={SchemaResult}",
+                    compatibility.ReferenceId,
+                    Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(compatibility.SanitizedIdentity))),
+                    compatibility.Scope,
+                    compatibility.ReasonCode,
+                    compatibility.CurrentVersion,
+                    compatibility.SchemaResult?.ToString() ?? "N/A");
+                error = ToCompatibilityError(compatibility);
+                return Task.FromResult(false);
+            }
+
+            // T22: prepare company scope after authenticated context/resolution/T20, without seeds or DDL.
+            // Functional AuthZ requires the existing PS policy to be identified (T23 PO decision).
+            CompanyBootstrapResult company = _companyBootstrapper.BootstrapAsync(
+                tenantDatabase, DatabaseScopes.ProductosServicios, HttpContext.RequestAborted).GetAwaiter().GetResult();
+            if (company.Status != "NO_CHANGES")
+            {
+                error = StatusCode(503, new { code = company.ReasonCode,
+                    message = "No fue posible preparar la operación de la empresa. Intenta nuevamente más tarde.",
+                    referenceId = company.ReferenceId });
+                return Task.FromResult(false);
             }
 
             context = new RequestContext
             {
                 IdEmpresa = effectiveEmpresaId.Value,
-                EmpresaStorageKey = empresaStorageKey
+                EmpresaStorageKey = empresaStorageKey,
+                TenantDatabase = tenantDatabase
             };
+            return Task.FromResult(true);
+        }
+
+        private string ResolvePermissionCodeForCurrentAction()
+        {
+            string actionName = ControllerContext?.ActionDescriptor?.ActionName
+                ?? RouteData?.Values["action"]?.ToString()
+                ?? string.Empty;
+            if (CategoriaActions.Contains(actionName))
+            {
+                return CategoriasPermissionCode;
+            }
+
+            if (MarcaActions.Contains(actionName))
+            {
+                return MarcasPermissionCode;
+            }
+
+            if (UnidadMedidaActions.Contains(actionName))
+            {
+                return UnidadesMedidaPermissionCode;
+            }
+
+            return AbcPermissionCode;
+        }
+
+        private static bool TenantInputMatches(string key, Microsoft.Extensions.Primitives.StringValues values, Guid id, string empresa)
+        {
+            if (new[] { "cadena", "connectionString", "server", "database", "password" }.Contains(key, StringComparer.OrdinalIgnoreCase)) return false;
+            if (new[] { "idEmpresa", "empresaId", "tenantId" }.Contains(key, StringComparer.OrdinalIgnoreCase))
+                return values.All(v => Guid.TryParse(v, out Guid parsed) && parsed == id);
+            if (new[] { "empresa", "empresaKey" }.Contains(key, StringComparer.OrdinalIgnoreCase))
+                return values.All(v => string.Equals(v?.Trim(), empresa, StringComparison.OrdinalIgnoreCase));
+            // Scope and DatabaseIdentity are never consumed from request fields.
             return true;
         }
 
         private Guid? TryResolveEmpresaId(out string? proxyEmpresaKey)
         {
             proxyEmpresaKey = null;
-
-            foreach (string claimKey in EmpresaClaimKeys)
+            if (!ProductosServiciosIdentityValidation.TryValidate(User, Request.Headers,
+                _configuration["fireBdata:fireClave"] ?? string.Empty, DateTimeOffset.UtcNow,
+                out TenantDatabaseContext verified, out string userId)) return null;
+            var identity = new SignedProxyContext
             {
-                string? value = User.FindFirstValue(claimKey);
-                if (Guid.TryParse(value, out Guid parsed) && parsed != Guid.Empty)
-                {
-                    return parsed;
-                }
-            }
-
-            if (TryResolveSignedProxyContext(out SignedProxyContext? proxyContext) && proxyContext != null)
-            {
-                proxyEmpresaKey = proxyContext.EmpresaStorageKey;
-                return proxyContext.IdEmpresa;
-            }
-
-            return null;
+                IdEmpresa = verified.IdEmpresa, EmpresaStorageKey = verified.EmpresaKey,
+                UserId = userId,
+                UsuarioId = Guid.TryParse(userId, out Guid actor) && actor != Guid.Empty ? actor : null
+            };
+            HttpContext.Items[ProxyContextItemKey] = identity;
+            proxyEmpresaKey = identity.EmpresaStorageKey;
+            return identity.IdEmpresa;
         }
 
         private string TryResolveEmpresaStorageKey(Guid empresaId, string? proxyEmpresaKey = null)
-        {
-            foreach (string claimKey in EmpresaNombreClaimKeys)
-            {
-                string? value = User.FindFirstValue(claimKey);
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    return value.Trim().ToUpperInvariant();
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(proxyEmpresaKey))
-            {
-                return proxyEmpresaKey.Trim().ToUpperInvariant();
-            }
-
-            return empresaId.ToString("N").ToUpperInvariant();
-        }
+            => proxyEmpresaKey ?? string.Empty;
 
         private Guid? TryResolveUsuarioId()
+            => HttpContext.Items.TryGetValue(ProxyContextItemKey, out var identity)
+                ? (identity as SignedProxyContext)?.UsuarioId : null;
+
+        private SqlConnection CreateConnection(RequestContext context)
         {
-            foreach (string claimKey in UsuarioClaimKeys)
-            {
-                string? value = User.FindFirstValue(claimKey);
-                if (Guid.TryParse(value, out Guid parsed) && parsed != Guid.Empty)
-                {
-                    return parsed;
-                }
-            }
-
-            if (TryResolveSignedProxyContext(out SignedProxyContext? proxyContext) &&
-                proxyContext != null &&
-                proxyContext.UsuarioId.HasValue)
-            {
-                return proxyContext.UsuarioId.Value;
-            }
-
-            return null;
+            return _tenantSqlConnectionFactory.CreateConnection(context.TenantDatabase);
         }
 
-        private bool TryResolveSignedProxyContext(out SignedProxyContext? context)
+
+        private IActionResult ToCompatibilityError(CompatibilityDecision decision)
         {
-            if (HttpContext.Items.TryGetValue(ProxyContextItemKey, out object? cached))
+            string message = decision.ReasonCode switch
             {
-                context = cached as SignedProxyContext;
-                return context != null;
-            }
-
-            context = null;
-
-            if (!Request.Headers.TryGetValue(ProxyEmpresaIdHeader, out var empresaIdHeader) ||
-                !Request.Headers.TryGetValue(ProxyEmpresaKeyHeader, out var empresaKeyHeader) ||
-                !Request.Headers.TryGetValue(ProxyTimestampHeader, out var timestampHeader) ||
-                !Request.Headers.TryGetValue(ProxySignatureHeader, out var signatureHeader))
-            {
-                return false;
-            }
-
-            string secret = _configuration["fireBdata:fireClave"] ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(secret))
-            {
-                _logger.LogWarning("ProductosServicios proxy headers recibidos sin secreto compartido configurado.");
-                return false;
-            }
-
-            string empresaIdRaw = empresaIdHeader.ToString().Trim();
-            string empresaKeyRaw = empresaKeyHeader.ToString().Trim();
-            string usuarioIdRaw = Request.Headers.TryGetValue(ProxyUsuarioIdHeader, out var usuarioIdHeader)
-                ? usuarioIdHeader.ToString().Trim()
-                : string.Empty;
-            string timestampRaw = timestampHeader.ToString().Trim();
-            string signatureRaw = signatureHeader.ToString().Trim();
-
-            if (!Guid.TryParse(empresaIdRaw, out Guid empresaId) || empresaId == Guid.Empty)
-            {
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(empresaKeyRaw) ||
-                !DateTimeOffset.TryParseExact(timestampRaw, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset timestamp))
-            {
-                return false;
-            }
-
-            TimeSpan age = DateTimeOffset.UtcNow - timestamp.ToUniversalTime();
-            if (age.Duration() > ProxyHeaderTolerance)
-            {
-                _logger.LogWarning("ProductosServicios proxy headers expirados o fuera de tolerancia para empresa {EmpresaId}.", empresaId);
-                return false;
-            }
-
-            string payload = BuildProxySignaturePayload(empresaIdRaw, empresaKeyRaw, usuarioIdRaw, timestampRaw);
-            string expectedSignature = ComputeProxySignature(secret, payload);
-
-            if (!SignaturesMatch(expectedSignature, signatureRaw))
-            {
-                _logger.LogWarning("ProductosServicios proxy headers con firma invalida para empresa {EmpresaId}.", empresaId);
-                return false;
-            }
-
-            context = new SignedProxyContext
-            {
-                IdEmpresa = empresaId,
-                EmpresaStorageKey = empresaKeyRaw.ToUpperInvariant(),
-                UsuarioId = Guid.TryParse(usuarioIdRaw, out Guid usuarioId) && usuarioId != Guid.Empty ? usuarioId : null
+                "SCHEMA_PREPARING" => "Productos y Servicios se está preparando. Intente nuevamente.",
+                "MIGRATION_IN_PROGRESS" => "Productos y Servicios se está actualizando. Intente nuevamente.",
+                "SCHEMA_EMPTY" => "Productos y Servicios aún no está preparado para esta empresa.",
+                "SCHEMA_PARTIAL" => "No es posible acceder temporalmente a Productos y Servicios.",
+                "SCHEMA_OUTDATED" => "Productos y Servicios requiere actualización antes de continuar.",
+                "SCHEMA_FUTURE" => "La versión de Productos y Servicios no es compatible con esta aplicación.",
+                "SCHEMA_UNKNOWN" => "No es posible confirmar la compatibilidad de Productos y Servicios.",
+                "SCHEMA_UNAVAILABLE" => "Productos y Servicios no está disponible temporalmente.",
+                "SCHEMA_DRIFT" => "No es posible acceder temporalmente a Productos y Servicios.",
+                "SCHEMA_DRIFT_CRITICAL" => "No es posible acceder temporalmente a Productos y Servicios.",
+                "VERSION_EVIDENCE_MISSING" => "No es posible confirmar la versión de Productos y Servicios.",
+                "VERSION_INCOMPATIBLE" => "La versión de Productos y Servicios no es compatible con esta aplicación.",
+                "MANIFEST_HASH_MISMATCH" => "No es posible confirmar la compatibilidad de Productos y Servicios.",
+                "VALIDATION_INCONCLUSIVE" => "No es posible validar Productos y Servicios en este momento.",
+                "TENANT_CONTEXT_INVALID" => "No fue posible resolver la empresa activa.",
+                "DATABASE_IDENTITY_INVALID" => "No fue posible validar la base de datos de la empresa.",
+                _ => "No es posible acceder temporalmente a Productos y Servicios."
             };
 
-            HttpContext.Items[ProxyContextItemKey] = context;
-            return true;
-        }
-
-        private static string BuildProxySignaturePayload(string empresaId, string empresaKey, string usuarioId, string timestamp)
-        {
-            return string.Join('\n', empresaId.Trim(), empresaKey.Trim().ToUpperInvariant(), usuarioId.Trim(), timestamp.Trim());
-        }
-
-        private static string ComputeProxySignature(string secret, string payload)
-        {
-            using HMACSHA256 hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-            byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
-            return Convert.ToBase64String(hash);
-        }
-
-        private static bool SignaturesMatch(string expectedSignature, string providedSignature)
-        {
-            byte[] expectedBytes = Encoding.UTF8.GetBytes(expectedSignature);
-            byte[] providedBytes = Encoding.UTF8.GetBytes(providedSignature);
-            return CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes);
-        }
-
-        private SqlConnection CreateConnection()
-        {
-            return _connectionFactory.CreateConnection();
+            return StatusCode(503, new
+            {
+                code = decision.ReasonCode,
+                message,
+                referenceId = decision.ReferenceId
+            });
         }
 
         private IActionResult HandleException(Exception ex, string operation, string safeMessage)
         {
-            _logger.LogError(ex, "Error en ProductosServicios durante {Operation}.", operation);
+            _logger.LogError("Error en ProductosServicios. ReferenceId={ReferenceId} Operation={Operation} ReasonCode={ReasonCode}", Guid.NewGuid().ToString("N"), operation, "OPERATION_FAILED");
+            if (IsTenantDatabaseUnavailable(ex))
+            {
+                return StatusCode(503, new ProductoServicioOperacionResponse { Mensaje = "La base de datos de la empresa no está disponible en este momento." });
+            }
+
             return StatusCode(500, new ProductoServicioOperacionResponse { Mensaje = safeMessage });
+        }
+
+        private IActionResult ToTenantResolutionError(TenantDatabaseResolutionCode code)
+        {
+            string message = "No fue posible autorizar la empresa activa.";
+            int statusCode = code switch
+            {
+                TenantDatabaseResolutionCode.TenantContextMissing => StatusCodes.Status401Unauthorized,
+                TenantDatabaseResolutionCode.TenantDatabaseResolutionFailed => StatusCodes.Status503ServiceUnavailable,
+                _ => StatusCodes.Status403Forbidden
+            };
+
+            return StatusCode(statusCode, new ProductoServicioOperacionResponse { Mensaje = message });
+        }
+
+        private static bool IsTenantDatabaseUnavailable(Exception ex)
+        {
+            return ex is SqlException sqlException &&
+                   sqlException.Errors.Cast<SqlError>().Any(error =>
+                       error.Number == -2 ||
+                       error.Number == 53 ||
+                       error.Number == 233 ||
+                       error.Number == 4060 ||
+                       error.Number == 18456);
+        }
+
+        private static string SanitizeEmpresaKey(string value)
+        {
+            string trimmed = (value ?? string.Empty).Trim().ToUpperInvariant();
+            if (trimmed.Length <= 24)
+            {
+                return trimmed;
+            }
+
+            return trimmed.Substring(0, 24);
         }
 
         private static void AppendBusquedaCatalogo(StringBuilder query, SqlCommand command, string busqueda)
@@ -8060,8 +8291,9 @@ VALUES
 
         private sealed class RequestContext
         {
-            public Guid IdEmpresa { get; set; }
-            public string EmpresaStorageKey { get; set; } = string.Empty;
+            public Guid IdEmpresa { get; init; }
+            public string EmpresaStorageKey { get; init; } = string.Empty;
+            public TenantDatabaseDescriptor TenantDatabase { get; init; } = null!;
         }
 
         private sealed class ProductoServicioValidationException : Exception
@@ -8073,9 +8305,10 @@ VALUES
 
         private sealed class SignedProxyContext
         {
-            public Guid IdEmpresa { get; set; }
-            public string EmpresaStorageKey { get; set; } = string.Empty;
-            public Guid? UsuarioId { get; set; }
+            public string UserId { get; init; } = string.Empty;
+            public Guid IdEmpresa { get; init; }
+            public string EmpresaStorageKey { get; init; } = string.Empty;
+            public Guid? UsuarioId { get; init; }
         }
 
         private sealed class NormalizedProductoServicioRequest
@@ -8239,6 +8472,7 @@ VALUES
         private sealed class PreparedMultimediaOperation
         {
             public List<ProductoServicioMultimediaDto> FinalItems { get; set; } = new List<ProductoServicioMultimediaDto>();
+            public HashSet<Guid> ExistingItemIds { get; set; } = new HashSet<Guid>();
             public List<FirebaseCleanupItem> TemporalCleanups { get; set; } = new List<FirebaseCleanupItem>();
             public List<FirebaseCleanupItem> NewFileCompensations { get; set; } = new List<FirebaseCleanupItem>();
         }

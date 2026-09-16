@@ -1,0 +1,49 @@
+using System.Data.SqlClient;
+
+namespace checklistWs.Services.Tenant
+{
+    public enum ProductosServiciosPermissionRequirement
+    {
+        Read,
+        Write
+    }
+
+    public sealed class ProductosServiciosAuthorizationRequest
+    {
+        public Guid IdEmpresa { get; init; }
+        public string UserId { get; init; } = string.Empty;
+        public string PermissionCode { get; init; } = ProductosServiciosAuthorizationDefaults.PermissionCode;
+        public ProductosServiciosPermissionRequirement Requirement { get; init; }
+        public TenantDatabaseDescriptor TenantDatabase { get; init; } = null!;
+    }
+
+    public sealed class ProductosServiciosAuthorizationDecision
+    {
+        public bool HasAccess { get; init; }
+        public bool CanWrite { get; init; }
+        public string PermissionCode { get; init; } = ProductosServiciosAuthorizationDefaults.PermissionCode;
+        public string ReasonCode { get; init; } = string.Empty;
+        public string ReferenceId { get; init; } = Guid.NewGuid().ToString("N");
+        public bool IsAllowed(ProductosServiciosPermissionRequirement requirement)
+            => HasAccess && (requirement == ProductosServiciosPermissionRequirement.Read || CanWrite);
+    }
+
+    public interface IProductosServiciosAuthorizationService
+    {
+        Task<ProductosServiciosAuthorizationDecision> AuthorizeAsync(
+            ProductosServiciosAuthorizationRequest request,
+            CancellationToken cancellationToken = default);
+    }
+
+    public static class ProductosServiciosAuthorizationDefaults
+    {
+        public const string PermissionCode = "05001000";
+        public const string ModulePermissionCode = "05001000";
+        public const string AbcPermissionCode = "05001001";
+        public const string CatalogosPermissionCode = "05001002";
+        public const string CategoriasPermissionCode = "05001003";
+        public const string MarcasPermissionCode = "05001004";
+        public const string UnidadesMedidaPermissionCode = "05001005";
+        public const string PermissionCodeConfigurationKey = "ProductosServicios:PermissionCode";
+    }
+}
