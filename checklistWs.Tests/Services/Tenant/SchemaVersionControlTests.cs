@@ -56,7 +56,7 @@ namespace checklistWs.Tests.Services.Tenant
         public async Task VersionEvidenceReader_ConfirmedCurrentVersion_ReturnsCurrent()
         {
             InMemorySchemaVersionRepository repository = new InMemorySchemaVersionRepository();
-            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, 1, "VALIDATED"));
+            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.LatestVersion, "VALIDATED"));
 
             DatabaseVersionEvidence evidence = await CreateEvidenceReader(repository)
                 .ReadVersionEvidenceAsync(Descriptor, IdentityA, DatabaseScopes.ProductosServicios);
@@ -69,13 +69,13 @@ namespace checklistWs.Tests.Services.Tenant
         {
             InMemorySchemaVersionRepository repository = new InMemorySchemaVersionRepository();
 
-            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, 1, "VALIDATED"));
+            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.LatestVersion, "VALIDATED"));
             await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, "Activos", 2, "VALIDATED"));
 
             SchemaControlState? productos = await repository.GetStateAsync(Descriptor, IdentityA, DatabaseScopes.ProductosServicios);
             SchemaControlState? activos = await repository.GetStateAsync(Descriptor, IdentityA, "Activos");
 
-            Assert.Equal(1, productos?.CurrentVersion);
+            Assert.Equal(ProductosServiciosSchemaContractProvider.LatestVersion, productos?.CurrentVersion);
             Assert.Equal(2, activos?.CurrentVersion);
         }
 
@@ -84,13 +84,13 @@ namespace checklistWs.Tests.Services.Tenant
         {
             InMemorySchemaVersionRepository repository = new InMemorySchemaVersionRepository();
 
-            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, 1, "VALIDATED"));
+            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.LatestVersion, "VALIDATED"));
             await repository.SetConfirmedStateAsync(Descriptor, State(IdentityB, DatabaseScopes.ProductosServicios, 2, "VALIDATED"));
 
             SchemaControlState? first = await repository.GetStateAsync(Descriptor, IdentityA, DatabaseScopes.ProductosServicios);
             SchemaControlState? second = await repository.GetStateAsync(Descriptor, IdentityB, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(1, first?.CurrentVersion);
+            Assert.Equal(ProductosServiciosSchemaContractProvider.LatestVersion, first?.CurrentVersion);
             Assert.Equal(2, second?.CurrentVersion);
         }
 
@@ -99,7 +99,7 @@ namespace checklistWs.Tests.Services.Tenant
         {
             InMemorySchemaVersionRepository repository = new InMemorySchemaVersionRepository();
 
-            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, 1, "VALIDATED"));
+            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.LatestVersion, "VALIDATED"));
             SchemaControlState? fromTenantA = await repository.GetStateAsync(Descriptor, IdentityA, DatabaseScopes.ProductosServicios);
             SchemaControlState? fromTenantB = await repository.GetStateAsync(new TenantDatabaseDescriptor
             {
@@ -228,7 +228,7 @@ namespace checklistWs.Tests.Services.Tenant
         public async Task T13_ConsumesRealVersionEvidence_FromT14Repository()
         {
             InMemorySchemaVersionRepository repository = new InMemorySchemaVersionRepository();
-            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, 1, "VALIDATED"));
+            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.LatestVersion, "VALIDATED"));
 
             DatabaseStateClassifier classifier = new DatabaseStateClassifier(
                 new CompleteProductScopeProbe(),
@@ -279,8 +279,8 @@ namespace checklistWs.Tests.Services.Tenant
         public async Task VersionEvidenceReader_OutdatedAndFuture_AreComparable()
         {
             InMemorySchemaVersionRepository repository = new InMemorySchemaVersionRepository();
-            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, 0, "VALIDATED"));
-            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityB, DatabaseScopes.ProductosServicios, 2, "VALIDATED"));
+            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityA, DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.V1, "VALIDATED"));
+            await repository.SetConfirmedStateAsync(Descriptor, State(IdentityB, DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.LatestVersion + 1, "VALIDATED"));
 
             DatabaseVersionEvidence outdated = await CreateEvidenceReader(repository)
                 .ReadVersionEvidenceAsync(Descriptor, IdentityA, DatabaseScopes.ProductosServicios);

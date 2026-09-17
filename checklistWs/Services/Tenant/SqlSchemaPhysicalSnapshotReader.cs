@@ -64,6 +64,15 @@ namespace checklistWs.Services.Tenant
         private static string BuildIndexesSql(SchemaContract c) => $@"SELECT s.name SchemaName,t.name TableName,i.name IndexName,i.is_unique IsUnique,CAST(CASE WHEN i.type=1 THEN 1 ELSE 0 END AS bit) IsClustered,i.is_disabled IsDisabled,i.is_unique_constraint IsUniqueConstraint,i.filter_definition FilterDefinition,ic.key_ordinal KeyOrdinal,ic.is_included_column IsIncluded,ic.is_descending_key IsDescending,col.name ColumnName FROM sys.indexes i JOIN sys.tables t ON t.object_id=i.object_id JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id JOIN sys.columns col ON col.object_id=ic.object_id AND col.column_id=ic.column_id WHERE s.name=N'dbo' AND t.name IN ({InClause(c)}) AND i.name IS NOT NULL AND i.is_primary_key=0;";
         private static string BuildForeignKeysSql(SchemaContract c) => $@"SELECT s.name SchemaName,t.name TableName,fk.name ForeignKeyName,rs.name ReferencedSchema,rt.name ReferencedTable,fkc.constraint_column_id ConstraintColumnId,pc.name ColumnName,rc.name ReferencedColumnName,fk.delete_referential_action_desc DeleteAction,fk.update_referential_action_desc UpdateAction,fk.is_disabled IsDisabled,fk.is_not_trusted IsNotTrusted,fk.is_not_for_replication IsNotForReplication FROM sys.foreign_keys fk JOIN sys.tables t ON t.object_id=fk.parent_object_id JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.tables rt ON rt.object_id=fk.referenced_object_id JOIN sys.schemas rs ON rs.schema_id=rt.schema_id JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id=fk.object_id JOIN sys.columns pc ON pc.object_id=fkc.parent_object_id AND pc.column_id=fkc.parent_column_id JOIN sys.columns rc ON rc.object_id=fkc.referenced_object_id AND rc.column_id=fkc.referenced_column_id WHERE s.name=N'dbo' AND t.name IN ({InClause(c)});";
         private static string BuildChecksSql(SchemaContract c) => $@"SELECT s.name SchemaName,t.name TableName,cc.name CheckName,cc.definition Definition,cc.is_disabled IsDisabled,cc.is_not_trusted IsNotTrusted FROM sys.check_constraints cc JOIN sys.tables t ON t.object_id=cc.parent_object_id JOIN sys.schemas s ON s.schema_id=t.schema_id WHERE s.name=N'dbo' AND t.name IN ({InClause(c)});";
-        private static string BuildExtrasSql(SchemaContract c) => $@"SELECT s.name SchemaName,o.name ObjectName,o.type_desc TypeDescription FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id WHERE s.name=N'dbo' AND o.name LIKE N'ProductosServicios%' AND o.name NOT IN ({InClause(c)}) AND o.type NOT IN ('PK','F','C','D');";
+        private static string BuildExtrasSql(SchemaContract c)
+        {
+            string scopePrefix = string.Equals(c.Scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase)
+                ? "Sucursales%"
+                : string.Equals(c.Scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase)
+                    ? "ProductosServicios%"
+                    : $"{c.Scope}%";
+
+            return $@"SELECT s.name SchemaName,o.name ObjectName,o.type_desc TypeDescription FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id WHERE s.name=N'dbo' AND o.name LIKE N'{scopePrefix}' AND o.name NOT IN ({InClause(c)}) AND o.type NOT IN ('PK','F','C','D');";
+        }
     }
 }

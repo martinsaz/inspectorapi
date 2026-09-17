@@ -106,7 +106,7 @@ namespace checklistWs.Tests.Services.Tenant
 
             Assert.Equal(1, harness.Executor.ProvisionCalls);
             Assert.Single(harness.Repository.History.Where(x => x.EventType == "PROVISIONED" && x.Result == "PASS"));
-            Assert.Single(harness.Repository.States.Where(x => x.CurrentVersion == 1));
+            Assert.Single(harness.Repository.States.Where(x => x.CurrentVersion == ProductosServiciosSchemaContractProvider.LatestVersion));
         }
 
         [Fact]

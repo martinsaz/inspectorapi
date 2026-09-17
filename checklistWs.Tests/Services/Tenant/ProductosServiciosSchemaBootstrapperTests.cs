@@ -24,7 +24,7 @@ namespace checklistWs.Tests.Services.Tenant
         private static readonly DatabaseIdentity IdentityB = new("SERVER-B", "SERVER-B", string.Empty, "CHECKAPP", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
 
         [Fact]
-        public async Task EmptyScope_ProvisionsV1Pass()
+        public async Task EmptyScope_ProvisionsLatestPass()
         {
             Harness harness = new();
 
@@ -32,7 +32,7 @@ namespace checklistWs.Tests.Services.Tenant
 
             Assert.Equal(SchemaProvisionResultStatus.Provisioned, result.Status);
             Assert.Equal("PROVISIONED", result.ReasonCode);
-            Assert.Equal(1, result.ContractVersion);
+            Assert.Equal(ProductosServiciosSchemaContractProvider.LatestVersion, result.ContractVersion);
         }
 
         [Fact]
@@ -112,15 +112,15 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public async Task FinalHash_MatchesT15()
+        public async Task FinalHash_MatchesLatestContract()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal("4d51ce43a30ec3d583ce4252c8324f1053a52fdd89a7d80b3e01a6e8b780fb06", result.ManifestHash);
+            Assert.Equal(new SchemaManifestProvider().CreateManifest(Contract()).ManifestHash, result.ManifestHash);
         }
 
         [Fact]
-        public async Task StateV1_IsWrittenOnlyAfterValidation()
+        public async Task StateLatest_IsWrittenOnlyAfterValidation()
         {
             Harness harness = new();
 
@@ -252,7 +252,7 @@ namespace checklistWs.Tests.Services.Tenant
 
             Assert.Equal(1, results.Count(item => item.Status == SchemaProvisionResultStatus.Provisioned));
             Assert.Equal(1, harness.Executor.ProvisionCalls);
-            Assert.Single(harness.Repository.States, item => item.CurrentVersion == 1);
+            Assert.Single(harness.Repository.States, item => item.CurrentVersion == ProductosServiciosSchemaContractProvider.LatestVersion);
         }
 
         [Fact]
@@ -277,7 +277,7 @@ namespace checklistWs.Tests.Services.Tenant
             await harness.Bootstrapper.ProvisionScopeAsync(DescriptorB, IdentityB, DatabaseScopes.ProductosServicios);
 
             Assert.Equal(2, harness.Executor.ProvisionCalls);
-            Assert.Equal(2, harness.Repository.States.Count(item => item.CurrentVersion == 1));
+            Assert.Equal(2, harness.Repository.States.Count(item => item.CurrentVersion == ProductosServiciosSchemaContractProvider.LatestVersion));
         }
 
         [Fact]
@@ -490,7 +490,7 @@ namespace checklistWs.Tests.Services.Tenant
                 lock (_sync)
                 {
                     if (_partialResidues.Contains(Key(identity, scope))) return DatabaseStructureState.Partial;
-                    return _states.TryGetValue(Key(identity, scope), out SchemaControlState? state) && state.CurrentVersion == 1
+                    return _states.TryGetValue(Key(identity, scope), out SchemaControlState? state) && state.CurrentVersion == ProductosServiciosSchemaContractProvider.LatestVersion
                         ? DatabaseStructureState.Current
                         : null;
                 }
@@ -594,7 +594,7 @@ namespace checklistWs.Tests.Services.Tenant
             {
                 lock (_sync)
                 {
-                    if (state.CurrentVersion == 1) StateWrittenAfterExecutor = true;
+                    if (state.CurrentVersion == ProductosServiciosSchemaContractProvider.LatestVersion) StateWrittenAfterExecutor = true;
                     _states[Key(state.DatabaseIdentityKey, state.Scope)] = state;
                 }
 

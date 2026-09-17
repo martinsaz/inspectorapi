@@ -40,7 +40,7 @@ namespace checklistWs.Controllers.ProductosServicios
         private const int CodigoLength = 50;
         private const int NombreLength = 150;
         private const int ObservacionesLength = 1000;
-        private const int DescripcionCatalogoLength = 500;
+        private const int DescripcionCatalogoLength = 20000;
         private const int TagLength = 100;
         private const int UnidadCodigoLength = 30;
         private const int UnidadNombreLength = 100;
@@ -2879,6 +2879,8 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
             byte? aplicaA = null,
             string? duplicateNameMessage = null)
         {
+            descripcion = NormalizeDescripcionCatalogo(descripcion);
+
             using SqlConnection connection = CreateConnection(context);
             await connection.OpenAsync();
             using SqlTransaction transaction = connection.BeginTransaction();
@@ -6535,10 +6537,10 @@ WHERE ov.idEmpresa = @IdEmpresa
 
         private static string NormalizeDescripcionCatalogo(string? value)
         {
-            return (value ?? string.Empty).Trim();
+            return SanitizeRichTextHtml(value);
         }
 
-        private static string SanitizeRichTextHtml(string? value)
+        internal static string SanitizeRichTextHtml(string? value)
         {
             string html = (value ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(html))

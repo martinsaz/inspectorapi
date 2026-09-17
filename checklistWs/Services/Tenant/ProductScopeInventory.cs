@@ -26,11 +26,26 @@ namespace checklistWs.Services.Tenant
             "dbo.ProductosServiciosPresentacionesVenta"
         };
 
+        private static readonly IReadOnlyCollection<string> SucursalesTables = new[]
+        {
+            "dbo.RazonesSociales",
+            "dbo.Zonas",
+            "dbo.Sucursales"
+        };
+
         public IReadOnlyCollection<string> GetExpectedTables(string scope)
         {
-            return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase)
-                ? ProductosServiciosTables
-                : Array.Empty<string>();
+            if (string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProductosServiciosTables;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase))
+            {
+                return SucursalesTables;
+            }
+
+            return Array.Empty<string>();
         }
     }
 }

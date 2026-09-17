@@ -1,6 +1,7 @@
 ﻿using checklistWs.Models.Combo;
 using checklistWs.Models.Lista;
 using checklistWs.Models.Sucursal;
+using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -16,11 +17,13 @@ namespace checklistWs.Controllers.Sucursal
     {
         private readonly IConfiguration _configuration;
         private readonly SqlConnectionFactory _connectionFactory;
+        private readonly ISucursalesScopeRequestContextResolver? _scopeContext;
 
-        public SucursalController(IConfiguration configuration)
+        public SucursalController(IConfiguration configuration, ISucursalesScopeRequestContextResolver? scopeContext = null)
         {
             _configuration = configuration;
             _connectionFactory = new SqlConnectionFactory(configuration);
+            _scopeContext = scopeContext;
         }
 
         [HttpGet]
@@ -354,6 +357,9 @@ namespace checklistWs.Controllers.Sucursal
         [HttpGet("ObtenerSucursalesCompleta")]
         public async Task<IActionResult> ObtenerSucursalesCompleta(Guid idEmpresa,string empresa, string mailUsuario = "", string cadena = "")
         {
+            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.SucursalesAbcPermissionCode, ProductosServiciosPermissionRequirement.Read);
+            if (auth != null) return auth;
+
             try
             {
                 
@@ -433,6 +439,8 @@ namespace checklistWs.Controllers.Sucursal
         [HttpPut("ActualizarSucursal")]
         public async Task<IActionResult> ActualizarSucursal(Guid id, [FromBody] Sucursales sucursal, string empresa, string cadena)
         {
+            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.SucursalesAbcPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null) return auth;
          
 
             try
@@ -495,6 +503,17 @@ namespace checklistWs.Controllers.Sucursal
                 Console.WriteLine($"Error: {e.Message}");
                 return StatusCode(500, $"Error interno del servidor: {e.Message}");
             }
+        }
+
+        private async Task<IActionResult?> AuthorizeSucursalesAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
+        {
+            if (_scopeContext == null)
+            {
+                return null;
+            }
+
+            SucursalesScopeRequestContext? context = await _scopeContext.TryResolveAsync(this, permissionCode, requirement);
+            return context == null ? _scopeContext.ToErrorResult(this) : null;
         }
 
         [HttpDelete("EliminarSucursal")]

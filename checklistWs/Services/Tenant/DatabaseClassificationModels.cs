@@ -22,6 +22,7 @@ namespace checklistWs.Services.Tenant
     public static class DatabaseScopes
     {
         public const string ProductosServicios = "ProductosServicios";
+        public const string Sucursales = "Sucursales";
     }
 
     public sealed class DatabaseSchemaProbeResult

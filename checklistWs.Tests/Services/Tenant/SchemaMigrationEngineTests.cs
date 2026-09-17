@@ -290,14 +290,62 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void RealProductosServiciosPackage_DoesNotInventV2()
+        public void RealProductosServiciosPackage_DeclaresApprovedV2Migration()
         {
             var provider = new ProductosServiciosMigrationPackageProvider(new ProductosServiciosSchemaContractProvider(), new SchemaManifestProvider());
 
             SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(1, package.Release.LatestSchemaVersion);
-            Assert.Empty(package.Migrations);
+            Assert.Equal(2, package.Release.LatestSchemaVersion);
+            SchemaMigrationDefinition migration = Assert.Single(package.Migrations);
+            Assert.Equal(1, migration.FromVersion);
+            Assert.Equal(2, migration.ToVersion);
+            Assert.Equal("PS-M20260916-V1-V2-DESCRIPCIONES-NVARCHAR-MAX", migration.MigrationId);
+            Assert.Equal(new[]
+            {
+                "dbo.ProductosServiciosCategorias.Descripcion",
+                "dbo.ProductosServiciosMarcas.Descripcion",
+                "dbo.ProductosServiciosColecciones.Descripcion"
+            }, migration.ObjectsAffected);
+            Assert.Equal(3, CountOccurrences(migration.UpSql, "ALTER COLUMN [Descripcion] NVARCHAR(MAX) NULL"));
+            Assert.DoesNotContain("ProductosServiciosUnidadesMedida", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void ProductosServiciosContract_V1RemainsImmutableAndV2OnlyWidensThreeDescriptions()
+        {
+            var provider = new ProductosServiciosSchemaContractProvider();
+
+            SchemaContract v1 = provider.GetContract(DatabaseScopes.ProductosServicios, 1);
+            SchemaContract v2 = provider.GetContract(DatabaseScopes.ProductosServicios, 2);
+
+            Assert.Equal("NVARCHAR(500)", Column(v1, "ProductosServiciosCategorias", "Descripcion").SqlType);
+            Assert.Equal(500, Column(v1, "ProductosServiciosCategorias", "Descripcion").MaxLength);
+            Assert.Equal("NVARCHAR(500)", Column(v1, "ProductosServiciosMarcas", "Descripcion").SqlType);
+            Assert.Equal(500, Column(v1, "ProductosServiciosMarcas", "Descripcion").MaxLength);
+            Assert.Equal("NVARCHAR(500)", Column(v1, "ProductosServiciosColecciones", "Descripcion").SqlType);
+            Assert.Equal(500, Column(v1, "ProductosServiciosColecciones", "Descripcion").MaxLength);
+
+            Assert.Equal("NVARCHAR(MAX)", Column(v2, "ProductosServiciosCategorias", "Descripcion").SqlType);
+            Assert.Equal(-1, Column(v2, "ProductosServiciosCategorias", "Descripcion").MaxLength);
+            Assert.Equal("NVARCHAR(MAX)", Column(v2, "ProductosServiciosMarcas", "Descripcion").SqlType);
+            Assert.Equal(-1, Column(v2, "ProductosServiciosMarcas", "Descripcion").MaxLength);
+            Assert.Equal("NVARCHAR(MAX)", Column(v2, "ProductosServiciosColecciones", "Descripcion").SqlType);
+            Assert.Equal(-1, Column(v2, "ProductosServiciosColecciones", "Descripcion").MaxLength);
+
+            var comparableV2 = v2 with
+            {
+                ContractVersion = v1.ContractVersion,
+                Tables = v2.Tables.Select(table => table with
+                {
+                    Columns = table.Columns.Select(column =>
+                        IsMigratedDescription(table.Name, column.Name)
+                            ? column with { SqlType = "NVARCHAR(500)", MaxLength = 500 }
+                            : column).ToArray()
+                }).ToArray()
+            };
+
+            Assert.Equal(new SchemaManifestProvider().CreateManifest(v1).ManifestHash, new SchemaManifestProvider().CreateManifest(comparableV2).ManifestHash);
         }
 
         [Fact]
@@ -312,6 +360,33 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         private static SchemaMigrationResolver Resolver() => new();
+
+        private static SchemaColumnContract Column(SchemaContract contract, string tableName, string columnName)
+        {
+            return contract.Tables.Single(table => string.Equals(table.Name, tableName, StringComparison.OrdinalIgnoreCase))
+                .Columns.Single(column => string.Equals(column.Name, columnName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsMigratedDescription(string tableName, string columnName)
+        {
+            return string.Equals(columnName, "Descripcion", StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(tableName, "ProductosServiciosCategorias", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(tableName, "ProductosServiciosMarcas", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(tableName, "ProductosServiciosColecciones", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static int CountOccurrences(string value, string pattern)
+        {
+            int count = 0;
+            int index = 0;
+            while ((index = value.IndexOf(pattern, index, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                count++;
+                index += pattern.Length;
+            }
+
+            return count;
+        }
 
         private static SchemaMigrationPackage Package(params SchemaMigrationDefinition[] migrations)
         {

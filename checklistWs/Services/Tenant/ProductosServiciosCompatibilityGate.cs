@@ -41,7 +41,7 @@ namespace checklistWs.Services.Tenant
             DatabaseIdentity? identity = null;
             try
             {
-                if (descriptor == null || string.IsNullOrWhiteSpace(descriptor.ConnectionString) || !string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
+                if (descriptor == null || string.IsNullOrWhiteSpace(descriptor.ConnectionString) || !IsSupportedScope(scope))
                 {
                     return Block(referenceId, identity, scope, null, null, null, "TENANT_CONTEXT_INVALID", false, started);
                 }
@@ -192,5 +192,11 @@ namespace checklistWs.Services.Tenant
             ReferenceId = referenceId,
             CheckedAtUtc = DateTime.UtcNow
         };
+
+        private static bool IsSupportedScope(string scope)
+        {
+            return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

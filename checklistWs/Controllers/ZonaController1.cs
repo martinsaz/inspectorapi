@@ -1,4 +1,5 @@
 ﻿using checklistWs.Models.Zonas;
+using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.Mvc;
 using System.Data.SqlClient;
@@ -11,11 +12,13 @@ namespace checklistWs.Controllers
     {
         private readonly IConfiguration _configuration;
         private readonly SqlConnectionFactory _connectionFactory;
+        private readonly ISucursalesScopeRequestContextResolver? _scopeContext;
 
-        public ZonaController1(IConfiguration configuration)
+        public ZonaController1(IConfiguration configuration, ISucursalesScopeRequestContextResolver? scopeContext = null)
         {
             _configuration = configuration;
             _connectionFactory = new SqlConnectionFactory(configuration);
+            _scopeContext = scopeContext;
         }
 
         public IActionResult Index()
@@ -76,6 +79,9 @@ namespace checklistWs.Controllers
         [HttpGet("ObtenerZonas")]
         public async Task<IActionResult> ObtenerZonas(Guid idEmpresa)
         {
+            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Read);
+            if (auth != null) return auth;
+
             try
             {
                 string query = @"SELECT Id, Nombre, Notas, Fecha, IdEmpresa, borrado 
@@ -125,6 +131,9 @@ namespace checklistWs.Controllers
         [HttpPut("ActualizarZona")]
         public async Task<IActionResult> ActualizarZona(Guid id, [FromBody] Zona zona, string cadena)
         {
+            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null) return auth;
+
             if (await ExisteActualiza(zona.Nombre, zona.IdEmpresa.ToString(),  cadena, id))
             {
                 return BadRequest("Ya existe un elemento con este nombre");
@@ -211,6 +220,9 @@ namespace checklistWs.Controllers
         [HttpPost("InsertarZona")]
         public async Task<IActionResult> InsertarZona([FromBody] Zona zona, string cadena)
         {
+            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null) return auth;
+
             try
             {
                 if (await ExisteNueva(zona.Nombre, zona.IdEmpresa.ToString(), cadena))
@@ -245,6 +257,17 @@ namespace checklistWs.Controllers
                 Console.WriteLine($"Error: {e.Message}");
                 return StatusCode(500, $"Error interno del servidor: {e.Message}");
             }
+        }
+
+        private async Task<IActionResult?> AuthorizeSucursalesAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
+        {
+            if (_scopeContext == null)
+            {
+                return null;
+            }
+
+            SucursalesScopeRequestContext? context = await _scopeContext.TryResolveAsync(this, permissionCode, requirement);
+            return context == null ? _scopeContext.ToErrorResult(this) : null;
         }
 
 

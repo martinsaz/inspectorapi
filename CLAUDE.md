@@ -1,3 +1,18 @@
+# PATRON CHECKAPP OFICIAL - PRODUCTOSSERVICIOS - 2026-09-16
+
+- 2026-09-16 #MOKA: Sucursales, Razones Sociales y Regiones se homologaron en MVC al patron visual/UX CheckApp. API no se modifico ni se creo scope/contrato/versionamiento nuevo; cualquier AuthZ API granular o scope administrativo comun requiere decision PO. T25 permanece `FROZEN`.
+- Antes de tocar API/contratos relacionados con el patron CheckApp, leer `inspector/docs/pattern/PATRON_CHECKAPP_OFICIAL_20260916.md`.
+- ProductosServicios es la pantalla base oficial; backend conserva autoridad final de permisos, sanitizacion y schema gate.
+- T25 permanece `FROZEN`; no iniciar T25, Hosting, Firebase, Conexiones, bases QA ni bootstrap.
+- En trabajo local con servidores MVC/API, liberar y verificar puertos `5200` y `5127` al terminar.
+
+# PRODUCTOSSERVICIOS_SCHEMA_V2_DESCRIPCIONES_HTML - 2026-09-16
+
+- PO resolvio `REQUIERE_DECISION_PO_TIPO_DESCRIPCION`: usar `NVARCHAR(MAX)` para descripciones HTML de `ProductosServiciosCategorias`, `ProductosServiciosMarcas` y `ProductosServiciosColecciones`.
+- V1 historico queda inmutable con hash `4d51ce43a30ec3d583ce4252c8324f1053a52fdd89a7d80b3e01a6e8b780fb06`; V2 vigente hash `1b5c75e4b44fcfcb3af4219660095ddb2a99419db8da300aff6e4a38c731a705`.
+- Migracion aprobada: `PS-M20260916-V1-V2-DESCRIPCIONES-NVARCHAR-MAX`, solo por T17/T19 con History/Attempts/State y validacion T18. No usar ALTER aislado.
+- Base real 163 migrada: `CurrentVersion=2`, T18 `SchemaOk`, `DriftCount=0`, segunda corrida `NO_PENDING_MIGRATIONS`, datos preservados. T25 sigue `FROZEN`.
+
 # POST-T24 CONSOLIDADO / T25 FROZEN - 2026-09-16
 
 - Documento consolidado: `inspector/docs/database/POST_T24_CORRECCIONES_PERMISOS_Y_CONGELAMIENTO_T25_20260916.md`.
@@ -15,7 +30,7 @@
 - API centraliza la decision en `IProductosServiciosAuthorizationService` recibiendo el `PermissionCode` especifico por accion; READ exige `Acceso=1` y WRITE exige `Acceso=1` + `Escritura=1`.
 - RolesPermisos conserva la proteccion SuperAdmin: no permitir edicion manual ni eliminar el mensaje "No se pueden cambiar los permisos del SuperAdmin".
 - Control: no DDL, no Firebase, no Hosting, no Conexiones tenant, no `nxt_*`, no asignacion masiva. Al terminar cualquier QA/trabajo local, liberar y verificar puertos 5200 y 5127.
-- QA vigente de esta regresion: tests API/MVC `395/395` PASS, builds API/MVC PASS, `git diff --check` PASS.
+- QA vigente de esta regresion: tests API/MVC `403/403` PASS, builds API/MVC PASS, `git diff --check` PASS.
 
 # Estado T24 - QA integral T11-T23 ProductosServicios #MOKA, 2026-09-14
 
@@ -260,3 +275,20 @@
 - Componentes API T14: `SchemaVersionControlModels`, `SchemaVersionRepository`, `DatabaseVersionEvidenceReader`, `KnownSchemaVersionProvider`; DI scoped en `Program.cs`. `EnsureSchemaControlInfrastructureAsync` crea sólo objetos T14 faltantes y valida columnas mínimas; si detecta incompatibilidad devuelve conflicto/falla cerrado sin drop/recreate destructivo.
 - Regla T14: Attempts no avanzan State; History sólo eventos estructurales confirmados; `SetConfirmedStateAsync` es la única operación de cambio de State. No se inventa baseline, historia ni versión para bases históricas; adopción queda para T15/T18. T13 consume evidencia real T14 y sin State mantiene `Unknown/VERSION_EVIDENCE_MISSING`.
 - QA T14: `dotnet test inspectorapi/checklistWs.sln --no-restore --verbosity minimal` PASS 61/61. QA real empresa 163 creó/verificó las tres tablas T14; segunda inicialización idempotente creó 0/verificó 3; State ProductosServicios inexistente/null; T13 posterior `Unknown` con 20/20 tablas. Sin cambios a ProductosServicios/Firebase/Auth/Hosting ni datos de negocio; sin secretos expuestos.
+# PRODUCTOSSERVICIOS_SCHEMA_UNKNOWN_RUNTIME_REGRESSION - 2026-09-16
+
+- Defecto post-T24 corregido sin iniciar T25: empresa Denisse `163`, `idEmpresa=b17aaece-2b78-4e35-b554-9e694eeb15a7`, DB `SQL5111/DB_A883C3_CHECKLIST/E398ABAB-6416-4E68-8084-7FF7CB232EF5`.
+- BEFORE real: T14 control tables existian pero sin State para `DatabaseIdentity+ProductosServicios`; T13/T20 devolvian `Unknown/VERSION_EVIDENCE_MISSING` y gate bloqueaba como `SCHEMA_UNKNOWN`, `CurrentVersion=NULL`, `SchemaResult=N/A`.
+- T18 confirmo V1 exacto: 20 tablas, 255 columnas, 50 indices, 24 FK, 14 CHECK, hash `4d51ce43a30ec3d583ce4252c8324f1053a52fdd89a7d80b3e01a6e8b780fb06`, drift 0.
+- Se agrego adopcion historica trazada `IProductosServiciosHistoricalBaselineAdopter`: solo para `Unknown/VERSION_EVIDENCE_MISSING` + scope completo + T18 `SchemaOk`; escribe `Attempt ADOPT_BASELINE`, `History ADOPTED`, `State CurrentVersion=1`, baseline `PRODUCTOSSERVICIOS_V1_HISTORICAL_BASELINE`. No DDL, no schema rebuild, no bypass T20.
+- AFTER real: T13 `Current`, T20 `COMPATIBLE`, endpoints PS reales 200 sin `SCHEMA_UNKNOWN`; Denisse sigue `SuperAdmin`; proteccion de edicion SuperAdmin preservada.
+- AuthZ PS usa siempre `TenantDatabaseDescriptor`, sin fallback fijo. Agrupadores `05000000`, `05001000`, `05001002` son acceso-unicamente aunque el JSON legacy tenga `Escritura=1`; WRITE ABC depende de `05001001`.
+- No Firebase, no Hosting, no Conexiones, no DDL, no schema, no `nxt_*`; T25 permanece `FROZEN`.
+# MOKA Sucursales/Razones/Regiones - 2026-09-17
+
+- Jerarquia vigente consumida desde MVC: `04000000` Ajustes y `04003000` Sucursales son agrupadores solo Acceso; `04003100` ABC Sucursales, `04004000` Razones Sociales y `04005000` Regiones son pantallas funcionales con Acceso + Escritura.
+- Los endpoints API legacy de estos catalogos no reciben identidad/rol de usuario; no agregar un bloqueo directo que rompa consumidores sin antes introducir un contrato autenticado con actor. La autorizacion efectiva de esta entrega queda en los controladores MVC autenticados.
+- Scope tecnico aprobado para estos tres catalogos: `Sucursales`. T25 permanece FROZEN; no tocar Hosting, Firebase, Conexiones, bases T25, Denisse/SuperAdmin, DDL destructivo ni ProductosServicios por este patron.
+- Certificacion SQL real `CheckAppErp` del scope `Sucursales` V1: PASS para bootstrap, idempotencia, drift reversible, locking, CRUD multitenant, limpieza de fixtures y gate `COMPATIBLE`.
+- Correcciones API de soporte: `SqlDatabaseSchemaProbe` registra los 20 parametros del query para scopes pequenos; `SqlSchemaPhysicalSnapshotReader` usa prefijo de extras por scope y no fijo de ProductosServicios.
+- Cierre final posterior: AuthZ real PASS contra `db_a883c3_checklist`; `ProductosServiciosAuthorizationService` usa fuente legacy/autorizada cuando esta configurada, no la base tenant. Endpoints API usados por Sucursales/Razones/Regiones pasan por `SucursalesScopeRequestContextResolver` antes de SQL negocio. ProductosServicios en `CheckAppErp` migrado a V2 por T17, `SchemaOk`, `DriftCount=0`, gate `COMPATIBLE`. T25 sigue `FROZEN`.

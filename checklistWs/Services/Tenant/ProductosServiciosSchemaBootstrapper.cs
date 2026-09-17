@@ -33,7 +33,7 @@ namespace checklistWs.Services.Tenant
             string scope,
             CancellationToken cancellationToken = default)
         {
-            if (identity == null || string.IsNullOrWhiteSpace(identity.Fingerprint) || !string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
+            if (identity == null || string.IsNullOrWhiteSpace(identity.Fingerprint) || !IsSupportedScope(scope))
             {
                 return NoProvision(identity, scope, "PROVISION_NOT_ALLOWED_INVALID_CONTEXT");
             }
@@ -44,7 +44,7 @@ namespace checklistWs.Services.Tenant
                 return NotAllowed(initialClassification);
             }
 
-            SchemaContract contract = _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 1);
+            SchemaContract contract = _contractProvider.GetContract(scope);
             SchemaManifest manifest = _manifestProvider.CreateManifest(contract);
 
             try
@@ -184,6 +184,12 @@ namespace checklistWs.Services.Tenant
             {
                 return NoProvision(identity, scope, ex.ReasonCode, contractVersion: contract.ContractVersion, manifestHash: manifest.ManifestHash, warnings: new[] { ex.Resource });
             }
+        }
+
+        private static bool IsSupportedScope(string scope)
+        {
+            return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase);
         }
 
         private static SchemaProvisionResult NotAllowed(DatabaseClassificationResult classification)

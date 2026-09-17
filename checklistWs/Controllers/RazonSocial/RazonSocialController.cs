@@ -1,4 +1,5 @@
 ﻿using checklistWs.Models.RazonSocial;
+using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.Mvc;
 using System.Data.SqlClient;
@@ -11,11 +12,13 @@ namespace checklistWs.Controllers.RazonSocial
 
 		private readonly IConfiguration _configuration;
 		private readonly SqlConnectionFactory _connectionFactory;
+		private readonly ISucursalesScopeRequestContextResolver? _scopeContext;
 
-		public RazonSocialController(IConfiguration configuration)
+		public RazonSocialController(IConfiguration configuration, ISucursalesScopeRequestContextResolver? scopeContext = null)
 		{
 			_configuration = configuration;
 			_connectionFactory = new SqlConnectionFactory(configuration);
+			_scopeContext = scopeContext;
 		}
 		public IActionResult Index()
 		{
@@ -159,8 +162,11 @@ namespace checklistWs.Controllers.RazonSocial
 		}
 
 		[HttpGet("ObtenerRazonesSociales")]
-		public async Task<ActionResult<IEnumerable<RazonSociales>>> ObtenerRazonesSociales(Guid idEmpresa, string empresa, string cadena)
+		public async Task<IActionResult> ObtenerRazonesSociales(Guid idEmpresa, string empresa, string cadena)
 		{
+			IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RazonesSocialesPermissionCode, ProductosServiciosPermissionRequirement.Read);
+			if (auth != null) return auth;
+
 			try
 			{
 
@@ -225,8 +231,11 @@ namespace checklistWs.Controllers.RazonSocial
 		}
 
         [HttpPut("ActualizarRazonSocial")]
-        public async Task<ActionResult> ActualizarRazonSocial(Guid id, [FromBody] RazonSociales razonSocialActualizada, Guid idEmpresa, string empresa, string cadena)
+        public async Task<IActionResult> ActualizarRazonSocial(Guid id, [FromBody] RazonSociales razonSocialActualizada, Guid idEmpresa, string empresa, string cadena)
         {
+            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RazonesSocialesPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null) return auth;
+
             try
             {
                 byte[] data = Convert.FromBase64String(cadena);
@@ -281,8 +290,11 @@ namespace checklistWs.Controllers.RazonSocial
         }
 
         [HttpPost("InsertarRazonSocial")]
-        public async Task<ActionResult> InsertarRazonSocial([FromBody] RazonSociales nuevaRazonSocial, string empresa, string cadena)
+        public async Task<IActionResult> InsertarRazonSocial([FromBody] RazonSociales nuevaRazonSocial, string empresa, string cadena)
         {
+            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RazonesSocialesPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null) return auth;
+
             try
             {
                 byte[] data = Convert.FromBase64String(cadena);
@@ -395,6 +407,17 @@ namespace checklistWs.Controllers.RazonSocial
 				Console.WriteLine($"Error: {e.Message}");
 				return StatusCode(500, e.Message);
 			}
+		}
+
+		private async Task<IActionResult?> AuthorizeSucursalesAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
+		{
+			if (_scopeContext == null)
+			{
+				return null;
+			}
+
+			SucursalesScopeRequestContext? context = await _scopeContext.TryResolveAsync(this, permissionCode, requirement);
+			return context == null ? _scopeContext.ToErrorResult(this) : null;
 		}
 	}
 }

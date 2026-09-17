@@ -23,6 +23,37 @@ public sealed class ProductosServiciosSecurityContextTests
         Assert.NotEqual("02000000", ProductosServiciosAuthorizationDefaults.PermissionCode);
     }
 
+    [Fact]
+    public void AuthorizationSourcePrefersConfiguredLegacyConnectionOverTenantDatabase()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:CadenaConexionSQLServer"] = "Server=legacy;Database=db_a883c3_checklist;User Id=qa;",
+                ["ProductosServicios:AuthorizationConnectionString"] = "Server=auth;Database=db_a883c3_checklist;User Id=qa;"
+            })
+            .Build();
+
+        Assert.Equal(
+            "Server=auth;Database=db_a883c3_checklist;User Id=qa;",
+            ProductosServiciosAuthorizationService.ResolveAuthorizationConnectionString(configuration));
+    }
+
+    [Fact]
+    public void AuthorizationSourceFallsBackToLegacyConnectionStringWhenDedicatedKeyIsMissing()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:CadenaConexionSQLServer"] = "Server=legacy;Database=db_a883c3_checklist;User Id=qa;"
+            })
+            .Build();
+
+        Assert.Equal(
+            "Server=legacy;Database=db_a883c3_checklist;User Id=qa;",
+            ProductosServiciosAuthorizationService.ResolveAuthorizationConnectionString(configuration));
+    }
+
     private const string Secret = "SYNTHETIC_TEST_KEY_NOT_A_CREDENTIAL";
     private static readonly Guid A = Guid.NewGuid(), B = Guid.NewGuid();
     private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;

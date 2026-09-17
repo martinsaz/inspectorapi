@@ -79,9 +79,17 @@ namespace checklistWs.Services.Tenant
     {
         public int? GetKnownCurrentVersion(string scope)
         {
-            return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase)
-                ? 1
-                : null;
+            if (string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProductosServiciosSchemaContractProvider.LatestVersion;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProductosServiciosSchemaContractProvider.SucursalesLatestVersion;
+            }
+
+            return null;
         }
     }
 

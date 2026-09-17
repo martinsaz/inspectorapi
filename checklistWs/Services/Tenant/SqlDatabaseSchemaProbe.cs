@@ -56,9 +56,12 @@ WHERE s.name = @SchemaName
                     .Select(GetUnqualifiedTableName)
                     .ToArray();
 
-                for (int i = 0; i < tableNames.Length; i++)
+                for (int i = 0; i < 20; i++)
                 {
-                    command.Parameters.AddWithValue($"@Table{i + 1:00}", tableNames[i]);
+                    string tableName = i < tableNames.Length
+                        ? tableNames[i]
+                        : $"__CheckAppScopeUnused{i + 1:00}";
+                    command.Parameters.AddWithValue($"@Table{i + 1:00}", tableName);
                 }
 
                 List<string> existing = new();

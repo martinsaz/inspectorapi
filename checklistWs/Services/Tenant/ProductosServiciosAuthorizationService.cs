@@ -72,9 +72,10 @@ WHERE u.idEmpresa = @IdEmpresa
                 }
 
                 bool hasAccess = node.Permisos?.Acceso == 1;
-                bool canWrite = hasAccess && node.Permisos?.Escritura == 1;
+                bool accessOnlyPermission = IsAccessOnlyPermission(permissionCode);
+                bool canWrite = hasAccess && !accessOnlyPermission && node.Permisos?.Escritura == 1;
                 string reason = hasAccess
-                    ? canWrite ? "ALLOW_WRITE" : "ALLOW_READ"
+                    ? canWrite ? "ALLOW_WRITE" : accessOnlyPermission ? "ALLOW_READ_ACCESS_ONLY" : "ALLOW_READ"
                     : "ACCESS_DENIED";
 
                 return new ProductosServiciosAuthorizationDecision
@@ -95,10 +96,22 @@ WHERE u.idEmpresa = @IdEmpresa
 
         private SqlConnection CreateAuthorizationConnection(TenantDatabaseDescriptor tenantDatabase)
         {
-            string configured = _configuration.GetConnectionString("CadenaConexionSQLServer") ?? string.Empty;
-            return string.IsNullOrWhiteSpace(configured)
-                ? _connectionFactory.CreateConnection(tenantDatabase)
-                : new SqlConnection(configured);
+            string configured = ResolveAuthorizationConnectionString(_configuration);
+
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                return new SqlConnection(configured);
+            }
+
+            return _connectionFactory.CreateConnection(tenantDatabase);
+        }
+
+        public static string ResolveAuthorizationConnectionString(IConfiguration configuration)
+        {
+            return configuration["ProductosServicios:AuthorizationConnectionString"]
+                ?? configuration.GetConnectionString("AuthorizationSqlServer")
+                ?? configuration.GetConnectionString("CadenaConexionSQLServer")
+                ?? string.Empty;
         }
 
         private string ResolvePermissionCode(string requestedCode)
@@ -164,6 +177,15 @@ WHERE u.idEmpresa = @IdEmpresa
             }
 
             return null;
+        }
+
+        private static bool IsAccessOnlyPermission(string permissionCode)
+        {
+            return string.Equals(permissionCode, "05000000", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.ModulePermissionCode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.CatalogosPermissionCode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.AjustesPermissionCode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.SucursalesPermissionCode, StringComparison.OrdinalIgnoreCase);
         }
 
         private sealed class LegacyPermissionNode

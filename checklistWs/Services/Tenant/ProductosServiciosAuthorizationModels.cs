@@ -45,5 +45,10 @@ namespace checklistWs.Services.Tenant
         public const string MarcasPermissionCode = "05001004";
         public const string UnidadesMedidaPermissionCode = "05001005";
         public const string PermissionCodeConfigurationKey = "ProductosServicios:PermissionCode";
+        public const string AjustesPermissionCode = "04000000";
+        public const string SucursalesPermissionCode = "04003000";
+        public const string SucursalesAbcPermissionCode = "04003100";
+        public const string RazonesSocialesPermissionCode = "04004000";
+        public const string RegionesPermissionCode = "04005000";
     }
 }

@@ -25,7 +25,7 @@ BEGIN TRY
                 CONSTRAINT DF_ProductosServiciosCategorias_identityKey DEFAULT (NEWID()),
             Codigo NVARCHAR(50) NOT NULL,
             Nombre NVARCHAR(150) NOT NULL,
-            Descripcion NVARCHAR(500) NULL,
+            Descripcion NVARCHAR(MAX) NULL,
             AplicaA TINYINT NOT NULL
                 CONSTRAINT DF_ProductosServiciosCategorias_AplicaA DEFAULT ((0)),
             Activo BIT NOT NULL
@@ -52,7 +52,7 @@ BEGIN TRY
                 CONSTRAINT DF_ProductosServiciosMarcas_identityKey DEFAULT (NEWID()),
             Codigo NVARCHAR(50) NOT NULL,
             Nombre NVARCHAR(150) NOT NULL,
-            Descripcion NVARCHAR(500) NULL,
+            Descripcion NVARCHAR(MAX) NULL,
             Activo BIT NOT NULL
                 CONSTRAINT DF_ProductosServiciosMarcas_Activo DEFAULT ((1)),
             FechaCreacion DATETIME2(0) NOT NULL
@@ -667,7 +667,7 @@ BEGIN TRY
                 CONSTRAINT DF_ProductosServiciosColecciones_identityKey DEFAULT (NEWID()),
             Numero NVARCHAR(50) NOT NULL,
             Nombre NVARCHAR(150) NOT NULL,
-            Descripcion NVARCHAR(500) NULL,
+            Descripcion NVARCHAR(MAX) NULL,
             Activo BIT NOT NULL
                 CONSTRAINT DF_ProductosServiciosColecciones_Activo DEFAULT ((1)),
             FechaCreacion DATETIME2(0) NOT NULL

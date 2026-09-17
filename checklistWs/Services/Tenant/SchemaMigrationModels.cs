@@ -156,16 +156,137 @@ namespace checklistWs.Services.Tenant
             }
 
             SchemaContract v1 = _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 1);
-            SchemaManifest manifest = _manifestProvider.CreateManifest(v1);
+            SchemaContract v2 = _contractProvider.GetContract(DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.V2);
+            SchemaManifest v2Manifest = _manifestProvider.CreateManifest(v2);
+            string migrationSql = BuildV1ToV2Sql();
+            SchemaMigrationDefinition v1ToV2 = new(
+                "PS-M20260916-V1-V2-DESCRIPCIONES-NVARCHAR-MAX",
+                "PS-B20260909",
+                DatabaseScopes.ProductosServicios,
+                1,
+                2,
+                1,
+                new[]
+                {
+                    "dbo.ProductosServiciosCategorias.Descripcion",
+                    "dbo.ProductosServiciosMarcas.Descripcion",
+                    "dbo.ProductosServiciosColecciones.Descripcion"
+                },
+                BuildV1ToV2Preconditions(),
+                new[]
+                {
+                    "ALTER_COLUMN_NVARCHAR_500_TO_MAX_IS_NON_DESTRUCTIVE",
+                    "DATA_PRESERVED_NO_DML",
+                    "NULLABILITY_REMAINS_NULL"
+                },
+                SchemaMigrationHash.Sha256(migrationSql),
+                v2Manifest.ManifestHash,
+                "SingleTransaction",
+                "Low",
+                true,
+                TimeSpan.FromMinutes(2),
+                Array.Empty<string>(),
+                "ReconcileAfterUncertainCommit",
+                migrationSql,
+                v2);
+
             return new SchemaMigrationPackage(
                 new SchemaReleaseManifest(
                     DatabaseScopes.ProductosServicios,
                     "PS-B20260909",
                     1,
-                    1,
-                    manifest.ManifestHash,
-                    Array.Empty<string>()),
-                Array.Empty<SchemaMigrationDefinition>());
+                    2,
+                    v2Manifest.ManifestHash,
+                    new[] { v1ToV2.MigrationId }),
+                new[] { v1ToV2 });
+        }
+
+        private static IReadOnlyCollection<string> BuildV1ToV2Preconditions()
+        {
+            return new[]
+            {
+                ColumnExistsPrecondition("ProductosServiciosCategorias"),
+                ColumnExistsPrecondition("ProductosServiciosMarcas"),
+                ColumnExistsPrecondition("ProductosServiciosColecciones"),
+                ColumnIsNvarchar500OrMaxPrecondition("ProductosServiciosCategorias"),
+                ColumnIsNvarchar500OrMaxPrecondition("ProductosServiciosMarcas"),
+                ColumnIsNvarchar500OrMaxPrecondition("ProductosServiciosColecciones"),
+                ColumnIsNullablePrecondition("ProductosServiciosCategorias"),
+                ColumnIsNullablePrecondition("ProductosServiciosMarcas"),
+                ColumnIsNullablePrecondition("ProductosServiciosColecciones")
+            };
+        }
+
+        private static string BuildV1ToV2Sql()
+        {
+            return string.Join(Environment.NewLine + Environment.NewLine, new[]
+            {
+                AlterDescriptionToMax("ProductosServiciosCategorias"),
+                AlterDescriptionToMax("ProductosServiciosMarcas"),
+                AlterDescriptionToMax("ProductosServiciosColecciones")
+            });
+        }
+
+        private static string ColumnExistsPrecondition(string table)
+        {
+            return $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'Descripcion'
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string ColumnIsNvarchar500OrMaxPrecondition(string table)
+        {
+            return $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'Descripcion'
+      AND ty.name = N'nvarchar'
+      AND c.max_length IN (1000, -1)
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string ColumnIsNullablePrecondition(string table)
+        {
+            return $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'Descripcion'
+      AND c.is_nullable = 1
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string AlterDescriptionToMax(string table)
+        {
+            return $@"IF EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'Descripcion'
+      AND ty.name = N'nvarchar'
+      AND c.max_length <> -1
+)
+BEGIN
+    ALTER TABLE [dbo].[{table}] ALTER COLUMN [Descripcion] NVARCHAR(MAX) NULL;
+END;";
         }
     }
 
