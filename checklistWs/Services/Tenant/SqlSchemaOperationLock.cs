@@ -118,6 +118,11 @@ namespace checklistWs.Services.Tenant
                 return DatabaseScopes.Sucursales;
             }
 
+            if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
+            {
+                return DatabaseScopes.Proveedores;
+            }
+
             return Regex.Replace(scope ?? string.Empty, @"[^A-Za-z0-9_\-]", string.Empty);
         }
 

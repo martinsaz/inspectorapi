@@ -34,7 +34,7 @@ namespace checklistWs.Services.Tenant
             string scope,
             CancellationToken cancellationToken = default)
         {
-            if (identity == null || string.IsNullOrWhiteSpace(identity.Fingerprint) || !string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
+            if (identity == null || string.IsNullOrWhiteSpace(identity.Fingerprint) || !IsSupportedScope(scope))
             {
                 return Result(SchemaMigrationExecutionStatus.RequiresReview, "MIGRATION_CONTEXT_INVALID", identity, scope);
             }
@@ -216,6 +216,13 @@ namespace checklistWs.Services.Tenant
             return status == SchemaMigrationResolutionStatus.HistoryInconsistent || status == SchemaMigrationResolutionStatus.RequiresReview
                 ? SchemaMigrationExecutionStatus.RequiresReview
                 : SchemaMigrationExecutionStatus.Failed;
+        }
+
+        private static bool IsSupportedScope(string scope)
+        {
+            return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase);
         }
 
         private static SchemaMigrationExecutionResult Result(

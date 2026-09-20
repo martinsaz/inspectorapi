@@ -42,6 +42,7 @@ namespace checklistWs.Services.Tenant
 
                 using SqlCommand command = new SqlCommand(@"
 SELECT TOP (1)
+    r.NombreRol,
     r.Permisos
 FROM dbo.Usuarios u
 INNER JOIN dbo.Roles r
@@ -58,8 +59,29 @@ WHERE u.idEmpresa = @IdEmpresa
                 command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = request.IdEmpresa;
                 command.Parameters.Add("@UserId", SqlDbType.NVarChar, 256).Value = request.UserId.Trim();
 
-                object? result = await command.ExecuteScalarAsync(cancellationToken);
-                string permisos = result as string ?? string.Empty;
+                string nombreRol = string.Empty;
+                string permisos = string.Empty;
+                using (SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken))
+                {
+                    if (await reader.ReadAsync(cancellationToken))
+                    {
+                        nombreRol = reader["NombreRol"] != DBNull.Value ? reader["NombreRol"].ToString()?.Trim() ?? string.Empty : string.Empty;
+                        permisos = reader["Permisos"] != DBNull.Value ? reader["Permisos"].ToString()?.Trim() ?? string.Empty : string.Empty;
+                    }
+                }
+
+                if (string.Equals(nombreRol, "SuperAdmin", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new ProductosServiciosAuthorizationDecision
+                    {
+                        HasAccess = true,
+                        CanWrite = true,
+                        PermissionCode = permissionCode,
+                        ReasonCode = "ALLOW_SUPERADMIN",
+                        ReferenceId = referenceId
+                    };
+                }
+
                 if (string.IsNullOrWhiteSpace(permisos))
                 {
                     return Deny(permissionCode, "ROLE_PERMISSION_NOT_FOUND", referenceId);

@@ -5,13 +5,19 @@ namespace checklistWs.Services.Tenant
         public const int V1 = 1;
         public const int V2 = 2;
         public const int LatestVersion = V2;
-        public const int SucursalesLatestVersion = V1;
+        public const int SucursalesLatestVersion = V2;
+        public const int ProveedoresLatestVersion = V1;
 
         public SchemaContract GetContract(string scope, int? version = null)
         {
             if (string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase))
             {
                 return GetSucursalesContract(version);
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
+            {
+                return GetProveedoresContract(version);
             }
 
             if (!string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
@@ -756,10 +762,15 @@ namespace checklistWs.Services.Tenant
         private static SchemaContract GetSucursalesContract(int? version)
         {
             int contractVersion = version ?? SucursalesLatestVersion;
-            if (contractVersion != V1)
+            if (contractVersion is not V1 and not V2)
             {
                 throw new InvalidOperationException("SCHEMA_CONTRACT_VERSION_NOT_SUPPORTED");
             }
+
+            SchemaColumnContract notasRazones = NotasSucursales(contractVersion, @"TEXT", 16);
+            SchemaColumnContract notasZonas = NotasSucursales(contractVersion, @"VARCHAR(255)", 255);
+            SchemaColumnContract notasTipos = NotasSucursales(contractVersion, @"VARCHAR(256)", 256);
+            SchemaColumnContract notasSucursales = NotasSucursales(contractVersion, @"VARCHAR(255)", 255);
 
             return new SchemaContract(
                 DatabaseScopes.Sucursales,
@@ -774,21 +785,29 @@ namespace checklistWs.Services.Tenant
                         {
                             new SchemaColumnContract(@"Id", @"UNIQUEIDENTIFIER", null, null, null, false, @"(NEWID())", false, false, null),
                             new SchemaColumnContract(@"IdEmpresa", @"UNIQUEIDENTIFIER", null, null, null, false, null, false, false, null),
-                            new SchemaColumnContract(@"Nombre", @"NVARCHAR(200)", 200, null, null, false, null, false, false, null),
-                            new SchemaColumnContract(@"Representante", @"NVARCHAR(200)", 200, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"RFC", @"NVARCHAR(20)", 20, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Direccion", @"NVARCHAR(300)", 300, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Colonia", @"NVARCHAR(150)", 150, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"CodigoPostal", @"NVARCHAR(20)", 20, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Ciudad", @"NVARCHAR(150)", 150, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Estado", @"NVARCHAR(150)", 150, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Pais", @"NVARCHAR(150)", 150, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Telefono", @"NVARCHAR(50)", 50, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Regimen1", @"NVARCHAR(50)", 50, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Fecha", @"DATETIME", null, null, null, false, @"(GETDATE())", false, false, null),
-                            new SchemaColumnContract(@"IMGFIREBASE", @"NVARCHAR(1000)", 1000, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Notas", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"borrado", @"BIT", null, null, null, false, @"((0))", false, false, null),
+                            new SchemaColumnContract(@"Nombre", @"VARCHAR(200)", 200, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Representante", @"VARCHAR(255)", 255, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"RFC", @"VARCHAR(20)", 20, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Direccion", @"VARCHAR(255)", 255, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Colonia", @"VARCHAR(255)", 255, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"CodigoPostal", @"VARCHAR(20)", 20, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Ciudad", @"VARCHAR(255)", 255, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Estado", @"VARCHAR(255)", 255, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Pais", @"VARCHAR(255)", 255, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Telefono", @"NVARCHAR(13)", 13, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Regimen1", @"VARCHAR(255)", 255, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"Fecha", @"DATETIME", null, null, null, true, @"(GETDATE())", false, false, null),
+                            new SchemaColumnContract(@"usuario", @"VARCHAR(256)", 256, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"tipo", @"NUMERIC(1,0)", null, 1, 0, true, @"((1))", false, false, null),
+                            new SchemaColumnContract(@"IMGFIREBASE", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"ContribEspecial", @"NVARCHAR(13)", 13, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"ObligaConta", @"BIT", null, null, null, true, @"((0))", false, false, null),
+                            new SchemaColumnContract(@"NombreComercial", @"NVARCHAR(300)", 300, null, null, true, @"(NULL)", false, false, null),
+                            new SchemaColumnContract(@"registroPatronal", @"NVARCHAR(50)", 50, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"SitioWeb", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"SitioEncuesta", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            notasRazones,
+                            new SchemaColumnContract(@"borrado", @"BIT", null, null, null, true, @"((0))", false, false, null),
                         },
                         new SchemaPrimaryKeyContract(@"PK_RazonesSociales", new[] { "Id" }, true),
                         Array.Empty<SchemaForeignKeyContract>(),
@@ -808,11 +827,11 @@ namespace checklistWs.Services.Tenant
                         new[]
                         {
                             new SchemaColumnContract(@"Id", @"UNIQUEIDENTIFIER", null, null, null, false, @"(NEWID())", false, false, null),
-                            new SchemaColumnContract(@"Nombre", @"NVARCHAR(200)", 200, null, null, false, null, false, false, null),
-                            new SchemaColumnContract(@"Notas", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Fecha", @"DATETIME", null, null, null, false, @"(GETDATE())", false, false, null),
+                            new SchemaColumnContract(@"Nombre", @"VARCHAR(255)", 255, null, null, false, null, false, false, null),
+                            notasZonas,
+                            new SchemaColumnContract(@"Fecha", @"DATETIME", null, null, null, true, @"(GETDATE())", false, false, null),
                             new SchemaColumnContract(@"IdEmpresa", @"UNIQUEIDENTIFIER", null, null, null, false, null, false, false, null),
-                            new SchemaColumnContract(@"borrado", @"BIT", null, null, null, false, @"((0))", false, false, null),
+                            new SchemaColumnContract(@"borrado", @"BIT", null, null, null, true, @"((0))", false, false, null),
                         },
                         new SchemaPrimaryKeyContract(@"PK_Zonas", new[] { "Id" }, true),
                         Array.Empty<SchemaForeignKeyContract>(),
@@ -828,33 +847,51 @@ namespace checklistWs.Services.Tenant
                         }),
                     new SchemaTableContract(
                         "dbo",
+                        @"SucursalesTipos",
+                        new[]
+                        {
+                            new SchemaColumnContract(@"Nombre", @"NVARCHAR(MAX)", -1, null, null, false, null, false, false, null),
+                            new SchemaColumnContract(@"Fecha", @"DATETIME", null, null, null, true, @"(GETDATE())", false, false, null),
+                            new SchemaColumnContract(@"Id", @"UNIQUEIDENTIFIER", null, null, null, false, @"(NEWID())", false, false, null),
+                            new SchemaColumnContract(@"IdEmpresa", @"UNIQUEIDENTIFIER", null, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"borrado", @"BIT", null, null, null, true, @"((0))", false, false, null),
+                            new SchemaColumnContract(@"Virtual", @"BIT", null, null, null, true, @"((0))", false, false, null),
+                            notasTipos,
+                        },
+                        new SchemaPrimaryKeyContract(@"PK_SucursalesTipos", new[] { "Id" }, true),
+                        Array.Empty<SchemaForeignKeyContract>(),
+                        Array.Empty<SchemaUniqueContract>(),
+                        Array.Empty<SchemaCheckContract>(),
+                        Array.Empty<SchemaIndexContract>()),
+                    new SchemaTableContract(
+                        "dbo",
                         @"Sucursales",
                         new[]
                         {
                             new SchemaColumnContract(@"Id", @"UNIQUEIDENTIFIER", null, null, null, false, @"(NEWID())", false, false, null),
                             new SchemaColumnContract(@"IdEmpresa", @"UNIQUEIDENTIFIER", null, null, null, false, null, false, false, null),
-                            new SchemaColumnContract(@"Nombre", @"NVARCHAR(200)", 200, null, null, false, null, false, false, null),
-                            new SchemaColumnContract(@"Direccion", @"NVARCHAR(300)", 300, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Ciudad", @"NVARCHAR(150)", 150, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Telefono", @"NVARCHAR(50)", 50, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Numero", @"NVARCHAR(50)", 50, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Correo", @"NVARCHAR(200)", 200, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"Pais", @"NVARCHAR(150)", 150, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Nombre", @"NVARCHAR(MAX)", -1, null, null, false, null, false, false, null),
+                            new SchemaColumnContract(@"Direccion", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Ciudad", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"latitud", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"longitud", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Telefono", @"VARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Numero", @"VARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Correo", @"VARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Pais", @"VARCHAR(255)", 255, null, null, true, @"((0))", false, false, null),
                             new SchemaColumnContract(@"IdTitular", @"UNIQUEIDENTIFIER", null, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"IdRazonSocial", @"UNIQUEIDENTIFIER", null, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"IdRazonSocial", @"UNIQUEIDENTIFIER", null, null, null, false, null, false, false, null),
                             new SchemaColumnContract(@"IdZona", @"UNIQUEIDENTIFIER", null, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"IdSucursalTipo", @"UNIQUEIDENTIFIER", null, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"borrado", @"BIT", null, null, null, false, @"((0))", false, false, null),
-                            new SchemaColumnContract(@"Fecha", @"DATETIME", null, null, null, false, @"(GETDATE())", false, false, null),
-                            new SchemaColumnContract(@"Notas", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
-                            new SchemaColumnContract(@"LinkImagen", @"NVARCHAR(1000)", 1000, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"IdSucursalTipo", @"UNIQUEIDENTIFIER", null, null, null, false, null, false, false, null),
+                            new SchemaColumnContract(@"borrado", @"BIT", null, null, null, true, @"((0))", false, false, null),
+                            new SchemaColumnContract(@"Fecha", @"DATETIME2(0)", null, null, 0, true, null, false, false, null),
+                            notasSucursales,
+                            new SchemaColumnContract(@"LinkImagen", @"VARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Tipo", @"VARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"web", @"BIT", null, null, null, true, @"((0))", false, false, null),
                         },
                         new SchemaPrimaryKeyContract(@"PK_Sucursales", new[] { "Id" }, true),
-                        new[]
-                        {
-                            new SchemaForeignKeyContract(@"FK_Sucursales_RazonesSociales_EmpresaId", new[] { @"IdEmpresa", @"IdRazonSocial" }, @"dbo", @"RazonesSociales", new[] { @"IdEmpresa", @"Id" }),
-                            new SchemaForeignKeyContract(@"FK_Sucursales_Zonas_EmpresaId", new[] { @"IdEmpresa", @"IdZona" }, @"dbo", @"Zonas", new[] { @"IdEmpresa", @"Id" }),
-                        },
+                        Array.Empty<SchemaForeignKeyContract>(),
                         new[]
                         {
                             new SchemaUniqueContract(@"UX_Sucursales_Empresa_Id", new[] { @"IdEmpresa", @"Id" }, null),
@@ -863,7 +900,6 @@ namespace checklistWs.Services.Tenant
                         new[]
                         {
                             new SchemaIndexContract(@"UX_Sucursales_Empresa_Id", true, false, new[] { new SchemaIndexColumnContract(@"IdEmpresa", false), new SchemaIndexColumnContract(@"Id", false) }, Array.Empty<string>(), null),
-                            new SchemaIndexContract(@"IX_Sucursales_Empresa_Nombre", false, false, new[] { new SchemaIndexColumnContract(@"IdEmpresa", false), new SchemaIndexColumnContract(@"Nombre", false) }, Array.Empty<string>(), null),
                             new SchemaIndexContract(@"IX_Sucursales_Empresa_RazonZona", false, false, new[] { new SchemaIndexColumnContract(@"IdEmpresa", false), new SchemaIndexColumnContract(@"IdRazonSocial", false), new SchemaIndexColumnContract(@"IdZona", false) }, Array.Empty<string>(), null),
                         }),
                 },
@@ -873,6 +909,77 @@ namespace checklistWs.Services.Tenant
                     @"inspectorapi/checklistWs/Controllers/RazonSocial/RazonSocialController.cs",
                     @"inspectorapi/checklistWs/Controllers/ZonaController1.cs",
                     @"inspector/docs/pattern/APLICACION_PATRON_CHECKAPP_SUCURSALES_RAZONES_REGIONES_20260916.md",
+                },
+                new DateTime(2026, 9, 17, 0, 0, 0, DateTimeKind.Utc));
+        }
+
+        private static SchemaColumnContract NotasSucursales(int contractVersion, string legacyType, int legacyLength)
+        {
+            return contractVersion >= V2
+                ? new SchemaColumnContract(@"Notas", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null)
+                : new SchemaColumnContract(@"Notas", legacyType, legacyLength, null, null, true, null, false, false, null);
+        }
+
+        private static SchemaContract GetProveedoresContract(int? version)
+        {
+            int contractVersion = version ?? ProveedoresLatestVersion;
+            if (contractVersion != V1)
+            {
+                throw new InvalidOperationException("SCHEMA_CONTRACT_VERSION_NOT_SUPPORTED");
+            }
+
+            return new SchemaContract(
+                DatabaseScopes.Proveedores,
+                contractVersion,
+                "Proveedores",
+                new[]
+                {
+                    new SchemaTableContract(
+                        "dbo",
+                        @"ActivosProveedores",
+                        new[]
+                        {
+                            new SchemaColumnContract(@"id", @"UNIQUEIDENTIFIER", null, null, null, false, null, false, false, null),
+                            new SchemaColumnContract(@"idEmpresa", @"UNIQUEIDENTIFIER", null, null, null, false, null, false, false, null),
+                            new SchemaColumnContract(@"Codigo", @"NVARCHAR(64)", 64, null, null, false, null, false, false, null),
+                            new SchemaColumnContract(@"Nombre", @"NVARCHAR(160)", 160, null, null, false, null, false, false, null),
+                            new SchemaColumnContract(@"Descripcion", @"NVARCHAR(MAX)", -1, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"RazonSocial", @"NVARCHAR(250)", 250, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"RFC", @"NVARCHAR(15)", 15, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Telefono", @"NVARCHAR(15)", 15, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Telefono1", @"NVARCHAR(15)", 15, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Email", @"NVARCHAR(50)", 50, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Limite", @"DECIMAL(18,2)", null, 18, 2, false, @"((0))", false, false, null),
+                            new SchemaColumnContract(@"ClasifContable", @"BIT", null, null, null, false, @"((0))", false, false, null),
+                            new SchemaColumnContract(@"CuentaContable", @"NVARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Contacto", @"NVARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"CuentaBancaria", @"NVARCHAR(255)", 255, null, null, true, null, false, false, null),
+                            new SchemaColumnContract(@"Activo", @"BIT", null, null, null, false, @"((1))", false, false, null),
+                            new SchemaColumnContract(@"FechaCreacion", @"DATETIME2(0)", null, null, 0, false, @"(SYSUTCDATETIME())", false, false, null),
+                            new SchemaColumnContract(@"FechaActualizacion", @"DATETIME2(0)", null, null, 0, false, @"(SYSUTCDATETIME())", false, false, null),
+                        },
+                        new SchemaPrimaryKeyContract(@"PK_ActivosProveedores", new[] { "id" }, true),
+                        Array.Empty<SchemaForeignKeyContract>(),
+                        new[]
+                        {
+                            new SchemaUniqueContract(@"UX_ActivosProveedores_IdEmpresa_Codigo", new[] { @"idEmpresa", @"Codigo" }, null),
+                        },
+                        new[]
+                        {
+                            new SchemaCheckContract(@"CK_ActivosProveedores_Limite", @"CHECK (Limite >= 0)"),
+                        },
+                        new[]
+                        {
+                            new SchemaIndexContract(@"UX_ActivosProveedores_IdEmpresa_Codigo", true, false, new[] { new SchemaIndexColumnContract(@"idEmpresa", false), new SchemaIndexColumnContract(@"Codigo", false) }, Array.Empty<string>(), null),
+                            new SchemaIndexContract(@"IX_ActivosProveedores_EmpresaActivoNombre", false, false, new[] { new SchemaIndexColumnContract(@"idEmpresa", false), new SchemaIndexColumnContract(@"Activo", false), new SchemaIndexColumnContract(@"Nombre", false), new SchemaIndexColumnContract(@"Codigo", false) }, Array.Empty<string>(), null),
+                            new SchemaIndexContract(@"IX_ActivosProveedores_Empresa_Rfc", false, false, new[] { new SchemaIndexColumnContract(@"idEmpresa", false), new SchemaIndexColumnContract(@"RFC", false) }, Array.Empty<string>(), @"RFC IS NOT NULL"),
+                        }),
+                },
+                new[]
+                {
+                    @"inspectorapi/checklistWs/Controllers/Activos/ActivosController.cs",
+                    @"inspectorapi/checklistWs/Scripts/activos-proveedores-legacy-parity-up.sql",
+                    @"inspector/docs/pattern/MOKA_PROVEEDORES_LEGACY_PATRON_CHECKAPP_20260917.md",
                 },
                 new DateTime(2026, 9, 17, 0, 0, 0, DateTimeKind.Utc));
         }

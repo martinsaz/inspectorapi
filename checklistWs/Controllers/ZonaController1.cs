@@ -1,4 +1,5 @@
 ﻿using checklistWs.Models.Zonas;
+using checklistWs.Services.Security;
 using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.Mvc;
@@ -29,20 +30,23 @@ namespace checklistWs.Controllers
         [HttpGet("ObtenerZona")]
         public async Task<IActionResult> ObtenerZona(Guid idEmpresa, Guid id)
         {
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Read);
+            if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Regiones no está disponible temporalmente.");
+
             try
             {
                 string query = @"SELECT Id, Nombre, Notas, Fecha, IdEmpresa, borrado 
                                 FROM Zonas 
-                                WHERE borrado = 0 AND idEmpresa = @IdEmpresa AND id = @Id 
+                                WHERE idEmpresa = @IdEmpresa AND id = @Id
                                 ORDER BY Nombre";
 
-                using (SqlConnection connection = _connectionFactory.CreateConnection())
+                using (SqlConnection connection = _scopeContext!.CreateConnection(context))
                 {
                     await connection.OpenAsync();
 
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
-                        command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                        command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
                         command.Parameters.AddWithValue("@Id", id);
 
                         using (SqlDataReader reader = await command.ExecuteReaderAsync())
@@ -55,7 +59,7 @@ namespace checklistWs.Controllers
                                 {
                                     Id = reader.GetGuid(reader.GetOrdinal("Id")),
                                     Nombre = reader.GetString(reader.GetOrdinal("Nombre")),
-                                    Notas = reader.GetString(reader.GetOrdinal("Notas")),
+                                    Notas = reader.IsDBNull(reader.GetOrdinal("Notas")) ? null : reader.GetString(reader.GetOrdinal("Notas")),
                                     Fecha = reader.IsDBNull(reader.GetOrdinal("Fecha")) ? DateTime.MinValue : reader.GetDateTime(reader.GetOrdinal("Fecha")),
                                     IdEmpresa = reader.GetGuid(reader.GetOrdinal("IdEmpresa")),
                                     borrado = reader.GetBoolean(reader.GetOrdinal("borrado"))
@@ -77,25 +81,31 @@ namespace checklistWs.Controllers
         }
 
         [HttpGet("ObtenerZonas")]
-        public async Task<IActionResult> ObtenerZonas(Guid idEmpresa)
+        public async Task<IActionResult> ObtenerZonas(Guid idEmpresa, string estatus = "")
         {
-            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Read);
-            if (auth != null) return auth;
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Read);
+            if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Regiones no está disponible temporalmente.");
 
             try
             {
+                string statusClause = string.Equals(estatus, "inactivo", StringComparison.OrdinalIgnoreCase)
+                    ? " AND ISNULL(borrado, 0) = 1 "
+                    : string.Equals(estatus, "todos", StringComparison.OrdinalIgnoreCase)
+                        ? string.Empty
+                        : " AND ISNULL(borrado, 0) = 0 ";
+
                 string query = @"SELECT Id, Nombre, Notas, Fecha, IdEmpresa, borrado 
                                 FROM Zonas 
-                                WHERE borrado = 0 AND idEmpresa = @IdEmpresa 
+                                WHERE idEmpresa = @IdEmpresa " + statusClause + @"
                                 ORDER BY Nombre";
 
-                using (SqlConnection connection = _connectionFactory.CreateConnection())
+                using (SqlConnection connection = _scopeContext!.CreateConnection(context))
                 {
                     await connection.OpenAsync();
 
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
-                        command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                        command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
 
                         using (SqlDataReader reader = await command.ExecuteReaderAsync())
                         {
@@ -110,7 +120,7 @@ namespace checklistWs.Controllers
                                     Notas = reader.GetString(reader.GetOrdinal("Notas")),
                                     Fecha = reader.IsDBNull(reader.GetOrdinal("Fecha")) ? DateTime.MinValue : reader.GetDateTime(reader.GetOrdinal("Fecha")),
                                     IdEmpresa = reader.GetGuid(reader.GetOrdinal("IdEmpresa")),
-                                    borrado = reader.GetBoolean(reader.GetOrdinal("borrado"))
+                                    borrado = reader.IsDBNull(reader.GetOrdinal("borrado")) ? false : reader.GetBoolean(reader.GetOrdinal("borrado"))
                                 };
 
                                 zonas.Add(zona);
@@ -148,7 +158,7 @@ namespace checklistWs.Controllers
             {
                 string query = @"UPDATE Zonas 
                                  SET Nombre = @Nombre, Notas = @Notas 
-                                 WHERE Id = @Id AND borrado = 0";
+                                 WHERE Id = @Id AND IdEmpresa = @IdEmpresa";
 
                 byte[] data = Convert.FromBase64String(cadena);
                 cadena = Encoding.UTF8.GetString(data);
@@ -160,8 +170,10 @@ namespace checklistWs.Controllers
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
                         command.Parameters.AddWithValue("@Id", id);
+                        command.Parameters.AddWithValue("@IdEmpresa", zona.IdEmpresa);
                         command.Parameters.AddWithValue("@Nombre", zona.Nombre);
-                        command.Parameters.AddWithValue("@Notas", zona.Notas);
+                        string notas = CheckAppRichTextSanitizer.Sanitize(zona.Notas);
+                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
 
                         int rowsAffected = await command.ExecuteNonQueryAsync();
                         if (rowsAffected == 0)
@@ -186,19 +198,23 @@ namespace checklistWs.Controllers
         [HttpDelete("EliminarZona")]
         public async Task<IActionResult> EliminarZona(Guid id)
         {
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Regiones no está disponible temporalmente.");
+
             try
             {
                 string query = @"UPDATE Zonas 
                                  SET borrado = 1 
-                                 WHERE Id = @Id AND borrado = 0";
+                                 WHERE Id = @Id AND IdEmpresa = @IdEmpresa AND borrado = 0";
 
-                using (SqlConnection connection = _connectionFactory.CreateConnection())
+                using (SqlConnection connection = _scopeContext!.CreateConnection(context))
                 {
                     await connection.OpenAsync();
 
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
                         command.Parameters.AddWithValue("@Id", id);
+                        command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
 
                         int rowsAffected = await command.ExecuteNonQueryAsync();
                         if (rowsAffected == 0)
@@ -209,6 +225,54 @@ namespace checklistWs.Controllers
                 }
 
                 return NoContent();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Error: {e.Message}");
+                return StatusCode(500, $"Error interno del servidor: {e.Message}");
+            }
+        }
+
+        [HttpPost("BajaZona")]
+        public async Task<IActionResult> BajaZona(Guid id)
+        {
+            return await CambiarEstatusZonaAsync(id, true);
+        }
+
+        [HttpPost("ReactivarZona")]
+        public async Task<IActionResult> ReactivarZona(Guid id)
+        {
+            return await CambiarEstatusZonaAsync(id, false);
+        }
+
+        private async Task<IActionResult> CambiarEstatusZonaAsync(Guid id, bool borrado)
+        {
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.RegionesPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Regiones no está disponible temporalmente.");
+
+            try
+            {
+                const string query = @"UPDATE Zonas
+                                       SET borrado = @Borrado
+                                       WHERE Id = @Id AND IdEmpresa = @IdEmpresa";
+
+                using (SqlConnection connection = _scopeContext!.CreateConnection(context))
+                {
+                    await connection.OpenAsync();
+                    using (SqlCommand command = new SqlCommand(query, connection))
+                    {
+                        command.Parameters.AddWithValue("@Borrado", borrado);
+                        command.Parameters.AddWithValue("@Id", id);
+                        command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                        int rowsAffected = await command.ExecuteNonQueryAsync();
+                        if (rowsAffected == 0)
+                        {
+                            return NotFound("La región no fue encontrada.");
+                        }
+                    }
+                }
+
+                return Ok("Ok");
             }
             catch (Exception e)
             {
@@ -243,7 +307,8 @@ namespace checklistWs.Controllers
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
                         command.Parameters.AddWithValue("@Nombre", zona.Nombre);
-                        command.Parameters.AddWithValue("@Notas", zona.Notas);
+                        string notas = CheckAppRichTextSanitizer.Sanitize(zona.Notas);
+                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
                         command.Parameters.AddWithValue("@IdEmpresa", zona.IdEmpresa);
 
                         await command.ExecuteNonQueryAsync();
@@ -266,8 +331,15 @@ namespace checklistWs.Controllers
                 return null;
             }
 
-            SucursalesScopeRequestContext? context = await _scopeContext.TryResolveAsync(this, permissionCode, requirement);
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(permissionCode, requirement);
             return context == null ? _scopeContext.ToErrorResult(this) : null;
+        }
+
+        private Task<SucursalesScopeRequestContext?> ResolveSucursalesContextAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
+        {
+            return _scopeContext == null
+                ? Task.FromResult<SucursalesScopeRequestContext?>(null)
+                : _scopeContext.TryResolveAsync(this, permissionCode, requirement);
         }
 
 
@@ -287,7 +359,8 @@ namespace checklistWs.Controllers
                     {
                         command.Parameters.AddWithValue("@Id", nuevoRegistro.Id);
                         command.Parameters.AddWithValue("@Nombre", nuevoRegistro.Nombre);
-                        command.Parameters.AddWithValue("@Notas", nuevoRegistro.Notas);
+                        string notas = CheckAppRichTextSanitizer.Sanitize(nuevoRegistro.Notas);
+                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
                         command.Parameters.AddWithValue("@IdEmpresa", nuevoRegistro.IdEmpresa);
 
                         await command.ExecuteNonQueryAsync();

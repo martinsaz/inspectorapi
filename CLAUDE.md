@@ -1,10 +1,14 @@
 # PATRON CHECKAPP OFICIAL - PRODUCTOSSERVICIOS - 2026-09-16
 
-- 2026-09-16 #MOKA: Sucursales, Razones Sociales y Regiones se homologaron en MVC al patron visual/UX CheckApp. API no se modifico ni se creo scope/contrato/versionamiento nuevo; cualquier AuthZ API granular o scope administrativo comun requiere decision PO. T25 permanece `FROZEN`.
+- 2026-09-17 #MOKA: los PASS visuales previos de Sucursales, Razones Sociales y Regiones quedaron invalidados por QA manual PO. La homologacion debe partir del Golden Master literal `/ProductosServicios/Index` y de `inspector/docs/pattern/PATRON_CHECKAPP_GOLDEN_MASTER_COMPONENT_MATRIX_20260917.md`. API no se modifica para correcciones visuales salvo requerimiento funcional expreso; cualquier AuthZ API granular o scope administrativo comun requiere decision PO. T25 permanece `FROZEN`.
+- 2026-09-17 #MOKA catalogos simples: cuando la UI sea equivalente a catalogo administrativo simple, el Golden Master especifico es `ProductosServicios -> quick-add -> Nueva categoria`; no introducir segunda card interna, copy tecnico decorativo ni huecos artificiales. Backend conserva AuthZ/Gate/idEmpresa.
+- 2026-09-18 #MOKA DynamicGrid catalogos: Golden Master literal `/ProductosServicios/Categorias`. Sucursales/Razones/Regiones deben exponer baja logica/reactivacion por API, filtro `estatus`, conteos activos default 5/1/5, AuthZ especifico, Scope Sucursales, Gate compatible, `DatabaseIdentity` y `idEmpresa` server-side. No hard delete ni desactivar AuthZ/Gate.
+- 2026-09-18 #MOKA acciones DynamicGrid: mejora visual frontend-only. `Editar`, `Dar de baja` y `Reactivar` deben usar el action-group oficial `.ps-catalog-actions`; API no debe reinterpretar esta regla ni convertir baja logica en hard delete.
 - Antes de tocar API/contratos relacionados con el patron CheckApp, leer `inspector/docs/pattern/PATRON_CHECKAPP_OFICIAL_20260916.md`.
 - ProductosServicios es la pantalla base oficial; backend conserva autoridad final de permisos, sanitizacion y schema gate.
 - T25 permanece `FROZEN`; no iniciar T25, Hosting, Firebase, Conexiones, bases QA ni bootstrap.
-- En trabajo local con servidores MVC/API, liberar y verificar puertos `5200` y `5127` al terminar.
+- En trabajo local con servidores MVC/API, liberar y verificar puertos `5200` y `5127` al terminar solo si Codex los inicio; no cerrar procesos preexistentes del Product Owner.
+- Excepcion PO vigente para MOKA DynamicGrid 2026-09-18: si el ticket usa `5200`/`5127`, liberarlos al final y verificar `lsof` sin listeners.
 
 # PRODUCTOSSERVICIOS_SCHEMA_V2_DESCRIPCIONES_HTML - 2026-09-16
 
@@ -292,3 +296,9 @@
 - Certificacion SQL real `CheckAppErp` del scope `Sucursales` V1: PASS para bootstrap, idempotencia, drift reversible, locking, CRUD multitenant, limpieza de fixtures y gate `COMPATIBLE`.
 - Correcciones API de soporte: `SqlDatabaseSchemaProbe` registra los 20 parametros del query para scopes pequenos; `SqlSchemaPhysicalSnapshotReader` usa prefijo de extras por scope y no fijo de ProductosServicios.
 - Cierre final posterior: AuthZ real PASS contra `db_a883c3_checklist`; `ProductosServiciosAuthorizationService` usa fuente legacy/autorizada cuando esta configurada, no la base tenant. Endpoints API usados por Sucursales/Razones/Regiones pasan por `SucursalesScopeRequestContextResolver` antes de SQL negocio. ProductosServicios en `CheckAppErp` migrado a V2 por T17, `SchemaOk`, `DriftCount=0`, gate `COMPATIBLE`. T25 sigue `FROZEN`.
+
+# MOKA UI/UX runtime - 2026-09-17
+
+- Para declarar UI/UX CheckApp PASS se requiere comparacion visual autenticada en navegador contra ProductosServicios; build, CSS y markup no sustituyen runtime real.
+- Si Codex levanta un puerto temporal, debe detenerlo y verificarlo libre antes de entregar.
+- Si `5200`/`5127` ya estaban activos manualmente por el Product Owner antes del trabajo, no detenerlos; dejarlos intactos y reportarlo.

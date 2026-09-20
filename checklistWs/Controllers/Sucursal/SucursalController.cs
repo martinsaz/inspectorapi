@@ -1,6 +1,7 @@
 ﻿using checklistWs.Models.Combo;
 using checklistWs.Models.Lista;
 using checklistWs.Models.Sucursal;
+using checklistWs.Services.Security;
 using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.Http;
@@ -165,7 +166,7 @@ namespace checklistWs.Controllers.Sucursal
                                 LEFT JOIN RazonesSociales rs ON rs.id = su.idRazonSocial 
                                 LEFT JOIN Zonas zo ON zo.id = su.idZona 
                                 LEFT JOIN SucursalesTipos suti ON su.idSucursalTipo = suti.id 
-                                WHERE su.borrado = 0 AND su.idEmpresa = @IdEmpresa AND su.id = @Id 
+                                WHERE su.idEmpresa = @IdEmpresa AND su.id = @Id
                                 ORDER BY su.Nombre";
 
                 byte[] data = Convert.FromBase64String(cadena);
@@ -355,10 +356,10 @@ namespace checklistWs.Controllers.Sucursal
         }
 
         [HttpGet("ObtenerSucursalesCompleta")]
-        public async Task<IActionResult> ObtenerSucursalesCompleta(Guid idEmpresa,string empresa, string mailUsuario = "", string cadena = "")
+        public async Task<IActionResult> ObtenerSucursalesCompleta(Guid idEmpresa,string empresa, string mailUsuario = "", string cadena = "", string estatus = "")
         {
-            IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.SucursalesAbcPermissionCode, ProductosServiciosPermissionRequirement.Read);
-            if (auth != null) return auth;
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.SucursalesAbcPermissionCode, ProductosServiciosPermissionRequirement.Read);
+            if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Sucursales no está disponible temporalmente.");
 
             try
             {
@@ -369,6 +370,12 @@ namespace checklistWs.Controllers.Sucursal
                     sComp = $"AND su.id IN (SELECT idSucursal FROM Usuarios WHERE CorreoPersonal = '{mailUsuario}' OR CorreoInstitucional = '{mailUsuario}')";
                 }
 
+                string statusClause = string.Equals(estatus, "inactivo", StringComparison.OrdinalIgnoreCase)
+                    ? " AND ISNULL(su.borrado, 0) = 1 "
+                    : string.Equals(estatus, "todos", StringComparison.OrdinalIgnoreCase)
+                        ? string.Empty
+                        : " AND ISNULL(su.borrado, 0) = 0 ";
+
                 string query = $@"SELECT su.Id, su.Nombre, su.Direccion, su.Ciudad, su.Telefono, su.Numero, su.Correo, su.Pais, su.IdTitular,
                                 us.CorreoInstitucional as 'usuario', su.idRazonSocial, rs.nombre AS 'nombreRazonSocial', su.idZona, 
                                 zo.Nombre as 'nombreZona', su.idSucursalTipo, suti.Nombre as 'nombreSucursalTipo', su.Notas, su.borrado, 
@@ -378,21 +385,16 @@ namespace checklistWs.Controllers.Sucursal
                                 LEFT JOIN RazonesSociales rs ON rs.id = su.idRazonSocial 
                                 LEFT JOIN Zonas zo ON zo.id = su.idZona 
                                 LEFT JOIN SucursalesTipos suti ON su.idSucursalTipo = suti.id 
-                                WHERE su.borrado = 0 AND su.idEmpresa = @IdEmpresa {sComp} 
+                                WHERE su.idEmpresa = @IdEmpresa {statusClause} {sComp}
                                 ORDER BY su.Nombre";
 
-                byte[] data = Convert.FromBase64String(cadena);
-
-
-                cadena = Encoding.UTF8.GetString(data);
-
-                using (SqlConnection connection = new SqlConnection(cadena))
+                using (SqlConnection connection = _scopeContext!.CreateConnection(context))
 				{
                     await connection.OpenAsync();
 
                     using (SqlCommand command = new SqlCommand(query, connection))
                     {
-                        command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                        command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
 
                         using (SqlDataReader reader = await command.ExecuteReaderAsync())
                         {
@@ -415,7 +417,7 @@ namespace checklistWs.Controllers.Sucursal
                                     NombreRzonSocial = reader.IsDBNull(reader.GetOrdinal("nombreRazonSocial")) ? null : reader.GetString(reader.GetOrdinal("nombreRazonSocial")),
                                     IdZona = reader.IsDBNull(reader.GetOrdinal("idZona")) ? Guid.Empty : reader.GetGuid(reader.GetOrdinal("idZona")),
                                     NombreZona = reader.IsDBNull(reader.GetOrdinal("nombreZona")) ? null : reader.GetString(reader.GetOrdinal("nombreZona")),
-                                    borrado = reader.GetBoolean(reader.GetOrdinal("borrado")),
+                                    borrado = reader.IsDBNull(reader.GetOrdinal("borrado")) ? false : reader.GetBoolean(reader.GetOrdinal("borrado")),
                                     Fecha = reader.GetDateTime(reader.GetOrdinal("fecha")),
                                     Notas = reader.IsDBNull(reader.GetOrdinal("Notas")) ? null : reader.GetString(reader.GetOrdinal("Notas")),
 
@@ -485,7 +487,8 @@ namespace checklistWs.Controllers.Sucursal
                         command.Parameters.AddWithValue("@IdRazonSocial", sucursal.IdRazonSocial);
                         command.Parameters.AddWithValue("@IdZona", sucursal.IdZona);
                         command.Parameters.AddWithValue("@IdSucursalTipo", sucursal.IdSucursalTipo);
-                        command.Parameters.AddWithValue("@Notas", sucursal.Notas);
+                        string notas = CheckAppRichTextSanitizer.Sanitize(sucursal.Notas);
+                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
                         command.Parameters.AddWithValue("@LinkImagen", sucursal.LinkImagen);
 
                         int rowsAffected = await command.ExecuteNonQueryAsync();
@@ -507,13 +510,15 @@ namespace checklistWs.Controllers.Sucursal
 
         private async Task<IActionResult?> AuthorizeSucursalesAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
         {
-            if (_scopeContext == null)
-            {
-                return null;
-            }
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(permissionCode, requirement);
+            return context == null ? _scopeContext?.ToErrorResult(this) : null;
+        }
 
-            SucursalesScopeRequestContext? context = await _scopeContext.TryResolveAsync(this, permissionCode, requirement);
-            return context == null ? _scopeContext.ToErrorResult(this) : null;
+        private Task<SucursalesScopeRequestContext?> ResolveSucursalesContextAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
+        {
+            return _scopeContext == null
+                ? Task.FromResult<SucursalesScopeRequestContext?>(null)
+                : _scopeContext.TryResolveAsync(this, permissionCode, requirement);
         }
 
         [HttpDelete("EliminarSucursal")]
@@ -546,6 +551,54 @@ namespace checklistWs.Controllers.Sucursal
                 }
 
                 return NoContent();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Error: {e.Message}");
+                return StatusCode(500, $"Error interno del servidor: {e.Message}");
+            }
+        }
+
+        [HttpPost("BajaSucursal")]
+        public async Task<IActionResult> BajaSucursal(Guid id)
+        {
+            return await CambiarEstatusSucursalAsync(id, true);
+        }
+
+        [HttpPost("ReactivarSucursal")]
+        public async Task<IActionResult> ReactivarSucursal(Guid id)
+        {
+            return await CambiarEstatusSucursalAsync(id, false);
+        }
+
+        private async Task<IActionResult> CambiarEstatusSucursalAsync(Guid id, bool borrado)
+        {
+            SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.SucursalesAbcPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Sucursales no está disponible temporalmente.");
+
+            try
+            {
+                const string query = @"UPDATE Sucursales
+                                       SET borrado = @Borrado
+                                       WHERE Id = @Id AND IdEmpresa = @IdEmpresa";
+
+                using (SqlConnection connection = _scopeContext!.CreateConnection(context))
+                {
+                    await connection.OpenAsync();
+                    using (SqlCommand command = new SqlCommand(query, connection))
+                    {
+                        command.Parameters.AddWithValue("@Borrado", borrado);
+                        command.Parameters.AddWithValue("@Id", id);
+                        command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                        int rowsAffected = await command.ExecuteNonQueryAsync();
+                        if (rowsAffected == 0)
+                        {
+                            return NotFound("La sucursal no fue encontrada.");
+                        }
+                    }
+                }
+
+                return Ok("Ok");
             }
             catch (Exception e)
             {
@@ -590,7 +643,8 @@ namespace checklistWs.Controllers.Sucursal
                         //command.Parameters.AddWithValue("@IdSucursalTipo", nuevaSucursal.IdSucursalTipo);
                         command.Parameters.AddWithValue("@borrado", nuevaSucursal.borrado);
                         command.Parameters.AddWithValue("@Fecha", nuevaSucursal.Fecha);
-                        command.Parameters.AddWithValue("@Notas", nuevaSucursal.Notas);
+                        string notas = CheckAppRichTextSanitizer.Sanitize(nuevaSucursal.Notas);
+                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
                        // command.Parameters.AddWithValue("@LinkImagen", nuevaSucursal.LinkImagen);
 
                         await command.ExecuteNonQueryAsync();

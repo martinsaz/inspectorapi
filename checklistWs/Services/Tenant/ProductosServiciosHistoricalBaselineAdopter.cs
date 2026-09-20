@@ -6,6 +6,7 @@ namespace checklistWs.Services.Tenant
     {
         public const string BaselineId = "PRODUCTOSSERVICIOS_V1_HISTORICAL_BASELINE";
         public const string SucursalesBaselineId = "SUCURSALES_V1_HISTORICAL_BASELINE";
+        public const string ProveedoresBaselineId = "PROVEEDORES_V1_HISTORICAL_BASELINE";
 
         private readonly IDatabaseStateClassifier _classifier;
         private readonly ISchemaVersionRepository _repository;
@@ -238,14 +239,23 @@ namespace checklistWs.Services.Tenant
         private static bool IsSupportedScope(string scope)
         {
             return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ResolveBaselineId(string scope)
         {
-            return string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase)
-                ? SucursalesBaselineId
-                : BaselineId;
+            if (string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase))
+            {
+                return SucursalesBaselineId;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProveedoresBaselineId;
+            }
+
+            return BaselineId;
         }
 
         private static HistoricalBaselineAdoptionResult NoAdoption(DatabaseIdentity identity, string scope, string reasonCode)

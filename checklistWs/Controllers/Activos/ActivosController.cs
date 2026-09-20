@@ -1,10 +1,13 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Globalization;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using checklistWs.Models.Activos;
+using checklistWs.Services.Tenant;
 using Firebase.Auth;
 using Firebase.Auth.Providers;
 using Firebase.Storage;
@@ -30,6 +33,12 @@ namespace checklistWs.Controllers.Activos
         private const int CodigoCatalogoLength = 64;
         private const int NombreCatalogoLength = 160;
         private const int DescripcionCatalogoLength = 400;
+        private const int DescripcionProveedorLength = 20000;
+        private const int RazonSocialProveedorLength = 250;
+        private const int RfcProveedorLength = 15;
+        private const int TelefonoProveedorLength = 15;
+        private const int EmailProveedorLength = 50;
+        private const int CuentaProveedorLength = 255;
         private const int UrlFirebaseLength = 1024;
         private const int NombreArchivoLength = 255;
         private const int ExtensionLength = 20;
@@ -44,10 +53,17 @@ namespace checklistWs.Controllers.Activos
         private static readonly string[] TiposPermitidos = new[] { "foto", "video", "documento" };
 
         private readonly IConfiguration _configuration;
+        private readonly IProductosServiciosAuthorizationService? _authorizationService;
+        private readonly IProductosServiciosCompatibilityGate? _compatibilityGate;
 
-        public ActivosController(IConfiguration configuration)
+        public ActivosController(
+            IConfiguration configuration,
+            IProductosServiciosAuthorizationService? authorizationService = null,
+            IProductosServiciosCompatibilityGate? compatibilityGate = null)
         {
             _configuration = configuration;
+            _authorizationService = authorizationService;
+            _compatibilityGate = compatibilityGate;
         }
 
         [HttpGet("ObtenerActivos")]
@@ -601,13 +617,25 @@ WHERE idEmpresa = @IdEmpresa AND id = @IdActivo AND Activo = 1", connection);
         [HttpGet("ObtenerProveedoresActivos")]
         public async Task<IActionResult> ObtenerProveedoresActivos(Guid idEmpresa, string cadena, string busqueda = "", string estatus = "")
         {
-            return Ok(await ObtenerCatalogosBasicosAsync<ProveedorActivoDto>(cadena, idEmpresa, busqueda, estatus, "dbo.ActivosProveedores"));
+            IActionResult? auth = await AuthorizeProveedoresAsync(idEmpresa, cadena, ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
+            }
+
+            return Ok(await ObtenerProveedoresActivosAsync(cadena, idEmpresa, busqueda, estatus));
         }
 
         [HttpGet("ObtenerProveedorActivo")]
         public async Task<IActionResult> ObtenerProveedorActivo(Guid idEmpresa, Guid idProveedor, string cadena)
         {
-            ProveedorActivoDto? item = await ObtenerCatalogoBasicoAsync<ProveedorActivoDto>(cadena, idEmpresa, idProveedor, "dbo.ActivosProveedores");
+            IActionResult? auth = await AuthorizeProveedoresAsync(idEmpresa, cadena, ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
+            }
+
+            ProveedorActivoDto? item = await ObtenerProveedorActivoAsync(cadena, idEmpresa, idProveedor);
             return item == null
                 ? NotFound(new ActivoOperacionResponse { Mensaje = "El proveedor no está disponible." })
                 : Ok(item);
@@ -616,19 +644,37 @@ WHERE idEmpresa = @IdEmpresa AND id = @IdActivo AND Activo = 1", connection);
         [HttpPost("GuardarProveedorActivo")]
         public async Task<IActionResult> GuardarProveedorActivo([FromBody] ProveedorActivoGuardarRequest request, Guid idEmpresa, string cadena)
         {
+            IActionResult? auth = await AuthorizeProveedoresAsync(idEmpresa, cadena, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null)
+            {
+                return auth;
+            }
+
             request.IdEmpresa = idEmpresa;
-            return await GuardarCatalogoBasicoAsync(request.Codigo, request.Nombre, request.Descripcion, request.Id, idEmpresa, cadena, "dbo.ActivosProveedores", "proveedor");
+            return await GuardarProveedorActivoAsync(request, idEmpresa, cadena);
         }
 
         [HttpPut("BajaProveedorActivo")]
         public async Task<IActionResult> BajaProveedorActivo(Guid idEmpresa, Guid idProveedor, string cadena)
         {
+            IActionResult? auth = await AuthorizeProveedoresAsync(idEmpresa, cadena, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null)
+            {
+                return auth;
+            }
+
             return await CambiarEstatusCatalogoBasicoAsync(idEmpresa, idProveedor, cadena, "dbo.ActivosProveedores", "proveedor", false);
         }
 
         [HttpPut("ActivarProveedorActivo")]
         public async Task<IActionResult> ActivarProveedorActivo(Guid idEmpresa, Guid idProveedor, string cadena)
         {
+            IActionResult? auth = await AuthorizeProveedoresAsync(idEmpresa, cadena, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null)
+            {
+                return auth;
+            }
+
             return await CambiarEstatusCatalogoBasicoAsync(idEmpresa, idProveedor, cadena, "dbo.ActivosProveedores", "proveedor", true);
         }
 
@@ -882,6 +928,12 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1",
         [HttpGet("ObtenerCatalogoProveedoresActivos")]
         public async Task<IActionResult> ObtenerCatalogoProveedoresActivos(Guid idEmpresa, string cadena, string busqueda = "")
         {
+            IActionResult? auth = await AuthorizeProveedoresAsync(idEmpresa, cadena, ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
+            }
+
             return Ok(await GetCatalogoAsync(
                 cadena,
                 @"
@@ -1016,6 +1068,174 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
                 FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
                 FechaActualizacion = ReadDateTime(reader, "FechaActualizacion")
             };
+        }
+
+        private async Task<List<ProveedorActivoDto>> ObtenerProveedoresActivosAsync(string cadena, Guid idEmpresa, string busqueda, string estatus)
+        {
+            if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId))
+            {
+                return new List<ProveedorActivoDto>();
+            }
+
+            using SqlConnection connection = CreateConnection(cadena);
+            await connection.OpenAsync();
+
+            StringBuilder query = new StringBuilder(@"
+SELECT
+    id, idEmpresa, Codigo, Nombre, Descripcion, RazonSocial, RFC, Telefono, Telefono1, Email,
+    Limite, ClasifContable, CuentaContable, Contacto, CuentaBancaria,
+    Activo, FechaCreacion, FechaActualizacion
+FROM dbo.ActivosProveedores
+WHERE idEmpresa = @IdEmpresa");
+
+            using SqlCommand command = new SqlCommand();
+            command.Connection = connection;
+            command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
+
+            if (!string.IsNullOrWhiteSpace(busqueda))
+            {
+                query.Append(@"
+ AND (
+    Codigo LIKE @Busqueda
+    OR Nombre LIKE @Busqueda
+    OR ISNULL(Descripcion, '') LIKE @Busqueda
+    OR ISNULL(RazonSocial, '') LIKE @Busqueda
+    OR ISNULL(RFC, '') LIKE @Busqueda
+    OR ISNULL(Email, '') LIKE @Busqueda
+    OR ISNULL(Contacto, '') LIKE @Busqueda
+)");
+                command.Parameters.AddWithValue("@Busqueda", $"%{busqueda.Trim()}%");
+            }
+
+            AppendEstatusFilter(query, estatus);
+            query.Append(" ORDER BY Activo DESC, Nombre, Codigo");
+            command.CommandText = query.ToString();
+
+            List<ProveedorActivoDto> items = new List<ProveedorActivoDto>();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(MapProveedorActivo(reader));
+            }
+
+            return items;
+        }
+
+        private async Task<ProveedorActivoDto?> ObtenerProveedorActivoAsync(string cadena, Guid idEmpresa, Guid idProveedor)
+        {
+            if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId))
+            {
+                return null;
+            }
+
+            using SqlConnection connection = CreateConnection(cadena);
+            await connection.OpenAsync();
+
+            using SqlCommand command = new SqlCommand(@"
+SELECT
+    id, idEmpresa, Codigo, Nombre, Descripcion, RazonSocial, RFC, Telefono, Telefono1, Email,
+    Limite, ClasifContable, CuentaContable, Contacto, CuentaBancaria,
+    Activo, FechaCreacion, FechaActualizacion
+FROM dbo.ActivosProveedores
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
+
+            command.Parameters.AddWithValue("@IdEmpresa", effectiveEmpresaId);
+            command.Parameters.AddWithValue("@Id", idProveedor);
+
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            return await reader.ReadAsync() ? MapProveedorActivo(reader) : null;
+        }
+
+        private async Task<IActionResult> GuardarProveedorActivoAsync(ProveedorActivoGuardarRequest request, Guid idEmpresa, string cadena)
+        {
+            try
+            {
+                if (!TryResolveCatalogEmpresa(idEmpresa, out Guid effectiveEmpresaId, out IActionResult? error))
+                {
+                    return error!;
+                }
+
+                string validacion = ValidateProveedorActivoRequest(effectiveEmpresaId, request);
+                if (!string.IsNullOrEmpty(validacion))
+                {
+                    return BadRequest(new ActivoOperacionResponse { Mensaje = validacion });
+                }
+
+                using SqlConnection connection = CreateConnection(cadena);
+                await connection.OpenAsync();
+                using SqlTransaction transaction = connection.BeginTransaction();
+
+                Guid itemId = request.Id ?? Guid.Empty;
+                bool esNuevo = itemId == Guid.Empty;
+                if (esNuevo)
+                {
+                    itemId = Guid.NewGuid();
+                }
+
+                string codigoPersistido = esNuevo
+                    ? await GenerateNextCatalogCodeAsync(connection, transaction, effectiveEmpresaId, "dbo.ActivosProveedores")
+                    : await ObtenerCodigoCatalogoAsync(connection, transaction, effectiveEmpresaId, itemId, "dbo.ActivosProveedores");
+
+                if (string.IsNullOrWhiteSpace(codigoPersistido))
+                {
+                    transaction.Rollback();
+                    return NotFound(new ActivoOperacionResponse { Mensaje = "El proveedor no está disponible." });
+                }
+
+                DateTime ahora = DateTime.UtcNow;
+                if (esNuevo)
+                {
+                    using SqlCommand insert = new SqlCommand(@"
+INSERT INTO dbo.ActivosProveedores
+    (id, idEmpresa, Codigo, Nombre, Descripcion, RazonSocial, RFC, Telefono, Telefono1, Email, Limite, ClasifContable, CuentaContable, Contacto, CuentaBancaria, Activo, FechaCreacion, FechaActualizacion)
+VALUES
+    (@Id, @IdEmpresa, @Codigo, @Nombre, @Descripcion, @RazonSocial, @RFC, @Telefono, @Telefono1, @Email, @Limite, @ClasifContable, @CuentaContable, @Contacto, @CuentaBancaria, 1, @FechaCreacion, @FechaActualizacion)", connection, transaction);
+
+                    BindProveedorActivoParameters(insert, itemId, effectiveEmpresaId, codigoPersistido, request, ahora);
+                    await insert.ExecuteNonQueryAsync();
+                }
+                else
+                {
+                    using SqlCommand update = new SqlCommand(@"
+UPDATE dbo.ActivosProveedores
+SET
+    Nombre = @Nombre,
+    Descripcion = @Descripcion,
+    RazonSocial = @RazonSocial,
+    RFC = @RFC,
+    Telefono = @Telefono,
+    Telefono1 = @Telefono1,
+    Email = @Email,
+    Limite = @Limite,
+    ClasifContable = @ClasifContable,
+    CuentaContable = @CuentaContable,
+    Contacto = @Contacto,
+    CuentaBancaria = @CuentaBancaria,
+    FechaActualizacion = @FechaActualizacion
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+
+                    BindProveedorActivoParameters(update, itemId, effectiveEmpresaId, codigoPersistido, request, ahora);
+                    int rowsAffected = await update.ExecuteNonQueryAsync();
+                    if (rowsAffected == 0)
+                    {
+                        transaction.Rollback();
+                        return NotFound(new ActivoOperacionResponse { Mensaje = "El proveedor no está disponible." });
+                    }
+                }
+
+                transaction.Commit();
+                return Ok(new ActivoOperacionResponse
+                {
+                    Mensaje = esNuevo ? "El proveedor fue registrado." : "El proveedor fue actualizado.",
+                    Id = itemId,
+                    Codigo = codigoPersistido,
+                    Nombre = request.Nombre.Trim()
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new ActivoOperacionResponse { Mensaje = $"Error interno del servidor: {ex.Message}" });
+            }
         }
 
         private async Task<IActionResult> GuardarCatalogoBasicoAsync(string codigo, string nombre, string descripcion, Guid? id, Guid idEmpresa, string cadena, string tableName, string label)
@@ -1163,6 +1383,101 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND Activo <> @Activo", connection);
             }
 
             return true;
+        }
+
+        private async Task<IActionResult?> AuthorizeProveedoresAsync(
+            Guid clientEmpresaId,
+            string cadena,
+            ProductosServiciosPermissionRequirement requirement)
+        {
+            if (!TryResolveCatalogEmpresa(clientEmpresaId, out Guid effectiveEmpresaId, out IActionResult? empresaError))
+            {
+                return empresaError ?? Unauthorized(new ActivoOperacionResponse { Mensaje = "No fue posible resolver la empresa activa." });
+            }
+
+            string usuarioId = Request.Headers.TryGetValue(ProxyUsuarioIdHeader, out var usuarioHeader)
+                ? usuarioHeader.ToString().Trim()
+                : string.Empty;
+            string empresaKey = Request.Headers.TryGetValue(ProxyEmpresaKeyHeader, out var empresaHeader)
+                ? empresaHeader.ToString().Trim()
+                : string.Empty;
+
+            if (string.IsNullOrWhiteSpace(usuarioId) || string.IsNullOrWhiteSpace(empresaKey))
+            {
+                return Unauthorized(new ActivoOperacionResponse { Mensaje = "No fue posible resolver el usuario activo." });
+            }
+
+            TenantDatabaseDescriptor descriptor;
+            try
+            {
+                descriptor = new TenantDatabaseDescriptor
+                {
+                    EmpresaKey = empresaKey,
+                    IdEmpresa = effectiveEmpresaId,
+                    ConnectionString = DecodeConnectionString(cadena)
+                };
+            }
+            catch
+            {
+                return Unauthorized(new ActivoOperacionResponse { Mensaje = "No fue posible resolver la conexión activa." });
+            }
+
+            if (_authorizationService == null)
+            {
+                return StatusCode(503, new ActivoOperacionResponse { Mensaje = "La autorización de proveedores no está disponible." });
+            }
+
+            ProductosServiciosAuthorizationDecision decision = await _authorizationService.AuthorizeAsync(new ProductosServiciosAuthorizationRequest
+            {
+                IdEmpresa = effectiveEmpresaId,
+                UserId = usuarioId,
+                PermissionCode = ProductosServiciosAuthorizationDefaults.ActivosProveedoresPermissionCode,
+                Requirement = requirement,
+                TenantDatabase = descriptor
+            }, HttpContext.RequestAborted);
+
+            if (!decision.IsAllowed(requirement))
+            {
+                ProductosServiciosAuthorizationDecision catalogosDecision = await _authorizationService.AuthorizeAsync(new ProductosServiciosAuthorizationRequest
+                {
+                    IdEmpresa = effectiveEmpresaId,
+                    UserId = usuarioId,
+                    PermissionCode = ProductosServiciosAuthorizationDefaults.ActivosCatalogosPermissionCode,
+                    Requirement = requirement,
+                    TenantDatabase = descriptor
+                }, HttpContext.RequestAborted);
+
+                if (catalogosDecision.IsAllowed(requirement))
+                {
+                    decision = catalogosDecision;
+                }
+            }
+
+            if (!decision.IsAllowed(requirement))
+            {
+                return StatusCode(403, new ActivoOperacionResponse
+                {
+                    Mensaje = $"No tienes permiso para administrar proveedores. Ref: {decision.ReferenceId}"
+                });
+            }
+
+            if (_compatibilityGate != null)
+            {
+                CompatibilityDecision gate = await _compatibilityGate.EvaluateAsync(
+                    descriptor,
+                    DatabaseScopes.Proveedores,
+                    HttpContext.RequestAborted);
+
+                if (!gate.IsAllowed)
+                {
+                    return StatusCode(503, new ActivoOperacionResponse
+                    {
+                        Mensaje = $"Proveedores requiere preparación de esquema antes de operar. Ref: {gate.ReferenceId}"
+                    });
+                }
+            }
+
+            return null;
         }
 
         private bool TryResolveCatalogEmpresa(Guid clientEmpresaId, out Guid effectiveEmpresaId)
@@ -1626,9 +1941,13 @@ WHERE 1 = 1");
 
         private static SqlConnection CreateConnection(string cadena)
         {
+            return new SqlConnection(DecodeConnectionString(cadena));
+        }
+
+        private static string DecodeConnectionString(string cadena)
+        {
             byte[] data = Convert.FromBase64String(cadena);
-            string decoded = Encoding.UTF8.GetString(data);
-            return new SqlConnection(decoded);
+            return Encoding.UTF8.GetString(data);
         }
 
         private static string ValidateActivoRequest(ActivoGuardarRequest request)
@@ -1745,6 +2064,198 @@ WHERE 1 = 1");
             }
 
             return string.Empty;
+        }
+
+        private static string ValidateProveedorActivoRequest(Guid idEmpresa, ProveedorActivoGuardarRequest request)
+        {
+            string baseValidation = ValidateCatalogoBasico(idEmpresa, request.Nombre, string.Empty);
+            if (!string.IsNullOrEmpty(baseValidation))
+            {
+                return baseValidation;
+            }
+
+            if ((request.Descripcion ?? string.Empty).Trim().Length > DescripcionProveedorLength)
+            {
+                return $"La descripción no puede exceder {DescripcionProveedorLength} caracteres.";
+            }
+
+            if ((request.RazonSocial ?? string.Empty).Trim().Length > RazonSocialProveedorLength)
+            {
+                return $"La razón social no puede exceder {RazonSocialProveedorLength} caracteres.";
+            }
+
+            if ((request.Rfc ?? string.Empty).Trim().Length > RfcProveedorLength)
+            {
+                return $"El RFC no puede exceder {RfcProveedorLength} caracteres.";
+            }
+
+            if ((request.Telefono ?? string.Empty).Trim().Length > TelefonoProveedorLength ||
+                (request.Telefono1 ?? string.Empty).Trim().Length > TelefonoProveedorLength)
+            {
+                return $"Los teléfonos no pueden exceder {TelefonoProveedorLength} caracteres.";
+            }
+
+            if ((request.Email ?? string.Empty).Trim().Length > EmailProveedorLength)
+            {
+                return $"El email no puede exceder {EmailProveedorLength} caracteres.";
+            }
+
+            if ((request.CuentaContable ?? string.Empty).Trim().Length > CuentaProveedorLength ||
+                (request.CuentaBancaria ?? string.Empty).Trim().Length > CuentaProveedorLength ||
+                (request.Contacto ?? string.Empty).Trim().Length > CuentaProveedorLength)
+            {
+                return $"Cuenta contable, cuenta bancaria y contacto no pueden exceder {CuentaProveedorLength} caracteres.";
+            }
+
+            if ((request.Limite ?? 0m) < 0m)
+            {
+                return "El límite no puede ser negativo.";
+            }
+
+            return string.Empty;
+        }
+
+        private static ProveedorActivoDto MapProveedorActivo(SqlDataReader reader)
+        {
+            return new ProveedorActivoDto
+            {
+                Id = ReadGuid(reader, "id"),
+                IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                Codigo = ReadString(reader, "Codigo"),
+                Nombre = ReadString(reader, "Nombre"),
+                Descripcion = ReadString(reader, "Descripcion"),
+                RazonSocial = ReadString(reader, "RazonSocial"),
+                Rfc = ReadString(reader, "RFC"),
+                Telefono = ReadString(reader, "Telefono"),
+                Telefono1 = ReadString(reader, "Telefono1"),
+                Email = ReadString(reader, "Email"),
+                Limite = ReadDecimal(reader, "Limite"),
+                ClasificacionContable = ReadBool(reader, "ClasifContable"),
+                CuentaContable = ReadString(reader, "CuentaContable"),
+                Contacto = ReadString(reader, "Contacto"),
+                CuentaBancaria = ReadString(reader, "CuentaBancaria"),
+                Activo = ReadBool(reader, "Activo"),
+                FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
+                FechaActualizacion = ReadDateTime(reader, "FechaActualizacion")
+            };
+        }
+
+        private static void BindProveedorActivoParameters(SqlCommand command, Guid itemId, Guid idEmpresa, string codigo, ProveedorActivoGuardarRequest request, DateTime fecha)
+        {
+            command.Parameters.AddWithValue("@Id", itemId);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@Codigo", codigo);
+            command.Parameters.AddWithValue("@Nombre", request.Nombre.Trim());
+            command.Parameters.AddWithValue("@Descripcion", SanitizeRichTextHtml(request.Descripcion));
+            command.Parameters.AddWithValue("@RazonSocial", ToDbString(request.RazonSocial));
+            command.Parameters.AddWithValue("@RFC", ToDbString((request.Rfc ?? string.Empty).Trim().ToUpperInvariant()));
+            command.Parameters.AddWithValue("@Telefono", ToDbString(request.Telefono));
+            command.Parameters.AddWithValue("@Telefono1", ToDbString(request.Telefono1));
+            command.Parameters.AddWithValue("@Email", ToDbString((request.Email ?? string.Empty).Trim().ToLowerInvariant()));
+            command.Parameters.AddWithValue("@Limite", request.Limite ?? 0m);
+            command.Parameters.AddWithValue("@ClasifContable", request.ClasificacionContable);
+            command.Parameters.AddWithValue("@CuentaContable", ToDbString(request.CuentaContable));
+            command.Parameters.AddWithValue("@Contacto", ToDbString(request.Contacto));
+            command.Parameters.AddWithValue("@CuentaBancaria", ToDbString(request.CuentaBancaria));
+            command.Parameters.AddWithValue("@FechaCreacion", fecha);
+            command.Parameters.AddWithValue("@FechaActualizacion", fecha);
+        }
+
+        private static object ToDbString(string? value)
+        {
+            string normalized = (value ?? string.Empty).Trim();
+            return string.IsNullOrEmpty(normalized) ? DBNull.Value : normalized;
+        }
+
+        private static string SanitizeRichTextHtml(string? value)
+        {
+            string html = (value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(html))
+            {
+                return string.Empty;
+            }
+
+            html = html.Replace("\0", string.Empty);
+            html = Regex.Replace(html, "<!--[\\s\\S]*?-->", string.Empty, RegexOptions.IgnoreCase);
+            html = Regex.Replace(html, "<(script|style|iframe|object|embed|form|input|button|textarea|select)[\\s\\S]*?</\\1>", string.Empty, RegexOptions.IgnoreCase);
+            html = Regex.Replace(html, "<[^>]+>", match => SanitizeAllowedHtmlTag(match.Value), RegexOptions.IgnoreCase);
+            return html.Trim();
+        }
+
+        private static string SanitizeAllowedHtmlTag(string rawTag)
+        {
+            Match nameMatch = Regex.Match(rawTag, @"^<\s*/?\s*([a-z0-9]+)", RegexOptions.IgnoreCase);
+            if (!nameMatch.Success)
+            {
+                return string.Empty;
+            }
+
+            string tagName = nameMatch.Groups[1].Value.ToLowerInvariant();
+            HashSet<string> allowedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "h2", "h3", "blockquote", "code", "pre", "a"
+            };
+
+            if (!allowedTags.Contains(tagName))
+            {
+                return string.Empty;
+            }
+
+            bool isClosing = rawTag.Contains("</", StringComparison.Ordinal);
+            bool selfClosing = rawTag.EndsWith("/>", StringComparison.Ordinal);
+            if (isClosing)
+            {
+                return $"</{tagName}>";
+            }
+
+            if (!string.Equals(tagName, "a", StringComparison.OrdinalIgnoreCase))
+            {
+                return selfClosing ? $"<{tagName} />" : $"<{tagName}>";
+            }
+
+            string href = ExtractAttributeValue(rawTag, "href");
+            if (!IsSafeHref(href))
+            {
+                href = string.Empty;
+            }
+
+            string title = WebUtility.HtmlEncode(ExtractAttributeValue(rawTag, "title"));
+            bool openBlank = string.Equals(ExtractAttributeValue(rawTag, "target"), "_blank", StringComparison.OrdinalIgnoreCase);
+            StringBuilder builder = new StringBuilder("<a");
+            if (!string.IsNullOrWhiteSpace(href))
+            {
+                builder.Append(" href=\"").Append(WebUtility.HtmlEncode(href)).Append('"');
+            }
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                builder.Append(" title=\"").Append(title).Append('"');
+            }
+            if (openBlank)
+            {
+                builder.Append(" target=\"_blank\" rel=\"noopener noreferrer\"");
+            }
+            builder.Append('>');
+            return builder.ToString();
+        }
+
+        private static string ExtractAttributeValue(string tag, string attributeName)
+        {
+            Match match = Regex.Match(tag, attributeName + "\\s*=\\s*(['\"])(.*?)\\1", RegexOptions.IgnoreCase);
+            return match.Success ? match.Groups[2].Value.Trim() : string.Empty;
+        }
+
+        private static bool IsSafeHref(string? href)
+        {
+            if (string.IsNullOrWhiteSpace(href))
+            {
+                return false;
+            }
+
+            string normalized = href.Trim();
+            return normalized.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || normalized.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                || normalized.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
+                || normalized.StartsWith("/", StringComparison.Ordinal);
         }
 
         private async Task<string> GenerateNextCatalogCodeAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, string tableName)
@@ -2447,6 +2958,12 @@ WHERE idEmpresa = @IdEmpresa AND Codigo = @Codigo AND (@ExcludeId IS NULL OR id 
         {
             int ordinal = reader.GetOrdinal(columnName);
             return !reader.IsDBNull(ordinal) && reader.GetBoolean(ordinal);
+        }
+
+        private static decimal ReadDecimal(SqlDataReader reader, string columnName)
+        {
+            int ordinal = reader.GetOrdinal(columnName);
+            return reader.IsDBNull(ordinal) ? 0m : Convert.ToDecimal(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
         }
 
         private static DateTime ReadDateTime(SqlDataReader reader, string columnName)

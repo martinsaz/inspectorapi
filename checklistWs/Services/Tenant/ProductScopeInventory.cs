@@ -33,6 +33,11 @@ namespace checklistWs.Services.Tenant
             "dbo.Sucursales"
         };
 
+        private static readonly IReadOnlyCollection<string> ProveedoresTables = new[]
+        {
+            "dbo.ActivosProveedores"
+        };
+
         public IReadOnlyCollection<string> GetExpectedTables(string scope)
         {
             if (string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
@@ -43,6 +48,11 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase))
             {
                 return SucursalesTables;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProveedoresTables;
             }
 
             return Array.Empty<string>();

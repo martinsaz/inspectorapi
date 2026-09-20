@@ -1,4 +1,5 @@
 ﻿using checklistWs.Models.RazonSocial;
+using checklistWs.Services.Security;
 using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.Mvc;
@@ -42,7 +43,7 @@ namespace checklistWs.Controllers.RazonSocial
 					string query = "SELECT IdEmpresa, Nombre, Representante, RFC, Direccion, Colonia, CodigoPostal, Ciudad, Estado, " +
 								   "Pais, Telefono, Regimen1, Fecha, IMGFIREBASE, Id, Notas, borrado " +
 								   "FROM RazonesSociales " +
-								   "WHERE IdEmpresa = @IdEmpresa AND borrado = 0 AND Id = @Id " +
+								   "WHERE IdEmpresa = @IdEmpresa AND Id = @Id " +
 								   "ORDER BY Nombre";
 
 					using (SqlCommand command = new SqlCommand(query, connection))
@@ -162,32 +163,32 @@ namespace checklistWs.Controllers.RazonSocial
 		}
 
 		[HttpGet("ObtenerRazonesSociales")]
-		public async Task<IActionResult> ObtenerRazonesSociales(Guid idEmpresa, string empresa, string cadena)
+		public async Task<IActionResult> ObtenerRazonesSociales(Guid idEmpresa, string empresa, string cadena, string estatus = "")
 		{
-			IActionResult? auth = await AuthorizeSucursalesAsync(ProductosServiciosAuthorizationDefaults.RazonesSocialesPermissionCode, ProductosServiciosPermissionRequirement.Read);
-			if (auth != null) return auth;
+			SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.RazonesSocialesPermissionCode, ProductosServiciosPermissionRequirement.Read);
+			if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Razones Sociales no está disponible temporalmente.");
 
 			try
 			{
 
-                byte[] data = Convert.FromBase64String(cadena);
-
-
-                cadena = Encoding.UTF8.GetString(data);
-
-                using (SqlConnection connection = new SqlConnection(cadena))
+				using (SqlConnection connection = _scopeContext!.CreateConnection(context))
 				{
 					await connection.OpenAsync();
 
+					string statusClause = string.Equals(estatus, "inactivo", StringComparison.OrdinalIgnoreCase)
+						? " AND ISNULL(borrado, 0) = 1 "
+						: string.Equals(estatus, "todos", StringComparison.OrdinalIgnoreCase)
+							? string.Empty
+							: " AND ISNULL(borrado, 0) = 0 ";
 					string query = "SELECT IdEmpresa, Nombre, Representante, RFC, Direccion, Colonia, CodigoPostal, Ciudad, Estado, " +
-								   "Pais, Telefono, Regimen1, Fecha, IMGFIREBASE, Id, Notas " +
+								   "Pais, Telefono, Regimen1, Fecha, IMGFIREBASE, Id, Notas, borrado " +
 								   "FROM RazonesSociales " +
-								   "WHERE IdEmpresa = @IdEmpresa AND borrado = 0 " +
+								   "WHERE IdEmpresa = @IdEmpresa " + statusClause +
 								   "ORDER BY Nombre";
 
 					using (SqlCommand command = new SqlCommand(query, connection))
 					{
-						command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+						command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
 
 						using (SqlDataReader reader = await command.ExecuteReaderAsync())
 						{
@@ -212,7 +213,8 @@ namespace checklistWs.Controllers.RazonSocial
 									Telefono = reader["Telefono"].ToString(),
 									Notas = reader["Notas"].ToString(),
 									IMGFIREBASE = reader["IMGFIREBASE"].ToString(),
-									Id = reader["Id"] != DBNull.Value ? Guid.Parse(reader["Id"].ToString()) : (Guid?)null
+									Id = reader["Id"] != DBNull.Value ? Guid.Parse(reader["Id"].ToString()) : (Guid?)null,
+									borrado = reader["borrado"] != DBNull.Value && Convert.ToBoolean(reader["borrado"])
 								};
 
 								razonesSociales.Add(razonSocial);
@@ -265,7 +267,8 @@ namespace checklistWs.Controllers.RazonSocial
                         command.Parameters.AddWithValue("@Regimen1", string.IsNullOrEmpty(razonSocialActualizada.Regimen1) ? (object)DBNull.Value : razonSocialActualizada.Regimen1);
                         command.Parameters.AddWithValue("@Fecha", razonSocialActualizada.Fecha ?? (object)DBNull.Value);
                         command.Parameters.AddWithValue("@IMGFIREBASE", string.IsNullOrEmpty(razonSocialActualizada.IMGFIREBASE) ? (object)DBNull.Value : razonSocialActualizada.IMGFIREBASE);
-                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(razonSocialActualizada.Notas) ? (object)DBNull.Value : razonSocialActualizada.Notas);
+                        string notas = CheckAppRichTextSanitizer.Sanitize(razonSocialActualizada.Notas);
+                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
                         command.Parameters.AddWithValue("@Id", id);
                         command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
 
@@ -288,6 +291,54 @@ namespace checklistWs.Controllers.RazonSocial
                 return StatusCode(500, e.Message);
             }
         }
+
+		[HttpPost("BajaRazonSocial")]
+		public async Task<IActionResult> BajaRazonSocial(Guid id)
+		{
+			return await CambiarEstatusRazonSocialAsync(id, true);
+		}
+
+		[HttpPost("ReactivarRazonSocial")]
+		public async Task<IActionResult> ReactivarRazonSocial(Guid id)
+		{
+			return await CambiarEstatusRazonSocialAsync(id, false);
+		}
+
+		private async Task<IActionResult> CambiarEstatusRazonSocialAsync(Guid id, bool borrado)
+		{
+			SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(ProductosServiciosAuthorizationDefaults.RazonesSocialesPermissionCode, ProductosServiciosPermissionRequirement.Write);
+			if (context == null) return _scopeContext?.ToErrorResult(this) ?? StatusCode(503, "Razones Sociales no está disponible temporalmente.");
+
+			try
+			{
+				const string query = @"UPDATE RazonesSociales
+									   SET borrado = @Borrado
+									   WHERE Id = @Id AND IdEmpresa = @IdEmpresa";
+
+				using (SqlConnection connection = _scopeContext!.CreateConnection(context))
+				{
+					await connection.OpenAsync();
+					using (SqlCommand command = new SqlCommand(query, connection))
+					{
+						command.Parameters.AddWithValue("@Borrado", borrado);
+						command.Parameters.AddWithValue("@Id", id);
+						command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+						int rowsAffected = await command.ExecuteNonQueryAsync();
+						if (rowsAffected == 0)
+						{
+							return NotFound("La razón social no fue encontrada.");
+						}
+					}
+				}
+
+				return Ok("Ok");
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine($"Error: {e.Message}");
+				return StatusCode(500, e.Message);
+			}
+		}
 
         [HttpPost("InsertarRazonSocial")]
         public async Task<IActionResult> InsertarRazonSocial([FromBody] RazonSociales nuevaRazonSocial, string empresa, string cadena)
@@ -326,7 +377,8 @@ namespace checklistWs.Controllers.RazonSocial
                         command.Parameters.AddWithValue("@Fecha", nuevaRazonSocial.Fecha ?? (object)DBNull.Value);
                         command.Parameters.AddWithValue("@IMGFIREBASE", string.IsNullOrEmpty(nuevaRazonSocial.IMGFIREBASE) ? (object)DBNull.Value : nuevaRazonSocial.IMGFIREBASE);
                         command.Parameters.AddWithValue("@Id", Guid.NewGuid());
-                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(nuevaRazonSocial.Notas) ? (object)DBNull.Value : nuevaRazonSocial.Notas);
+                        string notas = CheckAppRichTextSanitizer.Sanitize(nuevaRazonSocial.Notas);
+                        command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
 
                         int rowsAffected = await command.ExecuteNonQueryAsync();
 
@@ -386,7 +438,8 @@ namespace checklistWs.Controllers.RazonSocial
 						command.Parameters.AddWithValue("@Fecha", nuevaRazonSocial.Fecha);
 						command.Parameters.AddWithValue("@IMGFIREBASE", nuevaRazonSocial.IMGFIREBASE);
 						command.Parameters.AddWithValue("@Id", nuevaRazonSocial.Id);
-						command.Parameters.AddWithValue("@Notas", nuevaRazonSocial.Notas);
+							string notas = CheckAppRichTextSanitizer.Sanitize(nuevaRazonSocial.Notas);
+							command.Parameters.AddWithValue("@Notas", string.IsNullOrEmpty(notas) ? (object)DBNull.Value : notas);
 
 						int rowsAffected = await command.ExecuteNonQueryAsync();
 
@@ -411,13 +464,15 @@ namespace checklistWs.Controllers.RazonSocial
 
 		private async Task<IActionResult?> AuthorizeSucursalesAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
 		{
-			if (_scopeContext == null)
-			{
-				return null;
-			}
+			SucursalesScopeRequestContext? context = await ResolveSucursalesContextAsync(permissionCode, requirement);
+			return context == null ? _scopeContext?.ToErrorResult(this) : null;
+		}
 
-			SucursalesScopeRequestContext? context = await _scopeContext.TryResolveAsync(this, permissionCode, requirement);
-			return context == null ? _scopeContext.ToErrorResult(this) : null;
+		private Task<SucursalesScopeRequestContext?> ResolveSucursalesContextAsync(string permissionCode, ProductosServiciosPermissionRequirement requirement)
+		{
+			return _scopeContext == null
+				? Task.FromResult<SucursalesScopeRequestContext?>(null)
+				: _scopeContext.TryResolveAsync(this, permissionCode, requirement);
+		}
 		}
 	}
-}

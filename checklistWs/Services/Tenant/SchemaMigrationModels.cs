@@ -150,6 +150,70 @@ namespace checklistWs.Services.Tenant
 
         public SchemaMigrationPackage GetPackage(string scope)
         {
+            if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract proveedores = _contractProvider.GetContract(DatabaseScopes.Proveedores, ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(proveedores);
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.Proveedores,
+                        "PROVEEDORES-B20260917",
+                        ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion,
+                        ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion,
+                        manifest.ManifestHash,
+                        Array.Empty<string>()),
+	                    Array.Empty<SchemaMigrationDefinition>());
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract sucursalesV1 = _contractProvider.GetContract(DatabaseScopes.Sucursales, ProductosServiciosSchemaContractProvider.V1);
+                SchemaContract sucursalesV2 = _contractProvider.GetContract(DatabaseScopes.Sucursales, ProductosServiciosSchemaContractProvider.SucursalesLatestVersion);
+                SchemaManifest sucursalesV2Manifest = _manifestProvider.CreateManifest(sucursalesV2);
+                string sucursalesMigrationSql = BuildSucursalesV1ToV2Sql();
+                SchemaMigrationDefinition sucursalesV1ToV2 = new(
+                    "SUC-M20260917-V1-V2-NOTAS-NVARCHAR-MAX",
+                    "SUC-B20260917",
+                    DatabaseScopes.Sucursales,
+                    sucursalesV1.ContractVersion,
+                    sucursalesV2.ContractVersion,
+                    1,
+                    new[]
+                    {
+                        "dbo.RazonesSociales.Notas",
+                        "dbo.Zonas.Notas",
+                        "dbo.SucursalesTipos.Notas",
+                        "dbo.Sucursales.Notas"
+                    },
+                    BuildSucursalesV1ToV2Preconditions(),
+                    new[]
+                    {
+                        "ALTER_COLUMN_TEXT_VARCHAR_TO_NVARCHAR_MAX_IS_NON_DESTRUCTIVE",
+                        "DATA_PRESERVED_NO_DML",
+                        "NULLABILITY_REMAINS_NULL"
+                    },
+                    SchemaMigrationHash.Sha256(sucursalesMigrationSql),
+                    sucursalesV2Manifest.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    Array.Empty<string>(),
+                    "ReconcileAfterUncertainCommit",
+                    sucursalesMigrationSql,
+                    sucursalesV2);
+
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.Sucursales,
+                        "SUC-B20260917",
+                        sucursalesV1.ContractVersion,
+                        sucursalesV2.ContractVersion,
+                        sucursalesV2Manifest.ManifestHash,
+                        new[] { sucursalesV1ToV2.MigrationId }),
+                    new[] { sucursalesV1ToV2 });
+            }
+
             if (!string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentOutOfRangeException(nameof(scope), scope, null);
@@ -227,6 +291,36 @@ namespace checklistWs.Services.Tenant
             });
         }
 
+        private static IReadOnlyCollection<string> BuildSucursalesV1ToV2Preconditions()
+        {
+            return new[]
+            {
+                ColumnExistsPrecondition("RazonesSociales", "Notas"),
+                ColumnExistsPrecondition("Zonas", "Notas"),
+                ColumnExistsPrecondition("SucursalesTipos", "Notas"),
+                ColumnExistsPrecondition("Sucursales", "Notas"),
+                ColumnIsTextVarcharOrNvarcharPrecondition("RazonesSociales", "Notas"),
+                ColumnIsTextVarcharOrNvarcharPrecondition("Zonas", "Notas"),
+                ColumnIsTextVarcharOrNvarcharPrecondition("SucursalesTipos", "Notas"),
+                ColumnIsTextVarcharOrNvarcharPrecondition("Sucursales", "Notas"),
+                ColumnIsNullablePrecondition("RazonesSociales", "Notas"),
+                ColumnIsNullablePrecondition("Zonas", "Notas"),
+                ColumnIsNullablePrecondition("SucursalesTipos", "Notas"),
+                ColumnIsNullablePrecondition("Sucursales", "Notas")
+            };
+        }
+
+        private static string BuildSucursalesV1ToV2Sql()
+        {
+            return string.Join(Environment.NewLine + Environment.NewLine, new[]
+            {
+                AlterColumnToNvarcharMax("RazonesSociales", "Notas"),
+                AlterColumnToNvarcharMax("Zonas", "Notas"),
+                AlterColumnToNvarcharMax("SucursalesTipos", "Notas"),
+                AlterColumnToNvarcharMax("Sucursales", "Notas")
+            });
+        }
+
         private static string ColumnExistsPrecondition(string table)
         {
             return $@"SELECT CASE WHEN EXISTS (
@@ -237,6 +331,19 @@ namespace checklistWs.Services.Tenant
     WHERE s.name = N'dbo'
       AND t.name = N'{table}'
       AND c.name = N'Descripcion'
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string ColumnExistsPrecondition(string table, string column)
+        {
+            return $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'{column}'
 ) THEN 1 ELSE 0 END;";
         }
 
@@ -270,6 +377,35 @@ namespace checklistWs.Services.Tenant
 ) THEN 1 ELSE 0 END;";
         }
 
+        private static string ColumnIsNullablePrecondition(string table, string column)
+        {
+            return $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'{column}'
+      AND c.is_nullable = 1
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string ColumnIsTextVarcharOrNvarcharPrecondition(string table, string column)
+        {
+            return $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'{column}'
+      AND ty.name IN (N'text', N'varchar', N'nvarchar')
+) THEN 1 ELSE 0 END;";
+        }
+
         private static string AlterDescriptionToMax(string table)
         {
             return $@"IF EXISTS (
@@ -286,6 +422,24 @@ namespace checklistWs.Services.Tenant
 )
 BEGIN
     ALTER TABLE [dbo].[{table}] ALTER COLUMN [Descripcion] NVARCHAR(MAX) NULL;
+END;";
+        }
+
+        private static string AlterColumnToNvarcharMax(string table, string column)
+        {
+            return $@"IF EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'{column}'
+      AND (ty.name <> N'nvarchar' OR c.max_length <> -1)
+)
+BEGIN
+    ALTER TABLE [dbo].[{table}] ALTER COLUMN [{column}] NVARCHAR(MAX) NULL;
 END;";
         }
     }

@@ -89,6 +89,11 @@ namespace checklistWs.Services.Tenant
                 return ProductosServiciosSchemaContractProvider.SucursalesLatestVersion;
             }
 
+            if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion;
+            }
+
             return null;
         }
     }

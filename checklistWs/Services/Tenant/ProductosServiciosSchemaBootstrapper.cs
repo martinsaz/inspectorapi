@@ -189,7 +189,8 @@ namespace checklistWs.Services.Tenant
         private static bool IsSupportedScope(string scope)
         {
             return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase);
         }
 
         private static SchemaProvisionResult NotAllowed(DatabaseClassificationResult classification)

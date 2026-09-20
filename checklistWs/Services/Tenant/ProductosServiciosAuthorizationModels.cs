@@ -50,5 +50,7 @@ namespace checklistWs.Services.Tenant
         public const string SucursalesAbcPermissionCode = "04003100";
         public const string RazonesSocialesPermissionCode = "04004000";
         public const string RegionesPermissionCode = "04005000";
+        public const string ActivosCatalogosPermissionCode = "03506000";
+        public const string ActivosProveedoresPermissionCode = "03506003";
     }
 }
