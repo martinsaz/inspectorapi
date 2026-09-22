@@ -240,7 +240,10 @@ namespace checklistWs.Services.Tenant
         {
             return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ResolveBaselineId(string scope)
@@ -253,6 +256,21 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
             {
                 return ProveedoresBaselineId;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase))
+            {
+                return "ORDENESCOMPRA_V1_HISTORICAL_BASELINE";
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase))
+            {
+                return "INVENTARIO_V1_EMPTY_BASELINE";
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
+            {
+                return "RECEPCION_V1_EMPTY_BASELINE";
             }
 
             return BaselineId;

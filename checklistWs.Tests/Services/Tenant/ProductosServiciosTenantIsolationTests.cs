@@ -102,13 +102,23 @@ namespace checklistWs.Tests.Services.Tenant
 
         [Theory]
         [InlineData("AddProductoServicioParameters", "command.Parameters.AddWithValue(\"@IdEmpresa\", idEmpresa);")]
-        [InlineData("InsertarMovimientoInventarioAsync", "command.Parameters.AddWithValue(\"@IdEmpresa\", idEmpresa);")]
         [InlineData("SynchronizeProductoMultimediaAsync", "insert.Parameters.AddWithValue(\"@IdEmpresa\", idEmpresa);")]
         [InlineData("SynchronizeProductoVariantesAsync", "insert.Parameters.AddWithValue(\"@IdEmpresa\", context.IdEmpresa);")]
         public void InsertsUseServerResolvedEmpresa(string methodName, string expectedParameter)
         {
             string body = ExtractMethodBody(methodName);
             Assert.Contains(expectedParameter, body);
+        }
+
+        [Fact]
+        public void LegacyInventoryMutationEndpointFailsClosedForInventarioV1()
+        {
+            string body = ExtractMethodBody("RegistrarMovimientoInventarioAsync");
+
+            Assert.Contains("ValidateMovimientoRequest(request, effectiveEmpresaId)", body);
+            Assert.Contains("InventarioV1MovimientoBloqueadoMensaje", body);
+            Assert.DoesNotContain("INSERT INTO dbo.ProductosServiciosMovimientosInventario", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("UPDATE dbo.ProductosServiciosExistencias", body, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using checklistWs.Models.OrdenesCompra;
+using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.Mvc;
 using DocumentFormat.OpenXml;
@@ -42,12 +43,17 @@ namespace checklistWs.Controllers.OrdenesCompra
         private readonly IConfiguration _configuration;
         private readonly SqlConnectionFactory _connectionFactory;
         private readonly ILogger<OrdenesCompraController> _logger;
+        private readonly IProductosServiciosAuthorizationService? _authorizationService;
 
-        public OrdenesCompraController(IConfiguration configuration, ILogger<OrdenesCompraController> logger)
+        public OrdenesCompraController(
+            IConfiguration configuration,
+            ILogger<OrdenesCompraController> logger,
+            IProductosServiciosAuthorizationService? authorizationService = null)
         {
             _configuration = configuration;
             _connectionFactory = new SqlConnectionFactory(configuration);
             _logger = logger;
+            _authorizationService = authorizationService;
         }
 
         [HttpGet("ObtenerOrdenesCompra")]
@@ -64,6 +70,14 @@ namespace checklistWs.Controllers.OrdenesCompra
             if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
             {
                 return error!;
+            }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraReportePermissionCode,
+                ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
             }
 
             try
@@ -166,6 +180,15 @@ WHERE oc.idEmpresa = @IdEmpresa
             {
                 return error!;
             }
+            IActionResult? auth = await AuthorizeOrdenCompraAnyAsync(
+                context,
+                ProductosServiciosPermissionRequirement.Read,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraReportePermissionCode);
+            if (auth != null)
+            {
+                return auth;
+            }
 
             try
             {
@@ -265,6 +288,14 @@ WHERE oc.idEmpresa = @IdEmpresa
             if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
             {
                 return error!;
+            }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode,
+                ProductosServiciosPermissionRequirement.Write);
+            if (auth != null)
+            {
+                return auth;
             }
 
             try
@@ -484,6 +515,14 @@ WHERE idEmpresa = @IdEmpresa
             {
                 return error!;
             }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode,
+                ProductosServiciosPermissionRequirement.Write);
+            if (auth != null)
+            {
+                return auth;
+            }
 
             if (request == null || request.IdOrdenCompra == Guid.Empty)
             {
@@ -605,6 +644,14 @@ WHERE idEmpresa = @IdEmpresa
             {
                 return error!;
             }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraReportePermissionCode,
+                ProductosServiciosPermissionRequirement.Write);
+            if (auth != null)
+            {
+                return auth;
+            }
 
             string motivo = NormalizeNullableText(request?.MotivoCancelacion, MotivoCancelacionLength) ?? string.Empty;
             if (request == null || request.IdOrdenCompra == Guid.Empty)
@@ -704,6 +751,14 @@ WHERE idEmpresa = @IdEmpresa
             {
                 return error!;
             }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraReportePermissionCode,
+                ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
+            }
 
             try
             {
@@ -750,6 +805,14 @@ WHERE idEmpresa = @IdEmpresa
             {
                 return error!;
             }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode,
+                ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
+            }
 
             try
             {
@@ -783,6 +846,14 @@ WHERE idEmpresa = @IdEmpresa
             if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
             {
                 return error!;
+            }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode,
+                ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
             }
 
             try
@@ -868,24 +939,28 @@ WHERE ps.idEmpresa = @IdEmpresa
                 command.CommandText = query.ToString();
 
                 List<OrdenCompraBusquedaProductoServicioDto> items = new List<OrdenCompraBusquedaProductoServicioDto>();
-                using SqlDataReader reader = await command.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
+                using (SqlDataReader reader = await command.ExecuteReaderAsync())
                 {
-                    items.Add(new OrdenCompraBusquedaProductoServicioDto
+                    while (await reader.ReadAsync())
                     {
-                        Id = ReadGuid(reader, "id"),
-                        Tipo = ReadByte(reader, "Tipo"),
-                        TipoNombre = ReadString(reader, "TipoNombre"),
-                        Codigo = ReadString(reader, "Codigo"),
-                        Nombre = ReadString(reader, "Nombre"),
-                        Descripcion = ReadString(reader, "Descripcion"),
-                        IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
-                        Unidad = ReadString(reader, "Unidad"),
-                        Abreviatura = ReadString(reader, "Abreviatura"),
-                        CostoActual = ReadNullableDecimal(reader, "Costo"),
-                        CausaInventario = ReadBool(reader, "CausaInventario")
-                    });
+                        items.Add(new OrdenCompraBusquedaProductoServicioDto
+                        {
+                            Id = ReadGuid(reader, "id"),
+                            Tipo = ReadByte(reader, "Tipo"),
+                            TipoNombre = ReadString(reader, "TipoNombre"),
+                            Codigo = ReadString(reader, "Codigo"),
+                            Nombre = ReadString(reader, "Nombre"),
+                            Descripcion = ReadString(reader, "Descripcion"),
+                            IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
+                            Unidad = ReadString(reader, "Unidad"),
+                            Abreviatura = ReadString(reader, "Abreviatura"),
+                            CostoActual = ReadNullableDecimal(reader, "Costo"),
+                            CausaInventario = ReadBool(reader, "CausaInventario")
+                        });
+                    }
                 }
+
+                await HydrateBusquedaV1Async(connection, context.IdEmpresa, items);
 
                 return Ok(items);
             }
@@ -901,6 +976,14 @@ WHERE ps.idEmpresa = @IdEmpresa
             if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
             {
                 return error!;
+            }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode,
+                ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
             }
 
             if (request == null || request.IdOrdenCompra == Guid.Empty)
@@ -978,6 +1061,14 @@ WHERE ps.idEmpresa = @IdEmpresa
             {
                 return error!;
             }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraReportePermissionCode,
+                ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
+            }
 
             if (idOrdenCompra == Guid.Empty)
             {
@@ -1011,6 +1102,14 @@ WHERE ps.idEmpresa = @IdEmpresa
             if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
             {
                 return error!;
+            }
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(
+                context,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraReportePermissionCode,
+                ProductosServiciosPermissionRequirement.Read);
+            if (auth != null)
+            {
+                return auth;
             }
 
             if (idOrdenCompra == Guid.Empty)
@@ -1685,22 +1784,38 @@ WHERE idEmpresa = @IdEmpresa
                     throw new CatalogoValidationException("El producto o servicio no está disponible.");
                 }
 
+                VarianteOrdenCompraSnapshot variante = await ResolveVarianteOrdenCompraAsync(connection, transaction, idEmpresa, snapshot, partidaRequest.IdVariante);
+                PresentacionCompraSnapshot presentacion = await ResolvePresentacionCompraAsync(connection, transaction, idEmpresa, snapshot, variante.Id, partidaRequest.IdPresentacionCompra);
                 decimal costoUnitario = NormalizeMoney(partidaRequest.CostoUnitario);
-                decimal cantidad = NormalizeQuantity(partidaRequest.Cantidad);
-                decimal subtotal = NormalizeMoney(cantidad * costoUnitario);
+                decimal cantidadCompra = NormalizeQuantity(partidaRequest.CantidadCompra ?? partidaRequest.Cantidad);
+                decimal factorConversion = NormalizeQuantity(presentacion.Id.HasValue ? presentacion.FactorConversionBase : 1m);
+                decimal cantidadBase = NormalizeQuantity(cantidadCompra * factorConversion);
+                decimal subtotal = NormalizeMoney(cantidadCompra * costoUnitario);
 
                 result.Add(new OrdenCompraPartidaPersistencia
                 {
                     Id = Guid.NewGuid(),
                     IdProductoServicio = snapshot.Id,
                     TipoProductoServicio = snapshot.Tipo,
+                    IdVariante = variante.Id,
+                    IdPresentacionCompra = presentacion.Id,
                     Codigo = snapshot.Codigo,
                     Nombre = snapshot.Nombre,
                     Descripcion = snapshot.Descripcion,
+                    VarianteSnapshot = variante.Nombre,
+                    PresentacionCompraSnapshot = presentacion.Nombre,
                     IdUnidadMedida = snapshot.IdUnidadMedida,
                     UnidadMedida = snapshot.UnidadMedida,
                     UnidadAbreviatura = snapshot.UnidadAbreviatura,
-                    Cantidad = cantidad,
+                    UnidadCompraSnapshot = presentacion.Id.HasValue ? presentacion.UnidadCompra : snapshot.UnidadMedida,
+                    UnidadCompraAbreviaturaSnapshot = presentacion.Id.HasValue ? presentacion.UnidadCompraAbreviatura : snapshot.UnidadAbreviatura,
+                    Cantidad = cantidadBase,
+                    CantidadCompra = cantidadCompra,
+                    FactorConversionSnapshot = factorConversion,
+                    CantidadBaseOrdenada = cantidadBase,
+                    CantidadBaseRecibidaAcumulada = 0m,
+                    CantidadBasePendiente = cantidadBase,
+                    EstadoPartida = 1,
                     CostoUnitario = costoUnitario,
                     Subtotal = subtotal,
                     Total = subtotal,
@@ -1754,6 +1869,137 @@ WHERE ps.idEmpresa = @IdEmpresa
             };
         }
 
+        private async Task<VarianteOrdenCompraSnapshot> ResolveVarianteOrdenCompraAsync(
+            SqlConnection connection,
+            SqlTransaction transaction,
+            Guid idEmpresa,
+            ProductoServicioSnapshot producto,
+            Guid? idVariante)
+        {
+            if (producto.Tipo != 1)
+            {
+                if (idVariante.HasValue && idVariante.Value != Guid.Empty)
+                {
+                    throw new CatalogoValidationException("Los servicios no aceptan variante.");
+                }
+
+                return new VarianteOrdenCompraSnapshot();
+            }
+
+            int variantesActivas = await CountAsync(connection, transaction, @"
+SELECT COUNT(1)
+FROM dbo.ProductosServiciosVariantes
+WHERE idEmpresa = @IdEmpresa
+  AND idProductoServicio = @IdProductoServicio
+  AND Activo = 1", idEmpresa, producto.Id);
+
+            if (variantesActivas == 0)
+            {
+                if (idVariante.HasValue && idVariante.Value != Guid.Empty)
+                {
+                    throw new CatalogoValidationException("La variante no está disponible para el producto seleccionado.");
+                }
+
+                return new VarianteOrdenCompraSnapshot();
+            }
+
+            if (!idVariante.HasValue || idVariante.Value == Guid.Empty)
+            {
+                throw new CatalogoValidationException("Selecciona una variante para el producto.");
+            }
+
+            using SqlCommand command = new SqlCommand(@"
+SELECT TOP (1)
+    id,
+    Nombre
+FROM dbo.ProductosServiciosVariantes
+WHERE idEmpresa = @IdEmpresa
+  AND idProductoServicio = @IdProductoServicio
+  AND id = @IdVariante
+  AND Activo = 1", connection, transaction);
+
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdProductoServicio", producto.Id);
+            command.Parameters.AddWithValue("@IdVariante", idVariante.Value);
+
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+            {
+                throw new CatalogoValidationException("La variante no está disponible para el producto seleccionado.");
+            }
+
+            return new VarianteOrdenCompraSnapshot
+            {
+                Id = ReadGuid(reader, "id"),
+                Nombre = ReadString(reader, "Nombre")
+            };
+        }
+
+        private async Task<PresentacionCompraSnapshot> ResolvePresentacionCompraAsync(
+            SqlConnection connection,
+            SqlTransaction transaction,
+            Guid idEmpresa,
+            ProductoServicioSnapshot producto,
+            Guid? idVariante,
+            Guid? idPresentacionCompra)
+        {
+            if (!idPresentacionCompra.HasValue || idPresentacionCompra.Value == Guid.Empty)
+            {
+                return new PresentacionCompraSnapshot();
+            }
+
+            if (producto.Tipo != 1)
+            {
+                throw new CatalogoValidationException("Los servicios no aceptan presentación de compra.");
+            }
+
+            using SqlCommand command = new SqlCommand(@"
+SELECT TOP (1)
+    id,
+    idVariante,
+    Nombre,
+    UnidadCompra,
+    UnidadCompraAbreviatura,
+    FactorConversionBase
+FROM dbo.OrdenesCompraPresentacionesCompra
+WHERE idEmpresa = @IdEmpresa
+  AND idProductoServicio = @IdProductoServicio
+  AND id = @IdPresentacionCompra
+  AND Activo = 1
+  AND FechaArchivado IS NULL", connection, transaction);
+
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdProductoServicio", producto.Id);
+            command.Parameters.AddWithValue("@IdPresentacionCompra", idPresentacionCompra.Value);
+
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+            {
+                throw new CatalogoValidationException("La presentación de compra no está disponible.");
+            }
+
+            Guid? presentacionVariante = ReadNullableGuid(reader, "idVariante");
+            if (presentacionVariante.HasValue && (!idVariante.HasValue || presentacionVariante.Value != idVariante.Value))
+            {
+                throw new CatalogoValidationException("La presentación de compra no corresponde a la variante seleccionada.");
+            }
+
+            decimal factor = ReadDecimal(reader, "FactorConversionBase");
+            if (factor <= 0m)
+            {
+                throw new CatalogoValidationException("La presentación de compra tiene un factor inválido.");
+            }
+
+            return new PresentacionCompraSnapshot
+            {
+                Id = ReadGuid(reader, "id"),
+                Nombre = ReadString(reader, "Nombre"),
+                UnidadCompra = ReadString(reader, "UnidadCompra"),
+                UnidadCompraAbreviatura = ReadString(reader, "UnidadCompraAbreviatura"),
+                FactorConversionBase = factor
+            };
+        }
+
         private async Task InsertPartidasAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idOrdenCompra, List<OrdenCompraPartidaPersistencia> partidas, DateTime utcNow)
         {
             foreach (OrdenCompraPartidaPersistencia partida in partidas)
@@ -1768,13 +2014,25 @@ INSERT INTO dbo.OrdenesCompraDetalle
     NumeroPartida,
     idProductoServicio,
     TipoProductoServicio,
+    idVariante,
+    idPresentacionCompra,
     Codigo,
     Nombre,
     Descripcion,
+    VarianteSnapshot,
+    PresentacionCompraSnapshot,
     idUnidadMedida,
     UnidadMedida,
     UnidadAbreviatura,
+    UnidadCompraSnapshot,
+    UnidadCompraAbreviaturaSnapshot,
     Cantidad,
+    CantidadCompra,
+    FactorConversionSnapshot,
+    CantidadBaseOrdenada,
+    CantidadBaseRecibidaAcumulada,
+    CantidadBasePendiente,
+    EstadoPartida,
     CostoUnitario,
     Subtotal,
     Total,
@@ -1791,13 +2049,25 @@ VALUES
     @NumeroPartida,
     @IdProductoServicio,
     @TipoProductoServicio,
+    @IdVariante,
+    @IdPresentacionCompra,
     @Codigo,
     @Nombre,
     @Descripcion,
+    @VarianteSnapshot,
+    @PresentacionCompraSnapshot,
     @IdUnidadMedida,
     @UnidadMedida,
     @UnidadAbreviatura,
+    @UnidadCompraSnapshot,
+    @UnidadCompraAbreviaturaSnapshot,
     @Cantidad,
+    @CantidadCompra,
+    @FactorConversionSnapshot,
+    @CantidadBaseOrdenada,
+    @CantidadBaseRecibidaAcumulada,
+    @CantidadBasePendiente,
+    @EstadoPartida,
     @CostoUnitario,
     @Subtotal,
     @Total,
@@ -1813,13 +2083,25 @@ VALUES
                 command.Parameters.AddWithValue("@NumeroPartida", partida.NumeroPartida);
                 command.Parameters.AddWithValue("@IdProductoServicio", partida.IdProductoServicio);
                 command.Parameters.AddWithValue("@TipoProductoServicio", partida.TipoProductoServicio);
+                command.Parameters.AddWithValue("@IdVariante", partida.IdVariante.HasValue ? partida.IdVariante.Value : DBNull.Value);
+                command.Parameters.AddWithValue("@IdPresentacionCompra", partida.IdPresentacionCompra.HasValue ? partida.IdPresentacionCompra.Value : DBNull.Value);
                 command.Parameters.AddWithValue("@Codigo", partida.Codigo);
                 command.Parameters.AddWithValue("@Nombre", partida.Nombre);
                 command.Parameters.AddWithValue("@Descripcion", (object?)NullIfEmpty(partida.Descripcion) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@VarianteSnapshot", (object?)NullIfEmpty(partida.VarianteSnapshot) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@PresentacionCompraSnapshot", (object?)NullIfEmpty(partida.PresentacionCompraSnapshot) ?? DBNull.Value);
                 command.Parameters.AddWithValue("@IdUnidadMedida", partida.IdUnidadMedida);
                 command.Parameters.AddWithValue("@UnidadMedida", partida.UnidadMedida);
                 command.Parameters.AddWithValue("@UnidadAbreviatura", partida.UnidadAbreviatura);
+                command.Parameters.AddWithValue("@UnidadCompraSnapshot", (object?)NullIfEmpty(partida.UnidadCompraSnapshot) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@UnidadCompraAbreviaturaSnapshot", (object?)NullIfEmpty(partida.UnidadCompraAbreviaturaSnapshot) ?? DBNull.Value);
                 command.Parameters.AddWithValue("@Cantidad", partida.Cantidad);
+                command.Parameters.AddWithValue("@CantidadCompra", partida.CantidadCompra);
+                command.Parameters.AddWithValue("@FactorConversionSnapshot", partida.FactorConversionSnapshot);
+                command.Parameters.AddWithValue("@CantidadBaseOrdenada", partida.CantidadBaseOrdenada);
+                command.Parameters.AddWithValue("@CantidadBaseRecibidaAcumulada", partida.CantidadBaseRecibidaAcumulada);
+                command.Parameters.AddWithValue("@CantidadBasePendiente", partida.CantidadBasePendiente);
+                command.Parameters.AddWithValue("@EstadoPartida", partida.EstadoPartida);
                 command.Parameters.AddWithValue("@CostoUnitario", partida.CostoUnitario);
                 command.Parameters.AddWithValue("@Subtotal", partida.Subtotal);
                 command.Parameters.AddWithValue("@Total", partida.Total);
@@ -1837,13 +2119,25 @@ SELECT
     NumeroPartida,
     idProductoServicio,
     TipoProductoServicio,
+    idVariante,
+    idPresentacionCompra,
     Codigo,
     Nombre,
     ISNULL(Descripcion, '') AS Descripcion,
+    ISNULL(VarianteSnapshot, '') AS VarianteSnapshot,
+    ISNULL(PresentacionCompraSnapshot, '') AS PresentacionCompraSnapshot,
     idUnidadMedida,
     UnidadMedida,
     UnidadAbreviatura,
+    ISNULL(UnidadCompraSnapshot, '') AS UnidadCompraSnapshot,
+    ISNULL(UnidadCompraAbreviaturaSnapshot, '') AS UnidadCompraAbreviaturaSnapshot,
     Cantidad,
+    CantidadCompra,
+    FactorConversionSnapshot,
+    CantidadBaseOrdenada,
+    CantidadBaseRecibidaAcumulada,
+    CantidadBasePendiente,
+    EstadoPartida,
     CostoUnitario,
     Subtotal,
     Total
@@ -1869,13 +2163,25 @@ ORDER BY NumeroPartida", connection);
                     IdProductoServicio = ReadGuid(reader, "idProductoServicio"),
                     TipoProductoServicio = tipo,
                     TipoProductoServicioNombre = GetTipoNombre(tipo),
+                    IdVariante = ReadNullableGuid(reader, "idVariante"),
+                    IdPresentacionCompra = ReadNullableGuid(reader, "idPresentacionCompra"),
                     Codigo = ReadString(reader, "Codigo"),
                     Nombre = ReadString(reader, "Nombre"),
                     Descripcion = ReadString(reader, "Descripcion"),
+                    VarianteSnapshot = ReadString(reader, "VarianteSnapshot"),
+                    PresentacionCompraSnapshot = ReadString(reader, "PresentacionCompraSnapshot"),
                     IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
                     UnidadMedida = ReadString(reader, "UnidadMedida"),
                     UnidadAbreviatura = ReadString(reader, "UnidadAbreviatura"),
+                    UnidadCompraSnapshot = ReadString(reader, "UnidadCompraSnapshot"),
+                    UnidadCompraAbreviaturaSnapshot = ReadString(reader, "UnidadCompraAbreviaturaSnapshot"),
                     Cantidad = ReadDecimal(reader, "Cantidad"),
+                    CantidadCompra = ReadDecimal(reader, "CantidadCompra"),
+                    FactorConversionSnapshot = ReadDecimal(reader, "FactorConversionSnapshot"),
+                    CantidadBaseOrdenada = ReadDecimal(reader, "CantidadBaseOrdenada"),
+                    CantidadBaseRecibidaAcumulada = ReadDecimal(reader, "CantidadBaseRecibidaAcumulada"),
+                    CantidadBasePendiente = ReadDecimal(reader, "CantidadBasePendiente"),
+                    EstadoPartida = ReadByte(reader, "EstadoPartida"),
                     CostoUnitario = ReadDecimal(reader, "CostoUnitario"),
                     Subtotal = ReadDecimal(reader, "Subtotal"),
                     Total = ReadDecimal(reader, "Total")
@@ -2049,6 +2355,133 @@ ORDER BY Nombre", connection);
             return scalar != null && scalar != DBNull.Value && Convert.ToInt32(scalar, CultureInfo.InvariantCulture) > 0;
         }
 
+        private async Task<int> CountAsync(SqlConnection connection, SqlTransaction transaction, string sql, Guid idEmpresa, Guid idProductoServicio)
+        {
+            using SqlCommand command = new SqlCommand(sql, connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+            object? scalar = await command.ExecuteScalarAsync();
+            return scalar != null && scalar != DBNull.Value
+                ? Convert.ToInt32(scalar, CultureInfo.InvariantCulture)
+                : 0;
+        }
+
+        private async Task HydrateBusquedaV1Async(SqlConnection connection, Guid idEmpresa, List<OrdenCompraBusquedaProductoServicioDto> items)
+        {
+            List<Guid> productIds = items
+                .Where(item => item.Tipo == 1)
+                .Select(item => item.Id)
+                .Distinct()
+                .ToList();
+
+            if (productIds.Count == 0)
+            {
+                return;
+            }
+
+            Dictionary<Guid, OrdenCompraBusquedaProductoServicioDto> byProduct = items.ToDictionary(item => item.Id, item => item);
+            string productFilter = BuildGuidInClause(productIds, "@Producto");
+
+            using (SqlCommand variantCommand = new SqlCommand($@"
+SELECT
+    id,
+    idProductoServicio,
+    ISNULL(Sku, '') AS Sku,
+    Nombre,
+    ClaveCombinacion,
+    Costo
+FROM dbo.ProductosServiciosVariantes
+WHERE idEmpresa = @IdEmpresa
+  AND Activo = 1
+  AND idProductoServicio IN ({productFilter})
+ORDER BY idProductoServicio, Orden, Nombre", connection))
+            {
+                variantCommand.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                AddGuidInParameters(variantCommand, productIds, "@Producto");
+
+                using SqlDataReader reader = await variantCommand.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    Guid idProductoServicio = ReadGuid(reader, "idProductoServicio");
+                    if (!byProduct.TryGetValue(idProductoServicio, out OrdenCompraBusquedaProductoServicioDto? product))
+                    {
+                        continue;
+                    }
+
+                    product.Variantes.Add(new OrdenCompraBusquedaVarianteDto
+                    {
+                        Id = ReadGuid(reader, "id"),
+                        IdProductoServicio = idProductoServicio,
+                        Sku = ReadString(reader, "Sku"),
+                        Nombre = ReadString(reader, "Nombre"),
+                        ClaveCombinacion = ReadString(reader, "ClaveCombinacion"),
+                        CostoActual = ReadNullableDecimal(reader, "Costo")
+                    });
+                }
+            }
+
+            using (SqlCommand presentationCommand = new SqlCommand($@"
+SELECT
+    id,
+    idProductoServicio,
+    idVariante,
+    Nombre,
+    idUnidadCompra,
+    UnidadCompra,
+    UnidadCompraAbreviatura,
+    FactorConversionBase
+FROM dbo.OrdenesCompraPresentacionesCompra
+WHERE idEmpresa = @IdEmpresa
+  AND Activo = 1
+  AND FechaArchivado IS NULL
+  AND idProductoServicio IN ({productFilter})
+ORDER BY idProductoServicio, Nombre", connection))
+            {
+                presentationCommand.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                AddGuidInParameters(presentationCommand, productIds, "@Producto");
+
+                using SqlDataReader reader = await presentationCommand.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    Guid idProductoServicio = ReadGuid(reader, "idProductoServicio");
+                    if (!byProduct.TryGetValue(idProductoServicio, out OrdenCompraBusquedaProductoServicioDto? product))
+                    {
+                        continue;
+                    }
+
+                    product.PresentacionesCompra.Add(new OrdenCompraBusquedaPresentacionCompraDto
+                    {
+                        Id = ReadGuid(reader, "id"),
+                        IdProductoServicio = idProductoServicio,
+                        IdVariante = ReadNullableGuid(reader, "idVariante"),
+                        Nombre = ReadString(reader, "Nombre"),
+                        IdUnidadCompra = ReadGuid(reader, "idUnidadCompra"),
+                        UnidadCompra = ReadString(reader, "UnidadCompra"),
+                        UnidadCompraAbreviatura = ReadString(reader, "UnidadCompraAbreviatura"),
+                        FactorConversionBase = ReadDecimal(reader, "FactorConversionBase")
+                    });
+                }
+            }
+
+            foreach (OrdenCompraBusquedaProductoServicioDto item in items)
+            {
+                item.RequiereVariante = item.Tipo == 1 && item.Variantes.Count > 0;
+            }
+        }
+
+        private static string BuildGuidInClause(List<Guid> ids, string prefix)
+        {
+            return string.Join(", ", ids.Select((_, index) => $"{prefix}{index}"));
+        }
+
+        private static void AddGuidInParameters(SqlCommand command, List<Guid> ids, string prefix)
+        {
+            for (int index = 0; index < ids.Count; index++)
+            {
+                command.Parameters.AddWithValue($"{prefix}{index}", ids[index]);
+            }
+        }
+
         private async Task<string> ReserveNextFolioAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, DateTime utcNow)
         {
             using SqlCommand seedCommand = new SqlCommand(@"
@@ -2137,7 +2570,7 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
 
         private void ValidateRequestPartidas(List<OrdenCompraPartidaGuardarRequest> partidas)
         {
-            HashSet<Guid> ids = new HashSet<Guid>();
+            HashSet<string> ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (OrdenCompraPartidaGuardarRequest partida in partidas)
             {
@@ -2146,17 +2579,25 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
                     throw new CatalogoValidationException("El producto o servicio no está disponible.");
                 }
 
-                if (!ids.Add(partida.IdProductoServicio))
+                string variantKey = partida.IdVariante.HasValue && partida.IdVariante.Value != Guid.Empty
+                    ? partida.IdVariante.Value.ToString("D")
+                    : "NULL";
+                string presentationKey = partida.IdPresentacionCompra.HasValue && partida.IdPresentacionCompra.Value != Guid.Empty
+                    ? partida.IdPresentacionCompra.Value.ToString("D")
+                    : "BASE";
+                if (!ids.Add($"{partida.IdProductoServicio:D}:{variantKey}:{presentationKey}"))
                 {
-                    throw new CatalogoValidationException("No se permiten partidas duplicadas.");
+                    throw new CatalogoValidationException("No se permiten partidas duplicadas para el mismo producto, variante y presentación.");
                 }
 
-                if (partida.Cantidad <= 0m)
+                decimal cantidadCompra = partida.CantidadCompra ?? partida.Cantidad;
+                decimal factor = partida.FactorConversionSnapshot ?? 1m;
+                if (cantidadCompra <= 0m || factor <= 0m)
                 {
                     throw new CatalogoValidationException("La orden debe contener al menos una partida.");
                 }
 
-                if (!HasScale(partida.Cantidad, 4))
+                if (!HasScale(cantidadCompra, 4) || !HasScale(factor, 12))
                 {
                     throw new CatalogoValidationException("La cantidad tiene un formato inválido.");
                 }
@@ -2185,6 +2626,74 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
             totals.Subtotal = NormalizeMoney(totals.Subtotal);
             totals.Total = NormalizeMoney(totals.Total);
             return totals;
+        }
+
+        private async Task<IActionResult?> AuthorizeOrdenCompraAnyAsync(
+            RequestContext context,
+            ProductosServiciosPermissionRequirement requirement,
+            params string[] permissionCodes)
+        {
+            IActionResult? lastDeny = null;
+            foreach (string permissionCode in permissionCodes)
+            {
+                IActionResult? auth = await AuthorizeOrdenCompraAsync(context, permissionCode, requirement);
+                if (auth == null)
+                {
+                    return null;
+                }
+
+                lastDeny = auth;
+            }
+
+            return lastDeny;
+        }
+
+        private async Task<IActionResult?> AuthorizeOrdenCompraAsync(
+            RequestContext context,
+            string permissionCode,
+            ProductosServiciosPermissionRequirement requirement)
+        {
+            if (_authorizationService == null)
+            {
+                return StatusCode(503, new OrdenCompraOperacionResponse { Mensaje = "La autorización de órdenes de compra no está disponible." });
+            }
+
+            string usuarioId = TryResolveUserId();
+            if (string.IsNullOrWhiteSpace(usuarioId))
+            {
+                return Unauthorized(new OrdenCompraOperacionResponse { Mensaje = "No fue posible resolver el usuario activo." });
+            }
+
+            ProductosServiciosAuthorizationDecision decision = await _authorizationService.AuthorizeAsync(new ProductosServiciosAuthorizationRequest
+            {
+                IdEmpresa = context.IdEmpresa,
+                UserId = usuarioId,
+                PermissionCode = permissionCode,
+                Requirement = requirement,
+                TenantDatabase = new TenantDatabaseDescriptor
+                {
+                    IdEmpresa = context.IdEmpresa,
+                    EmpresaKey = context.EmpresaStorageKey,
+                    ConnectionString = string.Empty
+                }
+            }, HttpContext.RequestAborted);
+
+            if (decision.IsAllowed(requirement))
+            {
+                return null;
+            }
+
+            _logger.LogWarning(
+                "AuthZ OrdenesCompra bloqueó operación. ReferenceId={ReferenceId} PermissionCode={PermissionCode} Requirement={Requirement} ReasonCode={ReasonCode}",
+                decision.ReferenceId,
+                decision.PermissionCode,
+                requirement,
+                decision.ReasonCode);
+
+            return StatusCode(403, new OrdenCompraOperacionResponse
+            {
+                Mensaje = $"No tienes permiso para órdenes de compra. Ref: {decision.ReferenceId}"
+            });
         }
 
         private bool TryResolveRequestContext(Guid? clientEmpresaId, string? clientEmpresaKey, out RequestContext context, out IActionResult? error)
@@ -2283,6 +2792,27 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
             return null;
         }
 
+        private string TryResolveUserId()
+        {
+            foreach (string claimKey in UsuarioClaimKeys)
+            {
+                string? value = User.FindFirstValue(claimKey);
+                if (!string.IsNullOrWhiteSpace(value) && value.Length <= 256 && !value.Any(char.IsControl))
+                {
+                    return value.Trim();
+                }
+            }
+
+            if (TryResolveSignedProxyContext(out SignedProxyContext? proxyContext) &&
+                proxyContext != null &&
+                !string.IsNullOrWhiteSpace(proxyContext.UserId))
+            {
+                return proxyContext.UserId;
+            }
+
+            return string.Empty;
+        }
+
         private bool TryResolveSignedProxyContext(out SignedProxyContext? context)
         {
             if (HttpContext.Items.TryGetValue(ProxyContextItemKey, out object? cached))
@@ -2347,6 +2877,7 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
             {
                 IdEmpresa = empresaId,
                 EmpresaStorageKey = empresaKeyRaw.ToUpperInvariant(),
+                UserId = usuarioIdRaw,
                 UsuarioId = Guid.TryParse(usuarioIdRaw, out Guid usuarioId) && usuarioId != Guid.Empty ? usuarioId : null
             };
 
@@ -2574,6 +3105,7 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
         {
             public Guid IdEmpresa { get; set; }
             public string EmpresaStorageKey { get; set; } = string.Empty;
+            public string UserId { get; set; } = string.Empty;
             public Guid? UsuarioId { get; set; }
         }
 
@@ -2599,19 +3131,46 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
             public string UnidadAbreviatura { get; set; } = string.Empty;
         }
 
+        private sealed class VarianteOrdenCompraSnapshot
+        {
+            public Guid? Id { get; set; }
+            public string Nombre { get; set; } = string.Empty;
+        }
+
+        private sealed class PresentacionCompraSnapshot
+        {
+            public Guid? Id { get; set; }
+            public string Nombre { get; set; } = string.Empty;
+            public string UnidadCompra { get; set; } = string.Empty;
+            public string UnidadCompraAbreviatura { get; set; } = string.Empty;
+            public decimal FactorConversionBase { get; set; } = 1m;
+        }
+
         private sealed class OrdenCompraPartidaPersistencia
         {
             public Guid Id { get; set; }
             public int NumeroPartida { get; set; }
             public Guid IdProductoServicio { get; set; }
             public byte TipoProductoServicio { get; set; }
+            public Guid? IdVariante { get; set; }
+            public Guid? IdPresentacionCompra { get; set; }
             public string Codigo { get; set; } = string.Empty;
             public string Nombre { get; set; } = string.Empty;
             public string Descripcion { get; set; } = string.Empty;
+            public string VarianteSnapshot { get; set; } = string.Empty;
+            public string PresentacionCompraSnapshot { get; set; } = string.Empty;
             public Guid IdUnidadMedida { get; set; }
             public string UnidadMedida { get; set; } = string.Empty;
             public string UnidadAbreviatura { get; set; } = string.Empty;
+            public string UnidadCompraSnapshot { get; set; } = string.Empty;
+            public string UnidadCompraAbreviaturaSnapshot { get; set; } = string.Empty;
             public decimal Cantidad { get; set; }
+            public decimal CantidadCompra { get; set; }
+            public decimal FactorConversionSnapshot { get; set; }
+            public decimal CantidadBaseOrdenada { get; set; }
+            public decimal CantidadBaseRecibidaAcumulada { get; set; }
+            public decimal CantidadBasePendiente { get; set; }
+            public byte EstadoPartida { get; set; }
             public decimal CostoUnitario { get; set; }
             public decimal Subtotal { get; set; }
             public decimal Total { get; set; }

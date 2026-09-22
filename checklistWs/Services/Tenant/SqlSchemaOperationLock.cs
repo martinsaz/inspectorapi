@@ -123,6 +123,21 @@ namespace checklistWs.Services.Tenant
                 return DatabaseScopes.Proveedores;
             }
 
+            if (string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase))
+            {
+                return DatabaseScopes.OrdenesCompra;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase))
+            {
+                return DatabaseScopes.Inventario;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
+            {
+                return DatabaseScopes.Recepcion;
+            }
+
             return Regex.Replace(scope ?? string.Empty, @"[^A-Za-z0-9_\-]", string.Empty);
         }
 

@@ -37,6 +37,7 @@ namespace checklistWs.Controllers.ProductosServicios
         private const byte MovimientoSalida = 3;
         private const byte MovimientoAjustePositivo = 4;
         private const byte MovimientoAjusteNegativo = 5;
+        private const string InventarioV1MovimientoBloqueadoMensaje = "Inventario V1 requiere sucursal, origen e idempotencia. Registra inventario desde el flujo operativo correspondiente.";
         private const int CodigoLength = 50;
         private const int NombreLength = 150;
         private const int ObservacionesLength = 1000;
@@ -225,10 +226,10 @@ SELECT
     ps.UsaNumeroSerie,
     ps.CausaInventario,
     ps.PermiteVentaSinExistencia,
-    ex.id AS IdExistencia,
-    ex.ExistenciaActual,
-    ex.ExistenciaMinima,
-    ex.CostoPromedio,
+    CAST(NULL AS uniqueidentifier) AS IdExistencia,
+    ISNULL(inv.ExistenciaActual, 0) AS ExistenciaActual,
+    CAST(0 AS decimal(18,4)) AS ExistenciaMinima,
+    CAST(NULL AS decimal(18,4)) AS CostoPromedio,
     ISNULL(ps.ImagenUrl, '') AS ImagenUrl,
     ISNULL(ps.ImagenNombre, '') AS ImagenNombre,
     ISNULL(mm.CantidadFotos, 0) AS CantidadFotos,
@@ -250,8 +251,11 @@ LEFT JOIN dbo.ProductosServiciosColecciones col
     ON col.idEmpresa = ps.idEmpresa AND col.id = ps.idColeccion
 LEFT JOIN dbo.ProductosServiciosPaquetes pa
     ON pa.idEmpresa = ps.idEmpresa AND pa.id = ps.idPaquete
-LEFT JOIN dbo.ProductosServiciosExistencias ex
-    ON ex.idEmpresa = ps.idEmpresa AND ex.idProductoServicio = ps.id
+OUTER APPLY (
+    SELECT SUM(s.CantidadBaseActual) AS ExistenciaActual
+    FROM dbo.InventarioSaldos s
+    WHERE s.idEmpresa = ps.idEmpresa AND s.idProductoServicio = ps.id
+) inv
 LEFT JOIN (
     SELECT
         pm.idEmpresa,
@@ -399,10 +403,10 @@ SELECT
     ps.UsaNumeroSerie,
     ps.CausaInventario,
     ps.PermiteVentaSinExistencia,
-    ex.id AS IdExistencia,
-    ex.ExistenciaActual,
-    ex.ExistenciaMinima,
-    ex.CostoPromedio,
+    CAST(NULL AS uniqueidentifier) AS IdExistencia,
+    ISNULL(inv.ExistenciaActual, 0) AS ExistenciaActual,
+    CAST(0 AS decimal(18,4)) AS ExistenciaMinima,
+    CAST(NULL AS decimal(18,4)) AS CostoPromedio,
     ISNULL(ps.ImagenUrl, '') AS ImagenUrl,
     ISNULL(ps.ImagenNombre, '') AS ImagenNombre,
     ISNULL(mm.CantidadFotos, 0) AS CantidadFotos,
@@ -424,8 +428,11 @@ LEFT JOIN dbo.ProductosServiciosColecciones col
     ON col.idEmpresa = ps.idEmpresa AND col.id = ps.idColeccion
 LEFT JOIN dbo.ProductosServiciosPaquetes pa
     ON pa.idEmpresa = ps.idEmpresa AND pa.id = ps.idPaquete
-LEFT JOIN dbo.ProductosServiciosExistencias ex
-    ON ex.idEmpresa = ps.idEmpresa AND ex.idProductoServicio = ps.id
+OUTER APPLY (
+    SELECT SUM(s.CantidadBaseActual) AS ExistenciaActual
+    FROM dbo.InventarioSaldos s
+    WHERE s.idEmpresa = ps.idEmpresa AND s.idProductoServicio = ps.id
+) inv
 OUTER APPLY (
     SELECT
         SUM(CASE WHEN pm.Activo = 1 AND pm.Foto = 1 THEN 1 ELSE 0 END) AS CantidadFotos,
@@ -660,8 +667,8 @@ SELECT TOP (1)
     ps.UsaNumeroSerie,
     ps.CausaInventario,
     ps.PermiteVentaSinExistencia,
-    ex.ExistenciaActual,
-    ex.ExistenciaMinima
+    ISNULL(inv.ExistenciaActual, 0) AS ExistenciaActual,
+    CAST(0 AS decimal(18,4)) AS ExistenciaMinima
 FROM dbo.ProductosServicios ps
 INNER JOIN dbo.ProductosServiciosCategorias cat
     ON cat.idEmpresa = ps.idEmpresa AND cat.id = ps.idCategoria
@@ -673,8 +680,11 @@ LEFT JOIN dbo.ProductosServiciosColecciones col
     ON col.idEmpresa = ps.idEmpresa AND col.id = ps.idColeccion
 LEFT JOIN dbo.ProductosServiciosPaquetes pa
     ON pa.idEmpresa = ps.idEmpresa AND pa.id = ps.idPaquete
-LEFT JOIN dbo.ProductosServiciosExistencias ex
-    ON ex.idEmpresa = ps.idEmpresa AND ex.idProductoServicio = ps.id
+OUTER APPLY (
+    SELECT SUM(s.CantidadBaseActual) AS ExistenciaActual
+    FROM dbo.InventarioSaldos s
+    WHERE s.idEmpresa = ps.idEmpresa AND s.idProductoServicio = ps.id
+) inv
 WHERE ps.idEmpresa = @IdEmpresa
   AND ps.id = @IdProductoServicio
   AND ps.FechaArchivado IS NULL", connection);
@@ -1688,11 +1698,14 @@ SELECT
     SUM(CASE WHEN ps.CausaInventario = 1 THEN 1 ELSE 0 END) AS TotalConInventario,
     SUM(CASE WHEN ps.CausaInventario = 0 THEN 1 ELSE 0 END) AS TotalSinInventario,
     SUM(CASE WHEN ps.PermiteVentaSinExistencia = 1 THEN 1 ELSE 0 END) AS TotalInventarioNegativoPermitido,
-    SUM(CASE WHEN ps.CausaInventario = 1 AND ex.id IS NOT NULL AND ex.ExistenciaActual <= ex.ExistenciaMinima THEN 1 ELSE 0 END) AS TotalBajoMinimo,
-    SUM(CASE WHEN ps.CausaInventario = 1 AND ex.id IS NOT NULL THEN ISNULL(ex.ExistenciaActual, 0) * ISNULL(ps.Costo, 0) ELSE 0 END) AS ValorInventarioEstimado
+    SUM(CASE WHEN ps.CausaInventario = 1 AND ISNULL(inv.ExistenciaActual, 0) <= 0 THEN 1 ELSE 0 END) AS TotalBajoMinimo,
+    SUM(CASE WHEN ps.CausaInventario = 1 THEN ISNULL(inv.ExistenciaActual, 0) * ISNULL(ps.Costo, 0) ELSE 0 END) AS ValorInventarioEstimado
 FROM dbo.ProductosServicios ps
-LEFT JOIN dbo.ProductosServiciosExistencias ex
-    ON ex.idEmpresa = ps.idEmpresa AND ex.idProductoServicio = ps.id
+OUTER APPLY (
+    SELECT SUM(s.CantidadBaseActual) AS ExistenciaActual
+    FROM dbo.InventarioSaldos s
+    WHERE s.idEmpresa = ps.idEmpresa AND s.idProductoServicio = ps.id
+) inv
 WHERE ps.idEmpresa = @IdEmpresa", connection);
 
                 command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
@@ -2626,46 +2639,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id AND idAtributo = @IdAtributo", connect
                     return BadRequest(new ProductoServicioOperacionResponse { Mensaje = validacion });
                 }
 
-                using SqlConnection connection = CreateConnection(context);
-                await connection.OpenAsync();
-                using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-
-                ProductoServicioSnapshot? producto = await ObtenerProductoServicioSnapshotAsync(connection, transaction, effectiveEmpresaId, request.IdProductoServicio);
-                if (producto == null || !producto.Activo)
-                {
-                    transaction.Rollback();
-                    return NotFound(new ProductoServicioOperacionResponse { Mensaje = "El producto no está disponible para inventario." });
-                }
-
-                string inventoryValidation = ValidateProductoInventariable(producto);
-                if (!string.IsNullOrWhiteSpace(inventoryValidation))
-                {
-                    transaction.Rollback();
-                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = inventoryValidation });
-                }
-
-                ProductoServicioExistenciaDto? existencia = await ObtenerExistenciaInternaAsync(connection, transaction, effectiveEmpresaId, request.IdProductoServicio, true);
-                if (existencia == null)
-                {
-                    transaction.Rollback();
-                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "El producto no cuenta con una existencia inicial para operar inventario." });
-                }
-
-                Guid? usuarioId = TryResolveUsuarioId();
-                DateTime ahora = DateTime.UtcNow;
-                string movimientoValidation = ValidateMovimientoAgainstExistencia(producto, existencia, request, tipoMovimiento);
-                if (!string.IsNullOrWhiteSpace(movimientoValidation))
-                {
-                    transaction.Rollback();
-                    return BadRequest(new ProductoServicioOperacionResponse { Mensaje = movimientoValidation });
-                }
-
-                decimal existenciaPosterior = CalcularExistenciaPosterior(existencia.ExistenciaActual, request.Cantidad, tipoMovimiento);
-                await ActualizarExistenciaAsync(connection, transaction, effectiveEmpresaId, existencia.Id, existenciaPosterior, existencia.ExistenciaMinima, request.CostoUnitario, ahora);
-                await InsertarMovimientoInventarioAsync(connection, transaction, effectiveEmpresaId, request.IdProductoServicio, tipoMovimiento, request.Cantidad, existencia.ExistenciaActual, existenciaPosterior, request.CostoUnitario, request.Referencia, request.Observaciones, usuarioId, ahora);
-
-                transaction.Commit();
-                return Ok(new ProductoServicioOperacionResponse { Mensaje = $"El movimiento de inventario '{GetMovimientoNombre(tipoMovimiento)}' fue registrado." });
+                return BadRequest(new ProductoServicioOperacionResponse { Mensaje = InventarioV1MovimientoBloqueadoMensaje });
             }
             catch (Exception ex)
             {
@@ -3247,16 +3221,22 @@ SELECT ");
     idEmpresa,
     identityKey,
     idProductoServicio,
-    TipoMovimiento,
-    Cantidad,
-    ExistenciaAnterior,
-    ExistenciaPosterior,
-    CostoUnitario,
-    ISNULL(Referencia, '') AS Referencia,
+    CASE TipoMovimiento
+        WHEN 1 THEN 2
+        WHEN 2 THEN 3
+        WHEN 3 THEN 4
+        WHEN 4 THEN 5
+        ELSE TipoMovimiento
+    END AS TipoMovimiento,
+    CantidadBase AS Cantidad,
+    SaldoAnterior AS ExistenciaAnterior,
+    SaldoPosterior AS ExistenciaPosterior,
+    CAST(NULL AS decimal(18,4)) AS CostoUnitario,
+    ISNULL(OrigenTipo, '') AS Referencia,
     ISNULL(Observaciones, '') AS Observaciones,
     idUsuario,
     FechaMovimiento
-FROM dbo.ProductosServiciosMovimientosInventario
+FROM dbo.InventarioMovimientos
 WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio
 ORDER BY FechaMovimiento DESC, id DESC");
 
@@ -3298,10 +3278,8 @@ SELECT
     ps.Activo,
     ISNULL(ps.ImagenUrl, '') AS ImagenUrl,
     ISNULL(ps.ImagenNombre, '') AS ImagenNombre,
-    ex.id AS IdExistencia
+    CAST(NULL AS uniqueidentifier) AS IdExistencia
 FROM dbo.ProductosServicios ps
-LEFT JOIN dbo.ProductosServiciosExistencias ex
-    ON ex.idEmpresa = ps.idEmpresa AND ex.idProductoServicio = ps.id
 WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @Id", connection, transaction);
 
             command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
@@ -3455,11 +3433,22 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @Id", connection, transaction);
 
         private async Task<ProductoServicioExistenciaDto?> ObtenerExistenciaInternaAsync(SqlConnection connection, SqlTransaction? transaction, Guid idEmpresa, Guid idProductoServicio, bool lockRow = false)
         {
-            string lockHint = lockRow ? " WITH (UPDLOCK, HOLDLOCK)" : string.Empty;
             using SqlCommand command = new SqlCommand($@"
-SELECT id, idEmpresa, identityKey, idProductoServicio, ExistenciaActual, ExistenciaMinima, CostoPromedio, FechaCreacion, FechaActualizacion
-FROM dbo.ProductosServiciosExistencias{lockHint}
-WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", connection, transaction);
+SELECT
+    CAST('00000000-0000-0000-0000-000000000000' AS uniqueidentifier) AS id,
+    ps.idEmpresa,
+    ps.identityKey,
+    ps.id AS idProductoServicio,
+    ISNULL(SUM(s.CantidadBaseActual), 0) AS ExistenciaActual,
+    CAST(0 AS decimal(18,4)) AS ExistenciaMinima,
+    CAST(NULL AS decimal(18,4)) AS CostoPromedio,
+    COALESCE(MIN(s.FechaCreacion), SYSUTCDATETIME()) AS FechaCreacion,
+    COALESCE(MAX(s.FechaActualizacion), SYSUTCDATETIME()) AS FechaActualizacion
+FROM dbo.ProductosServicios ps
+LEFT JOIN dbo.InventarioSaldos s
+    ON s.idEmpresa = ps.idEmpresa AND s.idProductoServicio = ps.id
+WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio
+GROUP BY ps.idEmpresa, ps.identityKey, ps.id", connection, transaction);
 
             command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
             command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
@@ -3488,45 +3477,11 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
         {
             using SqlCommand command = new SqlCommand(@"
 SELECT COUNT(1)
-FROM dbo.ProductosServiciosMovimientosInventario
+FROM dbo.InventarioMovimientos
 WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", connection, transaction);
             command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
             command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
             return Convert.ToInt32(await command.ExecuteScalarAsync());
-        }
-
-        private async Task<ProductoServicioMovimientoDto?> ObtenerMovimientoExistenciaInicialAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio)
-        {
-            using SqlCommand command = new SqlCommand(@"
-SELECT TOP (1)
-    id,
-    idEmpresa,
-    identityKey,
-    idProductoServicio,
-    TipoMovimiento,
-    Cantidad,
-    ExistenciaAnterior,
-    ExistenciaPosterior,
-    CostoUnitario,
-    ISNULL(Referencia, '') AS Referencia,
-    ISNULL(Observaciones, '') AS Observaciones,
-    idUsuario,
-    FechaMovimiento
-FROM dbo.ProductosServiciosMovimientosInventario
-WHERE idEmpresa = @IdEmpresa
-  AND idProductoServicio = @IdProductoServicio
-ORDER BY FechaMovimiento ASC, id ASC", connection, transaction);
-
-            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-            command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
-
-            using SqlDataReader reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-            {
-                return null;
-            }
-
-            return MapMovimiento(reader);
         }
 
         private async Task SynchronizeInventoryForSaveAsync(
@@ -3541,212 +3496,7 @@ ORDER BY FechaMovimiento ASC, id ASC", connection, transaction);
             Guid? usuarioId,
             DateTime ahora)
         {
-            bool targetInventariable = request.Tipo == TipoProducto && request.CausaInventario;
-
-            if (!targetInventariable)
-            {
-                if (existenciaActual != null)
-                {
-                    await EnsureExistenciaRemovableAsync(connection, transaction, existenciaActual, idEmpresa, productoId, movimientosHistoricos);
-                    await EliminarExistenciaAsync(connection, transaction, idEmpresa, productoId);
-                }
-
-                return;
-            }
-
-            decimal existenciaInicial = request.ExistenciaInicial ?? (existenciaActual?.ExistenciaActual ?? 0m);
-            decimal existenciaMinima = request.ExistenciaMinima ?? (existenciaActual?.ExistenciaMinima ?? 0m);
-            decimal? costoPromedio = request.Costo ?? existenciaActual?.CostoPromedio;
-
-            if (existenciaActual == null)
-            {
-                Guid existenciaId = Guid.NewGuid();
-                using SqlCommand insert = new SqlCommand(@"
-INSERT INTO dbo.ProductosServiciosExistencias
-    (id, idEmpresa, identityKey, idProductoServicio, ExistenciaActual, ExistenciaMinima, CostoPromedio, FechaCreacion, FechaActualizacion)
-VALUES
-    (@Id, @IdEmpresa, @IdentityKey, @IdProductoServicio, @ExistenciaActual, @ExistenciaMinima, @CostoPromedio, @FechaCreacion, @FechaActualizacion)", connection, transaction);
-
-                insert.Parameters.AddWithValue("@Id", existenciaId);
-                insert.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-                insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
-                insert.Parameters.AddWithValue("@IdProductoServicio", productoId);
-                insert.Parameters.AddWithValue("@ExistenciaActual", existenciaInicial);
-                insert.Parameters.AddWithValue("@ExistenciaMinima", existenciaMinima);
-                insert.Parameters.AddWithValue("@CostoPromedio", costoPromedio.HasValue ? costoPromedio.Value : DBNull.Value);
-                insert.Parameters.AddWithValue("@FechaCreacion", ahora);
-                insert.Parameters.AddWithValue("@FechaActualizacion", ahora);
-                await insert.ExecuteNonQueryAsync();
-
-                if (existenciaInicial > 0)
-                {
-                    await InsertarMovimientoInventarioAsync(connection, transaction, idEmpresa, productoId, MovimientoExistenciaInicial, existenciaInicial, 0m, existenciaInicial, request.Costo, "Alta inicial", "Movimiento inicial generado durante el alta o activación de inventario.", usuarioId, ahora);
-                }
-
-                return;
-            }
-
-            using SqlCommand update = new SqlCommand(@"
-UPDATE dbo.ProductosServiciosExistencias
-SET
-    ExistenciaMinima = @ExistenciaMinima,
-    CostoPromedio = @CostoPromedio,
-    FechaActualizacion = @FechaActualizacion
-WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", connection, transaction);
-
-            update.Parameters.AddWithValue("@ExistenciaMinima", existenciaMinima);
-            update.Parameters.AddWithValue("@CostoPromedio", costoPromedio.HasValue ? costoPromedio.Value : DBNull.Value);
-            update.Parameters.AddWithValue("@FechaActualizacion", ahora);
-            update.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-            update.Parameters.AddWithValue("@IdProductoServicio", productoId);
-            await update.ExecuteNonQueryAsync();
-
-            bool puedeAjustarExistenciaInicial =
-                request.ExistenciaInicial.HasValue &&
-                (
-                    movimientosHistoricos == 0 ||
-                    (
-                        movimientosHistoricos == 1 &&
-                        existenciaActual.ExistenciaActual >= 0m
-                    )
-                );
-
-            if (puedeAjustarExistenciaInicial)
-            {
-                bool aplicarAjuste = movimientosHistoricos == 0;
-
-                if (!aplicarAjuste && movimientosHistoricos == 1)
-                {
-                    ProductoServicioMovimientoDto? movimientoInicial = await ObtenerMovimientoExistenciaInicialAsync(connection, transaction, idEmpresa, productoId);
-                    aplicarAjuste = movimientoInicial != null &&
-                        movimientoInicial.TipoMovimiento == MovimientoExistenciaInicial &&
-                        movimientoInicial.ExistenciaAnterior == 0m &&
-                        movimientoInicial.ExistenciaPosterior == existenciaActual.ExistenciaActual;
-
-                    if (aplicarAjuste)
-                    {
-                        await ActualizarMovimientoExistenciaInicialAsync(connection, transaction, idEmpresa, movimientoInicial!.Id, request.ExistenciaInicial!.Value, request.Costo, ahora);
-                    }
-                }
-
-                if (aplicarAjuste)
-                {
-                    await ActualizarExistenciaAsync(connection, transaction, idEmpresa, existenciaActual.Id, request.ExistenciaInicial!.Value, existenciaMinima, request.Costo, ahora);
-                    return;
-                }
-            }
-
-            if (existente != null &&
-                !existente.CausaInventario &&
-                request.CausaInventario &&
-                movimientosHistoricos == 0 &&
-                existenciaInicial > 0 &&
-                existenciaActual.ExistenciaActual == 0)
-            {
-                await ActualizarExistenciaAsync(connection, transaction, idEmpresa, existenciaActual.Id, existenciaInicial, existenciaMinima, request.Costo, ahora);
-                await InsertarMovimientoInventarioAsync(connection, transaction, idEmpresa, productoId, MovimientoExistenciaInicial, existenciaInicial, 0m, existenciaInicial, request.Costo, "Activación inventario", "Movimiento inicial generado al convertir el registro en inventariable.", usuarioId, ahora);
-            }
-        }
-
-        private async Task EnsureExistenciaRemovableAsync(SqlConnection connection, SqlTransaction transaction, ProductoServicioExistenciaDto existenciaActual, Guid idEmpresa, Guid idProductoServicio, int movimientosHistoricos)
-        {
-            int movimientosConfirmados = movimientosHistoricos;
-            if (movimientosConfirmados == 0)
-            {
-                movimientosConfirmados = await ContarMovimientosInventarioAsync(connection, transaction, idEmpresa, idProductoServicio);
-            }
-
-            if (movimientosConfirmados > 0 || existenciaActual.ExistenciaActual != 0m)
-            {
-                throw new InvalidOperationException("No es posible convertir a no inventariable un producto con historial o existencia distinta de cero.");
-            }
-        }
-
-        private async Task EliminarExistenciaAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio)
-        {
-            using SqlCommand delete = new SqlCommand(@"
-DELETE FROM dbo.ProductosServiciosExistencias
-WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", connection, transaction);
-            delete.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-            delete.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
-            await delete.ExecuteNonQueryAsync();
-        }
-
-        private async Task ActualizarExistenciaAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idExistencia, decimal existenciaPosterior, decimal existenciaMinima, decimal? costoPromedio, DateTime ahora)
-        {
-            using SqlCommand command = new SqlCommand(@"
-UPDATE dbo.ProductosServiciosExistencias
-SET
-    ExistenciaActual = @ExistenciaActual,
-    ExistenciaMinima = @ExistenciaMinima,
-    CostoPromedio = COALESCE(@CostoPromedio, CostoPromedio),
-    FechaActualizacion = @FechaActualizacion
-WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
-
-            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-            command.Parameters.AddWithValue("@Id", idExistencia);
-            command.Parameters.AddWithValue("@ExistenciaActual", existenciaPosterior);
-            command.Parameters.AddWithValue("@ExistenciaMinima", existenciaMinima);
-            command.Parameters.AddWithValue("@CostoPromedio", costoPromedio.HasValue ? costoPromedio.Value : DBNull.Value);
-            command.Parameters.AddWithValue("@FechaActualizacion", ahora);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task ActualizarMovimientoExistenciaInicialAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idMovimiento, decimal cantidad, decimal? costoUnitario, DateTime ahora)
-        {
-            using SqlCommand command = new SqlCommand(@"
-UPDATE dbo.ProductosServiciosMovimientosInventario
-SET
-    Cantidad = @Cantidad,
-    ExistenciaAnterior = 0,
-    ExistenciaPosterior = @ExistenciaPosterior,
-    CostoUnitario = @CostoUnitario,
-    Observaciones = 'Movimiento inicial ajustado durante la edición del producto inventariable.'
-WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
-
-            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-            command.Parameters.AddWithValue("@Id", idMovimiento);
-            command.Parameters.AddWithValue("@Cantidad", cantidad);
-            command.Parameters.AddWithValue("@ExistenciaPosterior", cantidad);
-            command.Parameters.AddWithValue("@CostoUnitario", costoUnitario.HasValue ? costoUnitario.Value : DBNull.Value);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task InsertarMovimientoInventarioAsync(
-            SqlConnection connection,
-            SqlTransaction transaction,
-            Guid idEmpresa,
-            Guid idProductoServicio,
-            byte tipoMovimiento,
-            decimal cantidad,
-            decimal existenciaAnterior,
-            decimal existenciaPosterior,
-            decimal? costoUnitario,
-            string referencia,
-            string observaciones,
-            Guid? idUsuario,
-            DateTime fechaMovimiento)
-        {
-            using SqlCommand command = new SqlCommand(@"
-INSERT INTO dbo.ProductosServiciosMovimientosInventario
-    (id, idEmpresa, identityKey, idProductoServicio, TipoMovimiento, Cantidad, ExistenciaAnterior, ExistenciaPosterior, CostoUnitario, Referencia, Observaciones, idUsuario, FechaMovimiento)
-VALUES
-    (@Id, @IdEmpresa, @IdentityKey, @IdProductoServicio, @TipoMovimiento, @Cantidad, @ExistenciaAnterior, @ExistenciaPosterior, @CostoUnitario, @Referencia, @Observaciones, @IdUsuario, @FechaMovimiento)", connection, transaction);
-
-            command.Parameters.AddWithValue("@Id", Guid.NewGuid());
-            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-            command.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
-            command.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
-            command.Parameters.AddWithValue("@TipoMovimiento", tipoMovimiento);
-            command.Parameters.AddWithValue("@Cantidad", cantidad);
-            command.Parameters.AddWithValue("@ExistenciaAnterior", existenciaAnterior);
-            command.Parameters.AddWithValue("@ExistenciaPosterior", existenciaPosterior);
-            command.Parameters.AddWithValue("@CostoUnitario", costoUnitario.HasValue ? costoUnitario.Value : DBNull.Value);
-            command.Parameters.AddWithValue("@Referencia", Truncate(referencia, ReferenciaLength));
-            command.Parameters.AddWithValue("@Observaciones", Truncate(observaciones, ObservacionesLength));
-            command.Parameters.AddWithValue("@IdUsuario", idUsuario.HasValue ? idUsuario.Value : DBNull.Value);
-            command.Parameters.AddWithValue("@FechaMovimiento", fechaMovimiento);
-            await command.ExecuteNonQueryAsync();
+            await Task.CompletedTask;
         }
 
         private async Task<string> ValidateCatalogReferencesAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, NormalizedProductoServicioRequest request, bool esNuevo, ProductoServicioSnapshot? existente)

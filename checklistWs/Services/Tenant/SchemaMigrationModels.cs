@@ -150,6 +150,51 @@ namespace checklistWs.Services.Tenant
 
         public SchemaMigrationPackage GetPackage(string scope)
         {
+            if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract recepcion = _contractProvider.GetContract(DatabaseScopes.Recepcion, ProductosServiciosSchemaContractProvider.RecepcionLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(recepcion);
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.Recepcion,
+                        "REC-B20260921",
+                        ProductosServiciosSchemaContractProvider.RecepcionLatestVersion,
+                        ProductosServiciosSchemaContractProvider.RecepcionLatestVersion,
+                        manifest.ManifestHash,
+                        Array.Empty<string>()),
+                    Array.Empty<SchemaMigrationDefinition>());
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract inventario = _contractProvider.GetContract(DatabaseScopes.Inventario, ProductosServiciosSchemaContractProvider.InventarioLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(inventario);
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.Inventario,
+                        "INV-B20260921",
+                        ProductosServiciosSchemaContractProvider.InventarioLatestVersion,
+                        ProductosServiciosSchemaContractProvider.InventarioLatestVersion,
+                        manifest.ManifestHash,
+                        Array.Empty<string>()),
+                    Array.Empty<SchemaMigrationDefinition>());
+            }
+
+            if (string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract ordenesCompra = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(ordenesCompra);
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.OrdenesCompra,
+                        "OC-B20260921",
+                        ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion,
+                        ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion,
+                        manifest.ManifestHash,
+                        Array.Empty<string>()),
+                    Array.Empty<SchemaMigrationDefinition>());
+            }
+
             if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
             {
                 SchemaContract proveedores = _contractProvider.GetContract(DatabaseScopes.Proveedores, ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion);

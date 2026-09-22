@@ -16,7 +16,11 @@ namespace checklistWs.Models.OrdenesCompra
     public class OrdenCompraPartidaGuardarRequest
     {
         public Guid IdProductoServicio { get; set; }
+        public Guid? IdVariante { get; set; }
+        public Guid? IdPresentacionCompra { get; set; }
         public decimal Cantidad { get; set; }
+        public decimal? CantidadCompra { get; set; }
+        public decimal? FactorConversionSnapshot { get; set; }
         public decimal CostoUnitario { get; set; }
     }
 
@@ -128,13 +132,25 @@ namespace checklistWs.Models.OrdenesCompra
         public Guid IdProductoServicio { get; set; }
         public byte TipoProductoServicio { get; set; }
         public string TipoProductoServicioNombre { get; set; } = string.Empty;
+        public Guid? IdVariante { get; set; }
+        public Guid? IdPresentacionCompra { get; set; }
         public string Codigo { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
+        public string VarianteSnapshot { get; set; } = string.Empty;
+        public string PresentacionCompraSnapshot { get; set; } = string.Empty;
         public Guid IdUnidadMedida { get; set; }
         public string UnidadMedida { get; set; } = string.Empty;
         public string UnidadAbreviatura { get; set; } = string.Empty;
+        public string UnidadCompraSnapshot { get; set; } = string.Empty;
+        public string UnidadCompraAbreviaturaSnapshot { get; set; } = string.Empty;
         public decimal Cantidad { get; set; }
+        public decimal CantidadCompra { get; set; }
+        public decimal FactorConversionSnapshot { get; set; }
+        public decimal CantidadBaseOrdenada { get; set; }
+        public decimal CantidadBaseRecibidaAcumulada { get; set; }
+        public decimal CantidadBasePendiente { get; set; }
+        public byte EstadoPartida { get; set; }
         public decimal CostoUnitario { get; set; }
         public decimal Subtotal { get; set; }
         public decimal Total { get; set; }
@@ -184,6 +200,31 @@ namespace checklistWs.Models.OrdenesCompra
         public string Abreviatura { get; set; } = string.Empty;
         public decimal? CostoActual { get; set; }
         public bool CausaInventario { get; set; }
+        public bool RequiereVariante { get; set; }
+        public List<OrdenCompraBusquedaVarianteDto> Variantes { get; set; } = new List<OrdenCompraBusquedaVarianteDto>();
+        public List<OrdenCompraBusquedaPresentacionCompraDto> PresentacionesCompra { get; set; } = new List<OrdenCompraBusquedaPresentacionCompraDto>();
+    }
+
+    public class OrdenCompraBusquedaVarianteDto
+    {
+        public Guid Id { get; set; }
+        public Guid IdProductoServicio { get; set; }
+        public string Sku { get; set; } = string.Empty;
+        public string Nombre { get; set; } = string.Empty;
+        public string ClaveCombinacion { get; set; } = string.Empty;
+        public decimal? CostoActual { get; set; }
+    }
+
+    public class OrdenCompraBusquedaPresentacionCompraDto
+    {
+        public Guid Id { get; set; }
+        public Guid IdProductoServicio { get; set; }
+        public Guid? IdVariante { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public Guid IdUnidadCompra { get; set; }
+        public string UnidadCompra { get; set; } = string.Empty;
+        public string UnidadCompraAbreviatura { get; set; } = string.Empty;
+        public decimal FactorConversionBase { get; set; }
     }
 
     public class OrdenCompraExportacionDto

@@ -52,5 +52,11 @@ namespace checklistWs.Services.Tenant
         public const string RegionesPermissionCode = "04005000";
         public const string ActivosCatalogosPermissionCode = "03506000";
         public const string ActivosProveedoresPermissionCode = "03506003";
+        public const string OrdenesCompraPermissionCode = "05003000";
+        public const string OrdenesCompraNuevaPermissionCode = "05003001";
+        public const string OrdenesCompraReportePermissionCode = "05003002";
+        public const string RecepcionPermissionCode = "05004000";
+        public const string RecepcionNuevaPermissionCode = "05004001";
+        public const string RecepcionReportePermissionCode = "05004002";
     }
 }

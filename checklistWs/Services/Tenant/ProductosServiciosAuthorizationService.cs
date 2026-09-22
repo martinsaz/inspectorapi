@@ -207,7 +207,9 @@ WHERE u.idEmpresa = @IdEmpresa
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.ModulePermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.CatalogosPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.AjustesPermissionCode, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.SucursalesPermissionCode, StringComparison.OrdinalIgnoreCase);
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.SucursalesPermissionCode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.OrdenesCompraPermissionCode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.RecepcionPermissionCode, StringComparison.OrdinalIgnoreCase);
         }
 
         private sealed class LegacyPermissionNode

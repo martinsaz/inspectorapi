@@ -197,7 +197,10 @@ namespace checklistWs.Services.Tenant
         {
             return string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase);
         }
     }
 }
