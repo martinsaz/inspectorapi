@@ -150,6 +150,21 @@ namespace checklistWs.Services.Tenant
 
         public SchemaMigrationPackage GetPackage(string scope)
         {
+            if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract curvas = _contractProvider.GetContract(DatabaseScopes.Curvas, ProductosServiciosSchemaContractProvider.CurvasLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(curvas);
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.Curvas,
+                        "CUR-B20260923",
+                        ProductosServiciosSchemaContractProvider.CurvasLatestVersion,
+                        ProductosServiciosSchemaContractProvider.CurvasLatestVersion,
+                        manifest.ManifestHash,
+                        Array.Empty<string>()),
+                    Array.Empty<SchemaMigrationDefinition>());
+            }
+
             if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
             {
                 SchemaContract recepcion = _contractProvider.GetContract(DatabaseScopes.Recepcion, ProductosServiciosSchemaContractProvider.RecepcionLatestVersion);
@@ -182,17 +197,50 @@ namespace checklistWs.Services.Tenant
 
             if (string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase))
             {
-                SchemaContract ordenesCompra = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
-                SchemaManifest manifest = _manifestProvider.CreateManifest(ordenesCompra);
+                SchemaContract ordenesCompraV1 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V1);
+                SchemaContract ordenesCompraV2 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(ordenesCompraV2);
+                string ordenesCompraMigrationSql = BuildOrdenesCompraV1ToV2Sql();
+                SchemaMigrationDefinition ocV1ToV2 = new(
+                    "OC-M20260923-V1-V2-PRESENTACIONCOMPRA-CANTIDAD-BASE",
+                    "OC-B20260921",
+                    DatabaseScopes.OrdenesCompra,
+                    ordenesCompraV1.ContractVersion,
+                    ordenesCompraV2.ContractVersion,
+                    1,
+                    new[] { "dbo.OrdenesCompraPresentacionesCompra.PermiteCantidadBase" },
+                    new[]
+                    {
+                        "TABLE_EXISTS:dbo.OrdenesCompraPresentacionesCompra",
+                        "COLUMN_MISSING_OR_COMPATIBLE:PermiteCantidadBase",
+                        "NO_DML_BUSINESS_ROWS"
+                    },
+                    new[]
+                    {
+                        "ADD_BIT_NOT_NULL_DEFAULT_ZERO",
+                        "DEFAULT_CLOSED_MULTIPLES_FOR_EXISTING_PRESENTATIONS",
+                        "NO_PRESENTACIONESVENTA"
+                    },
+                    SchemaMigrationHash.Sha256(ordenesCompraMigrationSql),
+                    manifest.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    Array.Empty<string>(),
+                    "ReconcileAfterUncertainCommit",
+                    ordenesCompraMigrationSql,
+                    ordenesCompraV2);
+
                 return new SchemaMigrationPackage(
                     new SchemaReleaseManifest(
                         DatabaseScopes.OrdenesCompra,
                         "OC-B20260921",
-                        ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion,
+                        ordenesCompraV1.ContractVersion,
                         ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion,
                         manifest.ManifestHash,
-                        Array.Empty<string>()),
-                    Array.Empty<SchemaMigrationDefinition>());
+                        new[] { ocV1ToV2.MigrationId }),
+                    new[] { ocV1ToV2 });
             }
 
             if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
@@ -309,6 +357,14 @@ namespace checklistWs.Services.Tenant
                     new[] { v1ToV2.MigrationId }),
                 new[] { v1ToV2 });
         }
+
+        private static string BuildOrdenesCompraV1ToV2Sql() => @"
+IF COL_LENGTH('dbo.OrdenesCompraPresentacionesCompra', 'PermiteCantidadBase') IS NULL
+BEGIN
+    ALTER TABLE dbo.OrdenesCompraPresentacionesCompra
+        ADD PermiteCantidadBase bit NOT NULL
+            CONSTRAINT DF_OrdenesCompraPresentacionesCompra_PermiteCantidadBase DEFAULT ((0));
+END";
 
         private static IReadOnlyCollection<string> BuildV1ToV2Preconditions()
         {

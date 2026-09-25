@@ -4,18 +4,18 @@ namespace checklistWs.Services.Tenant
     {
         public static SchemaContract GetContract(int version)
         {
-            if (version != ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion)
+            if (version is not ProductosServiciosSchemaContractProvider.V1 and not ProductosServiciosSchemaContractProvider.V2)
             {
                 throw new InvalidOperationException("SCHEMA_CONTRACT_VERSION_NOT_SUPPORTED");
             }
 
             return new SchemaContract(
                 DatabaseScopes.OrdenesCompra,
-                ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion,
+                version,
                 "Ordenes de Compra",
                 new[]
                 {
-                    PresentacionesCompra(),
+                    PresentacionesCompra(version),
                     Folios(),
                     Cabecera(),
                     Detalle(),
@@ -26,14 +26,14 @@ namespace checklistWs.Services.Tenant
                     "inspectorapi/checklistWs/Controllers/OrdenesCompra/OrdenesCompraController.cs",
                     "inspector/docs/compras/BL03_FASE_A_OC01_CONTRATO_FUNCIONAL_OC_RECEPCION_20260921.md",
                     "inspector/docs/compras/BL03_FASE_A_ARQ01_INVENTARIO_VARIANTE_SUCURSAL_20260921.md",
+                    "inspector/docs/compras/BL03_FASE_C_OC_CUR_02_SCHEMA_VERSIONADO_CURVAS_SIEMBRA_20260923.md",
                 },
-                new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc));
+                new DateTime(2026, 9, 23, 0, 0, 0, DateTimeKind.Utc));
         }
 
-        private static SchemaTableContract PresentacionesCompra() => new(
-            "dbo",
-            "OrdenesCompraPresentacionesCompra",
-            new[]
+        private static SchemaTableContract PresentacionesCompra(int version)
+        {
+            List<SchemaColumnContract> columns = new()
             {
                 Col("id", "UNIQUEIDENTIFIER", false, def: "(NEWID())"),
                 Col("idEmpresa", "UNIQUEIDENTIFIER", false),
@@ -45,11 +45,25 @@ namespace checklistWs.Services.Tenant
                 Col("UnidadCompra", "NVARCHAR(100)", false, max: 100),
                 Col("UnidadCompraAbreviatura", "NVARCHAR(20)", false, max: 20),
                 Col("FactorConversionBase", "DECIMAL(28,12)", false, precision: 28, scale: 12),
+            };
+
+            if (version >= ProductosServiciosSchemaContractProvider.V2)
+            {
+                columns.Add(Col("PermiteCantidadBase", "BIT", false, def: "((0))"));
+            }
+
+            columns.AddRange(new[]
+            {
                 Col("Activo", "BIT", false, def: "((1))"),
                 Col("FechaCreacion", "DATETIME2(0)", false, scale: 0, def: "(SYSUTCDATETIME())"),
                 Col("FechaActualizacion", "DATETIME2(0)", false, scale: 0, def: "(SYSUTCDATETIME())"),
                 Col("FechaArchivado", "DATETIME2(0)", true, scale: 0),
-            },
+            });
+
+            return new(
+            "dbo",
+            "OrdenesCompraPresentacionesCompra",
+            columns,
             new SchemaPrimaryKeyContract("PK_OrdenesCompraPresentacionesCompra", new[] { "id" }, true),
             new[]
             {
@@ -72,6 +86,7 @@ namespace checklistWs.Services.Tenant
                 Ix("IX_OCPresentacionesCompra_Empresa_Producto_Variante", false, "idEmpresa", "idProductoServicio", "idVariante", "Activo"),
                 Ix("IX_OCPresentacionesCompra_Empresa_Unidad", false, "idEmpresa", "idUnidadCompra", "Activo"),
             });
+        }
 
         private static SchemaTableContract Folios() => new(
             "dbo",

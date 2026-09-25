@@ -16,13 +16,16 @@ namespace checklistWs.Tests.Services.Tenant
                 .Where(name => !name.StartsWith("Subir", StringComparison.Ordinal))
                 .ToArray();
 
-            Assert.Equal(49, actionNames.Length);
+            Assert.Equal(62, actionNames.Length);
             Dictionary<string, string> protectedDelegates = new(StringComparer.Ordinal)
             {
                 ["ExportarProductosServicios"] = "ObtenerProductosServicios",
                 ["ExportarCategoriasProductosServicios"] = "ObtenerCategoriasProductosServicios",
                 ["ExportarMarcasProductosServicios"] = "ObtenerMarcasProductosServicios",
-                ["ExportarUnidadesMedidaProductosServicios"] = "ObtenerUnidadesMedidaProductosServicios"
+                ["ExportarUnidadesMedidaProductosServicios"] = "ObtenerUnidadesMedidaProductosServicios",
+                ["ExportarColeccionesProductosServicios"] = "ObtenerColeccionesProductosServicios",
+                ["GuardarEtiquetaProductoServicio"] = "GuardarTagProductoServicio",
+                ["ExportarEtiquetasProductosServicios"] = "ObtenerEtiquetasProductosServicios"
             };
 
             foreach (string action in actionNames)

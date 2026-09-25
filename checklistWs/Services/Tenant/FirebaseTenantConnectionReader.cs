@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using checklistWs.Models.Firebase;
 using Firebase.Auth;
 using Firebase.Auth.Providers;
@@ -8,6 +9,9 @@ namespace checklistWs.Services.Tenant
 {
     public sealed class FirebaseTenantConnectionReader : ITenantConnectionReader, ITenantCatalogReader
     {
+        private static readonly TimeSpan ConnectionCacheTtl = TimeSpan.FromMinutes(5);
+        private static readonly ConcurrentDictionary<string, CacheEntry> ConnectionCache = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> ConnectionLocks = new(StringComparer.OrdinalIgnoreCase);
         private readonly IConfiguration _configuration;
 
         public FirebaseTenantConnectionReader(IConfiguration configuration)
@@ -22,6 +26,37 @@ namespace checklistWs.Services.Tenant
                 return null;
             }
 
+            string normalizedEmpresaKey = empresaKey.Trim().ToUpperInvariant();
+            if (TryGetCachedConnection(normalizedEmpresaKey, out TenantConnectionDescriptor? cached))
+            {
+                return cached;
+            }
+
+            SemaphoreSlim gate = ConnectionLocks.GetOrAdd(normalizedEmpresaKey, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                if (TryGetCachedConnection(normalizedEmpresaKey, out cached))
+                {
+                    return cached;
+                }
+
+                TenantConnectionDescriptor? connection = await ReadConnectionFromFirebaseAsync(normalizedEmpresaKey, cancellationToken);
+                if (connection != null)
+                {
+                    ConnectionCache[normalizedEmpresaKey] = new CacheEntry(Clone(connection), DateTimeOffset.UtcNow.Add(ConnectionCacheTtl));
+                }
+
+                return Clone(connection);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private async Task<TenantConnectionDescriptor?> ReadConnectionFromFirebaseAsync(string empresaKey, CancellationToken cancellationToken)
+        {
             FirebaseAuthClient authClient = CreateAuthClient();
             global::Firebase.Auth.UserCredential credential = await authClient.SignInWithEmailAndPasswordAsync(
                 _configuration.GetValue<string>("fireBdata:fireUser"),
@@ -50,7 +85,7 @@ namespace checklistWs.Services.Tenant
 
                 return new TenantConnectionDescriptor
                 {
-                    EmpresaKey = empresaKey.Trim().ToUpperInvariant(),
+                    EmpresaKey = empresaKey,
                     IdEmpresa = Guid.TryParse(connection.IdEmpresa, out Guid parsedIdEmpresa) ? parsedIdEmpresa : Guid.Empty,
                     Status = connection.Status?.Trim() ?? string.Empty,
                     ConnectionString = connection.Cadena?.Trim() ?? string.Empty
@@ -86,12 +121,21 @@ namespace checklistWs.Services.Tenant
 
                 return connections
                     .Where(item => item.Object != null)
-                    .Select(item => new TenantConnectionDescriptor
+                    .Select(item =>
                     {
-                        EmpresaKey = item.Key.Trim().ToUpperInvariant(),
-                        IdEmpresa = Guid.TryParse(item.Object.IdEmpresa, out Guid parsedIdEmpresa) ? parsedIdEmpresa : Guid.Empty,
-                        Status = item.Object.Status?.Trim() ?? string.Empty,
-                        ConnectionString = item.Object.Cadena?.Trim() ?? string.Empty
+                        var descriptor = new TenantConnectionDescriptor
+                        {
+                            EmpresaKey = item.Key.Trim().ToUpperInvariant(),
+                            IdEmpresa = Guid.TryParse(item.Object.IdEmpresa, out Guid parsedIdEmpresa) ? parsedIdEmpresa : Guid.Empty,
+                            Status = item.Object.Status?.Trim() ?? string.Empty,
+                            ConnectionString = item.Object.Cadena?.Trim() ?? string.Empty
+                        };
+                        if (!string.IsNullOrWhiteSpace(descriptor.EmpresaKey))
+                        {
+                            ConnectionCache[descriptor.EmpresaKey] = new CacheEntry(Clone(descriptor), DateTimeOffset.UtcNow.Add(ConnectionCacheTtl));
+                        }
+
+                        return descriptor;
                     })
                     .ToArray();
             }
@@ -110,5 +154,41 @@ namespace checklistWs.Services.Tenant
                 Providers = new FirebaseAuthProvider[] { new EmailProvider() }
             });
         }
+
+        private static bool TryGetCachedConnection(string empresaKey, out TenantConnectionDescriptor? descriptor)
+        {
+            descriptor = null;
+            if (!ConnectionCache.TryGetValue(empresaKey, out CacheEntry? entry))
+            {
+                return false;
+            }
+
+            if (entry.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+            {
+                ConnectionCache.TryRemove(empresaKey, out _);
+                return false;
+            }
+
+            descriptor = Clone(entry.Descriptor);
+            return true;
+        }
+
+        private static TenantConnectionDescriptor? Clone(TenantConnectionDescriptor? descriptor)
+        {
+            if (descriptor == null)
+            {
+                return null;
+            }
+
+            return new TenantConnectionDescriptor
+            {
+                EmpresaKey = descriptor.EmpresaKey,
+                IdEmpresa = descriptor.IdEmpresa,
+                Status = descriptor.Status,
+                ConnectionString = descriptor.ConnectionString
+            };
+        }
+
+        private sealed record CacheEntry(TenantConnectionDescriptor Descriptor, DateTimeOffset ExpiresAtUtc);
     }
 }

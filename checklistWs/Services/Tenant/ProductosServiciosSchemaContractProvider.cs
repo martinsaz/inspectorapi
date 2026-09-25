@@ -7,15 +7,21 @@ namespace checklistWs.Services.Tenant
         public const int LatestVersion = V2;
         public const int SucursalesLatestVersion = V2;
         public const int ProveedoresLatestVersion = V1;
-        public const int OrdenesCompraLatestVersion = V1;
+        public const int OrdenesCompraLatestVersion = V2;
         public const int InventarioLatestVersion = V1;
         public const int RecepcionLatestVersion = V1;
+        public const int CurvasLatestVersion = V1;
 
         public SchemaContract GetContract(string scope, int? version = null)
         {
             if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
             {
                 return RecepcionSchemaContractFactory.GetContract(version ?? RecepcionLatestVersion);
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
+            {
+                return CurvasSchemaContractFactory.GetContract(version ?? CurvasLatestVersion);
             }
 
             if (string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase))

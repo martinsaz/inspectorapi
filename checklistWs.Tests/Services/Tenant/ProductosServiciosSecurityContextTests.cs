@@ -172,6 +172,9 @@ public sealed class ProductosServiciosSecurityContextTests
     [InlineData("ObtenerCategoriasProductosServicios", "05001003")]
     [InlineData("ObtenerMarcasProductosServicios", "05001004")]
     [InlineData("ObtenerUnidadesMedidaProductosServicios", "05001005")]
+    [InlineData("ObtenerColeccionesProductosServicios", "05001006")]
+    [InlineData("ObtenerEtiquetasProductosServicios", "05001007")]
+    [InlineData("GuardarTagProductoServicio", "05001007")]
     public async Task ProductosServiciosEndpointsUseSpecificPermissionCode(string actionName, string expectedCode)
     {
         var h=new Harness();
@@ -181,6 +184,9 @@ public sealed class ProductosServiciosSecurityContextTests
             "ObtenerCategoriasProductosServicios" => await h.Controller.ObtenerCategoriasProductosServicios(A),
             "ObtenerMarcasProductosServicios" => await h.Controller.ObtenerMarcasProductosServicios(A),
             "ObtenerUnidadesMedidaProductosServicios" => await h.Controller.ObtenerUnidadesMedidaProductosServicios(A),
+            "ObtenerColeccionesProductosServicios" => await h.Controller.ObtenerColeccionesProductosServicios(A),
+            "ObtenerEtiquetasProductosServicios" => await h.Controller.ObtenerEtiquetasProductosServicios(A),
+            "GuardarTagProductoServicio" => await h.Controller.GuardarTagProductoServicio(new checklistWs.Models.ProductosServicios.ProductoServicioTagGuardarRequest { Nombre = "QA" }, A),
             _ => await h.Controller.ObtenerProductosServicios(A)
         };
         Assert.NotNull(result);

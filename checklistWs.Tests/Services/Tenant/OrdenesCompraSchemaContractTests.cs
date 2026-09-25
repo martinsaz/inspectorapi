@@ -15,7 +15,8 @@ namespace checklistWs.Tests.Services.Tenant
 
             Assert.Equal(ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion, known.GetKnownCurrentVersion(DatabaseScopes.OrdenesCompra));
             Assert.Equal(1, _provider.GetContract(DatabaseScopes.OrdenesCompra, 1).ContractVersion);
-            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.OrdenesCompra, 2));
+            Assert.Equal(2, _provider.GetContract(DatabaseScopes.OrdenesCompra, 2).ContractVersion);
+            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.OrdenesCompra, 3));
         }
 
         [Fact]
@@ -42,8 +43,22 @@ namespace checklistWs.Tests.Services.Tenant
             Assert.Contains(table.Columns, c => c.Name == "idProductoServicio" && !c.IsNullable);
             Assert.Contains(table.Columns, c => c.Name == "idVariante" && c.IsNullable);
             Assert.Contains(table.Columns, c => c.Name == "FactorConversionBase" && !c.IsNullable);
+            Assert.Contains(table.Columns, c => c.Name == "PermiteCantidadBase" && !c.IsNullable && c.SqlType == "BIT" && c.DefaultDefinition == "((0))");
             Assert.Contains(table.ForeignKeys, fk => fk.Name == "FK_OCPresentacionesCompra_ProductosServicios_EmpresaId");
             Assert.DoesNotContain(table.Columns, c => c.Name.Contains("Venta", StringComparison.OrdinalIgnoreCase) || c.Name.Contains("Precio", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void PresentacionCompraV1_RemainsImmutableWithoutCantidadBaseFlag()
+        {
+            SchemaContract v1 = _provider.GetContract(DatabaseScopes.OrdenesCompra, 1);
+            SchemaContract v2 = _provider.GetContract(DatabaseScopes.OrdenesCompra, 2);
+
+            SchemaTableContract v1Table = v1.Tables.Single(t => t.Name == "OrdenesCompraPresentacionesCompra");
+            SchemaTableContract v2Table = v2.Tables.Single(t => t.Name == "OrdenesCompraPresentacionesCompra");
+
+            Assert.DoesNotContain(v1Table.Columns, c => c.Name == "PermiteCantidadBase");
+            Assert.Contains(v2Table.Columns, c => c.Name == "PermiteCantidadBase");
         }
 
         [Fact]
@@ -81,7 +96,7 @@ namespace checklistWs.Tests.Services.Tenant
         {
             SchemaContract contract = Contract();
 
-            Assert.Equal("dcccb6270d0642625823ac410a273431368f26d035d21cc28e47fb8301d8af55", _manifestProvider.CreateManifest(contract).ManifestHash);
+            Assert.Equal("0977353cc806ec35d21c95c4149e16cdf41b3480d52b929b13ec82185957e802", _manifestProvider.CreateManifest(contract).ManifestHash);
         }
 
         private SchemaContract Contract()

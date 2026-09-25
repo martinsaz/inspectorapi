@@ -23,7 +23,28 @@ namespace checklistWs.Services.Tenant
             }
 
             upper = upper.Replace("N'", "'", StringComparison.Ordinal);
-            return new string(upper.Where(ch => !char.IsWhiteSpace(ch) && ch != '[' && ch != ']' && ch != '(' && ch != ')').ToArray());
+            string compact = new string(upper.Where(ch => !char.IsWhiteSpace(ch) && ch != '[' && ch != ']' && ch != '(' && ch != ')').ToArray());
+            return NormalizeEmbeddedInOr(compact);
+        }
+
+        private static string NormalizeEmbeddedInOr(string value)
+        {
+            string normalized = Regex.Replace(
+                value,
+                @"(?<prefix>^|OR|AND)(?<column>[A-Z](?:(?!AND|OR)[A-Z0-9_])*)IN(?<values>(?:'[^']+'|[0-9.]+)(?:,(?:'[^']+'|[0-9.]+))*)",
+                match => $"{match.Groups["prefix"].Value}INSET:{match.Groups["column"].Value}:{SortValues(match.Groups["values"].Value)}",
+                RegexOptions.CultureInvariant);
+
+            return Regex.Replace(
+                normalized,
+                @"(?<column>[A-Z0-9_]+)=(?<value>'[^']+'|[0-9.]+)(?:OR\k<column>=(?<value>'[^']+'|[0-9.]+))+",
+                match => $"INSET:{match.Groups["column"].Value}:{SortValues(string.Join(",", match.Groups["value"].Captures.Select(capture => capture.Value)))}",
+                RegexOptions.CultureInvariant);
+        }
+
+        private static string SortValues(string values)
+        {
+            return string.Join("|", values.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).OrderBy(v => v, StringComparer.Ordinal));
         }
 
         private static string NormalizeInOr(string value)

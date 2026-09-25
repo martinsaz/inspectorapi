@@ -1960,7 +1960,8 @@ SELECT TOP (1)
     Nombre,
     UnidadCompra,
     UnidadCompraAbreviatura,
-    FactorConversionBase
+    FactorConversionBase,
+    PermiteCantidadBase
 FROM dbo.OrdenesCompraPresentacionesCompra
 WHERE idEmpresa = @IdEmpresa
   AND idProductoServicio = @IdProductoServicio
@@ -1996,7 +1997,8 @@ WHERE idEmpresa = @IdEmpresa
                 Nombre = ReadString(reader, "Nombre"),
                 UnidadCompra = ReadString(reader, "UnidadCompra"),
                 UnidadCompraAbreviatura = ReadString(reader, "UnidadCompraAbreviatura"),
-                FactorConversionBase = factor
+                FactorConversionBase = factor,
+                PermiteCantidadBase = ReadBool(reader, "PermiteCantidadBase")
             };
         }
 
@@ -2429,7 +2431,8 @@ SELECT
     idUnidadCompra,
     UnidadCompra,
     UnidadCompraAbreviatura,
-    FactorConversionBase
+    FactorConversionBase,
+    PermiteCantidadBase
 FROM dbo.OrdenesCompraPresentacionesCompra
 WHERE idEmpresa = @IdEmpresa
   AND Activo = 1
@@ -2458,7 +2461,8 @@ ORDER BY idProductoServicio, Nombre", connection))
                         IdUnidadCompra = ReadGuid(reader, "idUnidadCompra"),
                         UnidadCompra = ReadString(reader, "UnidadCompra"),
                         UnidadCompraAbreviatura = ReadString(reader, "UnidadCompraAbreviatura"),
-                        FactorConversionBase = ReadDecimal(reader, "FactorConversionBase")
+                        FactorConversionBase = ReadDecimal(reader, "FactorConversionBase"),
+                        PermiteCantidadBase = ReadBool(reader, "PermiteCantidadBase")
                     });
                 }
             }
@@ -3144,6 +3148,7 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
             public string UnidadCompra { get; set; } = string.Empty;
             public string UnidadCompraAbreviatura { get; set; } = string.Empty;
             public decimal FactorConversionBase { get; set; } = 1m;
+            public bool PermiteCantidadBase { get; set; }
         }
 
         private sealed class OrdenCompraPartidaPersistencia

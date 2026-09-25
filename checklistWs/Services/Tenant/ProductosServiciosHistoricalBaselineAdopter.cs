@@ -243,7 +243,8 @@ namespace checklistWs.Services.Tenant
                 string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ResolveBaselineId(string scope)
@@ -271,6 +272,11 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
             {
                 return "RECEPCION_V1_EMPTY_BASELINE";
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
+            {
+                return "CURVAS_V1_EMPTY_BASELINE";
             }
 
             return BaselineId;

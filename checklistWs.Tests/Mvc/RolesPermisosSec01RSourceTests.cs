@@ -22,6 +22,9 @@ public sealed class RolesPermisosSec01RSourceTests
         Assert.Contains("sw05004001W", view);
         Assert.Contains("sw05004002A", view);
         Assert.Contains("sw05004002W", view);
+        Assert.Contains("sw05005000A", view);
+        Assert.Contains("sw05005001A", view);
+        Assert.Contains("sw05005001W", view);
     }
 
     [Fact]
@@ -41,6 +44,9 @@ public sealed class RolesPermisosSec01RSourceTests
         Assert.Contains("mnrecepcionnuevaw", js);
         Assert.Contains("mnrecepcionreporte", js);
         Assert.Contains("mnrecepcionreportew", js);
+        Assert.Contains("mncurvas", js);
+        Assert.Contains("mncurvascatalogo", js);
+        Assert.Contains("mncurvascatalogow", js);
     }
 
     [Fact]
@@ -54,13 +60,17 @@ public sealed class RolesPermisosSec01RSourceTests
         Assert.Contains("RecepcionPermissionCode = \"05004000\"", controller);
         Assert.Contains("RecepcionNuevaPermissionCode = \"05004001\"", controller);
         Assert.Contains("RecepcionReportePermissionCode = \"05004002\"", controller);
+        Assert.Contains("CurvasPermissionCode = \"05005000\"", controller);
+        Assert.Contains("CurvasCatalogoPermissionCode = \"05005001\"", controller);
         Assert.Contains("Escritura = 0", controller);
         Assert.Contains("Escritura = ordenesCompraNuevaAcceso && IsChecked(mnordenescompranuevaw) ? 1 : 0", controller);
         Assert.Contains("Escritura = ordenesCompraReporteAcceso && IsChecked(mnordenescomprareportew) ? 1 : 0", controller);
         Assert.Contains("Escritura = recepcionNuevaAcceso && IsChecked(mnrecepcionnuevaw) ? 1 : 0", controller);
         Assert.Contains("Escritura = recepcionReporteAcceso && IsChecked(mnrecepcionreportew) ? 1 : 0", controller);
+        Assert.Contains("Escritura = curvasCatalogoAcceso && IsChecked(mncurvascatalogow) ? 1 : 0", controller);
         Assert.Contains("AddPermissionSwitch(result, \"#sw05003001A\", \"#sw05003001W\", ordenesCompraNueva)", controller);
         Assert.Contains("AddPermissionSwitch(result, \"#sw05004002A\", \"#sw05004002W\", recepcionReporte)", controller);
+        Assert.Contains("AddPermissionSwitch(result, \"#sw05005001A\", \"#sw05005001W\", curvasCatalogo)", controller);
     }
 
     [Fact]

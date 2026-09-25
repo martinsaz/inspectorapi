@@ -61,6 +61,16 @@ namespace checklistWs.Services.Tenant
             "dbo.RecepcionSeries"
         };
 
+        private static readonly IReadOnlyCollection<string> CurvasTables = new[]
+        {
+            "dbo.CurvasCatalogo",
+            "dbo.CurvasDetalle",
+            "dbo.CurvasSiembra",
+            "dbo.CurvasOperacionesCompra",
+            "dbo.CurvasOperacionOrdenesCompra",
+            "dbo.CurvasSugerenciasSnapshot"
+        };
+
         public IReadOnlyCollection<string> GetExpectedTables(string scope)
         {
             if (string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
@@ -91,6 +101,11 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
             {
                 return RecepcionTables;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
+            {
+                return CurvasTables;
             }
 
             return Array.Empty<string>();

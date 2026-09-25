@@ -89,7 +89,6 @@ namespace checklistWs.Controllers.ProductosServicios
             "ObtenerMarcasProductosServicios",
             "ObtenerMarcaProductoServicio",
             "GuardarMarcaProductoServicio",
-            "GuardarTagProductoServicio",
             "BajaMarcaProductoServicio",
             "ActivarMarcaProductoServicio",
             "ObtenerCatalogoMarcasProductosServicios",
@@ -106,6 +105,27 @@ namespace checklistWs.Controllers.ProductosServicios
             "ObtenerCatalogoUnidadesMedidaProductosServicios",
             "ExportarUnidadesMedidaProductosServicios"
         };
+        private static readonly HashSet<string> ColeccionActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ObtenerColeccionesProductosServicios",
+            "ObtenerColeccionProductoServicio",
+            "GuardarColeccionProductoServicio",
+            "BajaColeccionProductoServicio",
+            "ActivarColeccionProductoServicio",
+            "ObtenerCatalogoColeccionesProductosServicios",
+            "ExportarColeccionesProductosServicios"
+        };
+        private static readonly HashSet<string> EtiquetaActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ObtenerEtiquetasProductosServicios",
+            "ObtenerEtiquetaProductoServicio",
+            "GuardarEtiquetaProductoServicio",
+            "GuardarTagProductoServicio",
+            "BajaEtiquetaProductoServicio",
+            "ActivarEtiquetaProductoServicio",
+            "ObtenerCatalogoEtiquetasProductosServicios",
+            "ExportarEtiquetasProductosServicios"
+        };
         private static readonly string[] EmpresaClaimKeys = new[] { "idEmpresa", "empresaId", "tenantId", "companyId", "tenant", "idempresa" };
         private static readonly string[] EmpresaNombreClaimKeys = new[] { "empresa", "empresaNombre", "tenantName", "companyName", "nombreEmpresa" };
         private static readonly string[] UsuarioClaimKeys = new[] { ClaimTypes.NameIdentifier, "sub", "idUsuario", "userid", "uid" };
@@ -118,6 +138,8 @@ namespace checklistWs.Controllers.ProductosServicios
         private const string CategoriasPermissionCode = ProductosServiciosAuthorizationDefaults.CategoriasPermissionCode;
         private const string MarcasPermissionCode = ProductosServiciosAuthorizationDefaults.MarcasPermissionCode;
         private const string UnidadesMedidaPermissionCode = ProductosServiciosAuthorizationDefaults.UnidadesMedidaPermissionCode;
+        private const string ColeccionesPermissionCode = ProductosServiciosAuthorizationDefaults.ColeccionesPermissionCode;
+        private const string EtiquetasPermissionCode = ProductosServiciosAuthorizationDefaults.EtiquetasPermissionCode;
         private const string ProxyContextItemKey = "__ProductosServiciosProxyContext";
 
         private readonly IConfiguration _configuration;
@@ -162,6 +184,8 @@ namespace checklistWs.Controllers.ProductosServicios
             Guid? idCategoria = null,
             Guid? idMarca = null,
             Guid? idUnidadMedida = null,
+            Guid? idColeccion = null,
+            Guid? idEtiqueta = null,
             bool? causaInventario = null,
             string estatus = "")
         {
@@ -318,6 +342,22 @@ WHERE ps.idEmpresa = @IdEmpresa");
                 AppendGuidFilter(query, command, "ps.idCategoria", "@IdCategoria", idCategoria);
                 AppendGuidFilter(query, command, "ps.idMarca", "@IdMarca", idMarca);
                 AppendGuidFilter(query, command, "ps.idUnidadMedida", "@IdUnidadMedida", idUnidadMedida);
+                AppendGuidFilter(query, command, "ps.idColeccion", "@IdColeccion", idColeccion);
+                if (idEtiqueta.HasValue && idEtiqueta.Value != Guid.Empty)
+                {
+                    query.Append(@"
+  AND EXISTS (
+      SELECT 1
+      FROM dbo.ProductosServiciosProductoTags filtroTag
+      INNER JOIN dbo.ProductosServiciosTags filtroTagCatalogo
+          ON filtroTagCatalogo.idEmpresa = filtroTag.idEmpresa AND filtroTagCatalogo.id = filtroTag.idTag
+      WHERE filtroTag.idEmpresa = ps.idEmpresa
+        AND filtroTag.idProductoServicio = ps.id
+        AND filtroTag.idTag = @IdEtiqueta
+        AND filtroTagCatalogo.Activo = 1
+  )");
+                    command.Parameters.AddWithValue("@IdEtiqueta", idEtiqueta.Value);
+                }
                 AppendBitFilter(query, command, "ps.CausaInventario", "@CausaInventario", causaInventario);
                 AppendEstatusFilter(query, "ps.Activo", estatus);
 
@@ -1612,7 +1652,10 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                 await connection.OpenAsync();
                 using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
 
-                ProductoServicioTagDto tag = await ResolveOrCreateTagAsync(connection, transaction, context.IdEmpresa, nombre, DateTime.UtcNow);
+                DateTime ahora = DateTime.UtcNow;
+                ProductoServicioTagDto tag = request.Id.HasValue && request.Id.Value != Guid.Empty
+                    ? await ActualizarTagAsync(connection, transaction, context.IdEmpresa, request.Id.Value, nombre, ahora)
+                    : await ResolveOrCreateTagAsync(connection, transaction, context.IdEmpresa, nombre, ahora);
                 transaction.Commit();
 
                 return Ok(new ProductoServicioTagOperacionResponse
@@ -1744,10 +1787,12 @@ WHERE ps.idEmpresa = @IdEmpresa", connection);
             Guid? idCategoria = null,
             Guid? idMarca = null,
             Guid? idUnidadMedida = null,
+            Guid? idColeccion = null,
+            Guid? idEtiqueta = null,
             bool? causaInventario = null,
             string estatus = "")
         {
-            IActionResult listadoResult = await ObtenerProductosServicios(idEmpresa, busqueda, tipo, idCategoria, idMarca, idUnidadMedida, causaInventario, estatus);
+            IActionResult listadoResult = await ObtenerProductosServicios(idEmpresa, busqueda, tipo, idCategoria, idMarca, idUnidadMedida, idColeccion, idEtiqueta, causaInventario, estatus);
             if (listadoResult is not OkObjectResult ok || ok.Value is not List<ProductoServicioListadoDto> items)
             {
                 return listadoResult;
@@ -2225,6 +2270,182 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
             {
                 return HandleException(ex, "GuardarColeccionProductoServicio", "No fue posible guardar la colección.");
             }
+        }
+
+        [HttpGet("ObtenerColeccionesProductosServicios")]
+        public async Task<IActionResult> ObtenerColeccionesProductosServicios(Guid idEmpresa, string busqueda = "", string estatus = "")
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
+            {
+                return error!;
+            }
+
+            try
+            {
+                return Ok(await ObtenerColeccionesListadoAsync(context, context.IdEmpresa, busqueda, estatus));
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ObtenerColeccionesProductosServicios", "No fue posible cargar las colecciones.");
+            }
+        }
+
+        [HttpGet("ObtenerColeccionProductoServicio")]
+        public async Task<IActionResult> ObtenerColeccionProductoServicio(Guid idEmpresa, Guid idColeccion)
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
+            {
+                return error!;
+            }
+
+            try
+            {
+                ProductoServicioColeccionDto? item = await ObtenerColeccionAsync(context, context.IdEmpresa, idColeccion);
+                return item == null
+                    ? NotFound(new ProductoServicioOperacionResponse { Mensaje = "La colección no está disponible." })
+                    : Ok(item);
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ObtenerColeccionProductoServicio", "No fue posible cargar la colección.");
+            }
+        }
+
+        [HttpPost("BajaColeccionProductoServicio")]
+        public async Task<IActionResult> BajaColeccionProductoServicio(Guid idEmpresa, Guid idColeccion)
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
+            {
+                return error!;
+            }
+
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idColeccion, "dbo.ProductosServiciosColecciones", "la colección", false);
+        }
+
+        [HttpPost("ActivarColeccionProductoServicio")]
+        public async Task<IActionResult> ActivarColeccionProductoServicio(Guid idEmpresa, Guid idColeccion)
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
+            {
+                return error!;
+            }
+
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idColeccion, "dbo.ProductosServiciosColecciones", "la colección", true);
+        }
+
+        [HttpGet("ObtenerCatalogoColeccionesProductosServicios")]
+        public async Task<IActionResult> ObtenerCatalogoColeccionesProductosServicios(Guid idEmpresa, string busqueda = "")
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
+            {
+                return error!;
+            }
+
+            try
+            {
+                return Ok(await ObtenerColeccionesComboAsync(context, context.IdEmpresa, busqueda));
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ObtenerCatalogoColeccionesProductosServicios", "No fue posible cargar las colecciones.");
+            }
+        }
+
+        [HttpGet("ExportarColeccionesProductosServicios")]
+        public async Task<IActionResult> ExportarColeccionesProductosServicios(Guid idEmpresa, string busqueda = "", string estatus = "")
+        {
+            return await ObtenerColeccionesProductosServicios(idEmpresa, busqueda, estatus);
+        }
+
+        [HttpGet("ObtenerEtiquetasProductosServicios")]
+        public async Task<IActionResult> ObtenerEtiquetasProductosServicios(Guid idEmpresa, string busqueda = "", string estatus = "")
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
+            {
+                return error!;
+            }
+
+            try
+            {
+                return Ok(await ObtenerEtiquetasListadoAsync(context, context.IdEmpresa, busqueda, estatus));
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ObtenerEtiquetasProductosServicios", "No fue posible cargar las etiquetas.");
+            }
+        }
+
+        [HttpGet("ObtenerEtiquetaProductoServicio")]
+        public async Task<IActionResult> ObtenerEtiquetaProductoServicio(Guid idEmpresa, Guid idEtiqueta)
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
+            {
+                return error!;
+            }
+
+            try
+            {
+                ProductoServicioTagDto? item = await ObtenerEtiquetaAsync(context, context.IdEmpresa, idEtiqueta);
+                return item == null
+                    ? NotFound(new ProductoServicioOperacionResponse { Mensaje = "La etiqueta no está disponible." })
+                    : Ok(item);
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ObtenerEtiquetaProductoServicio", "No fue posible cargar la etiqueta.");
+            }
+        }
+
+        [HttpPost("GuardarEtiquetaProductoServicio")]
+        public async Task<IActionResult> GuardarEtiquetaProductoServicio([FromBody] ProductoServicioTagGuardarRequest request, Guid idEmpresa)
+        {
+            return await GuardarTagProductoServicio(request, idEmpresa);
+        }
+
+        [HttpPost("BajaEtiquetaProductoServicio")]
+        public async Task<IActionResult> BajaEtiquetaProductoServicio(Guid idEmpresa, Guid idEtiqueta)
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
+            {
+                return error!;
+            }
+
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idEtiqueta, "dbo.ProductosServiciosTags", "la etiqueta", false);
+        }
+
+        [HttpPost("ActivarEtiquetaProductoServicio")]
+        public async Task<IActionResult> ActivarEtiquetaProductoServicio(Guid idEmpresa, Guid idEtiqueta)
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Write))
+            {
+                return error!;
+            }
+
+            return await CambiarEstatusCatalogoBasicoAsync(context, context.IdEmpresa, idEtiqueta, "dbo.ProductosServiciosTags", "la etiqueta", true);
+        }
+
+        [HttpGet("ObtenerCatalogoEtiquetasProductosServicios")]
+        public async Task<IActionResult> ObtenerCatalogoEtiquetasProductosServicios(Guid idEmpresa, string busqueda = "")
+        {
+            if (!await TryResolveRequestContextAsync(idEmpresa, null, out RequestContext context, out IActionResult? error, ProductosServiciosPermissionRequirement.Read))
+            {
+                return error!;
+            }
+
+            try
+            {
+                return Ok(await ObtenerTagsCatalogoAsync(context, context.IdEmpresa, busqueda));
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "ObtenerCatalogoEtiquetasProductosServicios", "No fue posible cargar las etiquetas.");
+            }
+        }
+
+        [HttpGet("ExportarEtiquetasProductosServicios")]
+        public async Task<IActionResult> ExportarEtiquetasProductosServicios(Guid idEmpresa, string busqueda = "", string estatus = "")
+        {
+            return await ObtenerEtiquetasProductosServicios(idEmpresa, busqueda, estatus);
         }
 
         [HttpPost("GuardarPaqueteProductoServicio")]
@@ -2818,6 +3039,102 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
             return await reader.ReadAsync() ? MapUnidad(reader) : null;
         }
 
+        private async Task<List<ProductoServicioColeccionDto>> ObtenerColeccionesListadoAsync(RequestContext context, Guid idEmpresa, string busqueda, string estatus)
+        {
+            using SqlConnection connection = CreateConnection(context);
+            await connection.OpenAsync();
+
+            StringBuilder query = new StringBuilder(@"
+SELECT id, idEmpresa, identityKey, Numero AS Codigo, Numero, Nombre, ISNULL(Descripcion, '') AS Descripcion, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+FROM dbo.ProductosServiciosColecciones
+WHERE idEmpresa = @IdEmpresa");
+
+            using SqlCommand command = new SqlCommand();
+            command.Connection = connection;
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            if (!string.IsNullOrWhiteSpace(busqueda))
+            {
+                query.Append(" AND (Numero LIKE @Busqueda OR Nombre LIKE @Busqueda OR ISNULL(Descripcion, '') LIKE @Busqueda)");
+                command.Parameters.AddWithValue("@Busqueda", $"%{busqueda.Trim()}%");
+            }
+            AppendEstatusFilter(query, "Activo", estatus);
+            query.Append(" ORDER BY Activo DESC, Nombre, Numero");
+            command.CommandText = query.ToString();
+
+            List<ProductoServicioColeccionDto> items = new List<ProductoServicioColeccionDto>();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(MapColeccion(reader));
+            }
+
+            return items;
+        }
+
+        private async Task<ProductoServicioColeccionDto?> ObtenerColeccionAsync(RequestContext context, Guid idEmpresa, Guid idColeccion)
+        {
+            using SqlConnection connection = CreateConnection(context);
+            await connection.OpenAsync();
+
+            using SqlCommand command = new SqlCommand(@"
+SELECT id, idEmpresa, identityKey, Numero AS Codigo, Numero, Nombre, ISNULL(Descripcion, '') AS Descripcion, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+FROM dbo.ProductosServiciosColecciones
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
+
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@Id", idColeccion);
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            return await reader.ReadAsync() ? MapColeccion(reader) : null;
+        }
+
+        private async Task<List<ProductoServicioTagDto>> ObtenerEtiquetasListadoAsync(RequestContext context, Guid idEmpresa, string busqueda, string estatus)
+        {
+            using SqlConnection connection = CreateConnection(context);
+            await connection.OpenAsync();
+
+            StringBuilder query = new StringBuilder(@"
+SELECT id, idEmpresa, COALESCE(identityKey, id) AS identityKey, '' AS Codigo, Nombre, '' AS Descripcion, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+FROM dbo.ProductosServiciosTags
+WHERE idEmpresa = @IdEmpresa");
+
+            using SqlCommand command = new SqlCommand();
+            command.Connection = connection;
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            if (!string.IsNullOrWhiteSpace(busqueda))
+            {
+                query.Append(" AND Nombre LIKE @Busqueda");
+                command.Parameters.AddWithValue("@Busqueda", $"%{busqueda.Trim()}%");
+            }
+            AppendEstatusFilter(query, "Activo", estatus);
+            query.Append(" ORDER BY Activo DESC, Nombre");
+            command.CommandText = query.ToString();
+
+            List<ProductoServicioTagDto> items = new List<ProductoServicioTagDto>();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(MapTag(reader));
+            }
+
+            return items;
+        }
+
+        private async Task<ProductoServicioTagDto?> ObtenerEtiquetaAsync(RequestContext context, Guid idEmpresa, Guid idEtiqueta)
+        {
+            using SqlConnection connection = CreateConnection(context);
+            await connection.OpenAsync();
+
+            using SqlCommand command = new SqlCommand(@"
+SELECT id, idEmpresa, COALESCE(identityKey, id) AS identityKey, '' AS Codigo, Nombre, '' AS Descripcion, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+FROM dbo.ProductosServiciosTags
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection);
+
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@Id", idEtiqueta);
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            return await reader.ReadAsync() ? MapTag(reader) : null;
+        }
+
         private async Task<IActionResult> GuardarCategoriaAsync(RequestContext context, ProductoServicioCategoriaGuardarRequest request, Guid idEmpresa)
         {
             return await GuardarCatalogoBasicoAsync(
@@ -2966,7 +3283,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id";
 
                 if (tableName == "dbo.ProductosServiciosUnidadesMedida")
                 {
-                    using SqlCommand systemUnit = new SqlCommand("SELECT COUNT(1) FROM dbo.ProductosServiciosUnidadesMedida WHERE idEmpresa=@IdEmpresa AND id=@Id AND EsSistema=1", connection);
+                    using SqlCommand systemUnit = new SqlCommand("SELECT COUNT(1) FROM dbo.ProductosServiciosUnidadesMedida WHERE idEmpresa=@IdEmpresa AND (id=@Id OR identityKey=@Id) AND EsSistema=1", connection);
                     systemUnit.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
                     systemUnit.Parameters.AddWithValue("@Id", id);
                     if (Convert.ToInt32(await systemUnit.ExecuteScalarAsync()) > 0)
@@ -2981,7 +3298,9 @@ SET
     Activo = @Activo,
     FechaActualizacion = @FechaActualizacion,
     FechaArchivado = @FechaArchivado
-WHERE idEmpresa = @IdEmpresa AND id = @Id AND Activo <> @Activo", connection);
+WHERE idEmpresa = @IdEmpresa
+  AND (id = @Id OR identityKey = @Id)
+  AND Activo <> @Activo", connection);
 
                 command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
                 command.Parameters.AddWithValue("@Id", id);
@@ -3085,7 +3404,7 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1");
 SELECT
     id,
     idEmpresa,
-    identityKey,
+    COALESCE(identityKey, id) AS identityKey,
     '' AS Codigo,
     Nombre,
     '' AS Descripcion,
@@ -5521,7 +5840,7 @@ VALUES
 SELECT TOP (1)
     id,
     idEmpresa,
-    identityKey,
+    COALESCE(identityKey, id) AS identityKey,
     '' AS Codigo,
     Nombre,
     '' AS Descripcion,
@@ -5597,6 +5916,66 @@ VALUES
             return created;
         }
 
+        private async Task<ProductoServicioTagDto> ActualizarTagAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idTag, string nombre, DateTime ahora)
+        {
+            string normalizedName = Truncate(nombre ?? string.Empty, TagLength).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedName))
+            {
+                throw new ProductoServicioValidationException("Captura un nombre de etiqueta.");
+            }
+
+            using (SqlCommand duplicate = new SqlCommand(@"
+SELECT TOP (1) id
+FROM dbo.ProductosServiciosTags
+WHERE idEmpresa = @IdEmpresa
+  AND id <> @Id
+  AND UPPER(LTRIM(RTRIM(Nombre))) = UPPER(@NombreNormalizado)", connection, transaction))
+            {
+                duplicate.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                duplicate.Parameters.AddWithValue("@Id", idTag);
+                duplicate.Parameters.AddWithValue("@NombreNormalizado", normalizedName);
+
+                object? existing = await duplicate.ExecuteScalarAsync();
+                if (existing != null && existing != DBNull.Value)
+                {
+                    throw new ProductoServicioValidationException("Ya existe una etiqueta con este nombre.");
+                }
+            }
+
+            using (SqlCommand update = new SqlCommand(@"
+UPDATE dbo.ProductosServiciosTags
+SET Nombre = @Nombre,
+    FechaActualizacion = @FechaActualizacion
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction))
+            {
+                update.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                update.Parameters.AddWithValue("@Id", idTag);
+                update.Parameters.AddWithValue("@Nombre", normalizedName);
+                update.Parameters.AddWithValue("@FechaActualizacion", ahora);
+
+                int affected = await update.ExecuteNonQueryAsync();
+                if (affected == 0)
+                {
+                    throw new ProductoServicioValidationException("No se encontró la etiqueta solicitada.");
+                }
+            }
+
+            using SqlCommand select = new SqlCommand(@"
+SELECT id, idEmpresa, COALESCE(identityKey, id) AS identityKey, '' AS Codigo, Nombre, '' AS Descripcion, Activo, FechaCreacion, FechaActualizacion, FechaArchivado
+FROM dbo.ProductosServiciosTags
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+            select.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            select.Parameters.AddWithValue("@Id", idTag);
+
+            using SqlDataReader reader = await select.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                return MapTag(reader);
+            }
+
+            throw new ProductoServicioValidationException("No se encontró la etiqueta solicitada.");
+        }
+
         private async Task ReactivateTagAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idTag, DateTime ahora)
         {
             using SqlCommand update = new SqlCommand(@"
@@ -5627,7 +6006,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
 SELECT TOP (1)
     id,
     idEmpresa,
-    identityKey,
+    COALESCE(identityKey, id) AS identityKey,
     '' AS Codigo,
     Nombre,
     '' AS Descripcion,
@@ -6748,6 +7127,16 @@ WHERE ov.idEmpresa = @IdEmpresa
                 return UnidadesMedidaPermissionCode;
             }
 
+            if (ColeccionActions.Contains(actionName))
+            {
+                return ColeccionesPermissionCode;
+            }
+
+            if (EtiquetaActions.Contains(actionName))
+            {
+                return EtiquetasPermissionCode;
+            }
+
             return AbcPermissionCode;
         }
 
@@ -7102,6 +7491,42 @@ WHERE ov.idEmpresa = @IdEmpresa
                 FactorConversion = HasColumn(reader, "FactorConversion") ? ReadNullableDecimal(reader, "FactorConversion") : null,
                 Convertible = HasColumn(reader, "Convertible") && ReadBool(reader, "Convertible"),
                 ClaveSistema = HasColumn(reader, "ClaveSistema") ? ReadString(reader, "ClaveSistema") : string.Empty,
+                Activo = ReadBool(reader, "Activo"),
+                FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
+                FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),
+                FechaArchivado = ReadNullableDateTime(reader, "FechaArchivado")
+            };
+        }
+
+        private static ProductoServicioColeccionDto MapColeccion(SqlDataReader reader)
+        {
+            string numero = ReadString(reader, "Numero");
+            return new ProductoServicioColeccionDto
+            {
+                Id = ReadGuid(reader, "id"),
+                IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                IdentityKey = ReadGuid(reader, "identityKey"),
+                Codigo = ReadString(reader, "Codigo"),
+                Numero = numero,
+                Nombre = ReadString(reader, "Nombre"),
+                Descripcion = ReadString(reader, "Descripcion"),
+                Activo = ReadBool(reader, "Activo"),
+                FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
+                FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),
+                FechaArchivado = ReadNullableDateTime(reader, "FechaArchivado")
+            };
+        }
+
+        private static ProductoServicioTagDto MapTag(SqlDataReader reader)
+        {
+            return new ProductoServicioTagDto
+            {
+                Id = ReadGuid(reader, "id"),
+                IdEmpresa = ReadGuid(reader, "idEmpresa"),
+                IdentityKey = ReadGuid(reader, "identityKey"),
+                Codigo = ReadString(reader, "Codigo"),
+                Nombre = ReadString(reader, "Nombre"),
+                Descripcion = ReadString(reader, "Descripcion"),
                 Activo = ReadBool(reader, "Activo"),
                 FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
                 FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),

@@ -200,7 +200,8 @@ namespace checklistWs.Services.Tenant
                 string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

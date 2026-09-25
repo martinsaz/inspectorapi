@@ -37,6 +37,8 @@ builder.Services.AddScoped<checklistWs.Services.Tenant.IProductosServiciosCompat
 builder.Services.AddScoped<checklistWs.Services.Tenant.IProductosServiciosAuthorizationService, checklistWs.Services.Tenant.ProductosServiciosAuthorizationService>();
 builder.Services.AddScoped<checklistWs.Services.Tenant.IInventarioScopeLedgerService, checklistWs.Services.Tenant.InventarioScopeLedgerService>();
 builder.Services.AddScoped<checklistWs.Services.Tenant.IRecepcionScopeService, checklistWs.Services.Tenant.RecepcionScopeService>();
+builder.Services.AddScoped<checklistWs.Services.Tenant.ICurvasScopeService, checklistWs.Services.Tenant.CurvasScopeService>();
+builder.Services.AddScoped<checklistWs.Services.Tenant.ICurvasSugerenciasMotorService, checklistWs.Services.Tenant.CurvasSugerenciasMotorService>();
 builder.Services.AddScoped<checklistWs.Services.Tenant.ISucursalesScopeRequestContextResolver, checklistWs.Services.Tenant.SucursalesScopeRequestContextResolver>();
 
 builder.Services.AddScoped<checklistWs.Services.Tenant.IProductosServiciosCompanyBootstrapper, checklistWs.Services.Tenant.ProductosServiciosCompanyBootstrapper>();

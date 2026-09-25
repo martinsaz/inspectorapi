@@ -225,6 +225,7 @@ namespace checklistWs.Models.OrdenesCompra
         public string UnidadCompra { get; set; } = string.Empty;
         public string UnidadCompraAbreviatura { get; set; } = string.Empty;
         public decimal FactorConversionBase { get; set; }
+        public bool PermiteCantidadBase { get; set; }
     }
 
     public class OrdenCompraExportacionDto

@@ -27,6 +27,7 @@ namespace checklistWs.Services.Tenant
         public const string OrdenesCompra = "OrdenesCompra";
         public const string Inventario = "Inventario";
         public const string Recepcion = "Recepcion";
+        public const string Curvas = "Curvas";
     }
 
     public sealed class DatabaseSchemaProbeResult

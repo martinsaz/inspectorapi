@@ -138,6 +138,11 @@ namespace checklistWs.Services.Tenant
                 return DatabaseScopes.Recepcion;
             }
 
+            if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
+            {
+                return DatabaseScopes.Curvas;
+            }
+
             return Regex.Replace(scope ?? string.Empty, @"[^A-Za-z0-9_\-]", string.Empty);
         }
 

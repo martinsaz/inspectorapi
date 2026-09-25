@@ -312,6 +312,39 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
+        public void RealOrdenesCompraPackage_DeclaresApprovedV2PresentationCompraMigration()
+        {
+            var provider = new ProductosServiciosMigrationPackageProvider(new ProductosServiciosSchemaContractProvider(), new SchemaManifestProvider());
+
+            SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.OrdenesCompra);
+
+            Assert.Equal(2, package.Release.LatestSchemaVersion);
+            SchemaMigrationDefinition migration = Assert.Single(package.Migrations);
+            Assert.Equal(1, migration.FromVersion);
+            Assert.Equal(2, migration.ToVersion);
+            Assert.Equal("OC-M20260923-V1-V2-PRESENTACIONCOMPRA-CANTIDAD-BASE", migration.MigrationId);
+            Assert.Equal(new[] { "dbo.OrdenesCompraPresentacionesCompra.PermiteCantidadBase" }, migration.ObjectsAffected);
+            Assert.Contains("ALTER TABLE dbo.OrdenesCompraPresentacionesCompra", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("ADD PermiteCantidadBase bit NOT NULL", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("DEFAULT ((0))", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("PresentacionesVenta", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(migration.TargetManifestHash, package.Release.LatestManifestHash);
+        }
+
+        [Fact]
+        public void RealCurvasPackage_IsEmptyBootstrapOnly()
+        {
+            var provider = new ProductosServiciosMigrationPackageProvider(new ProductosServiciosSchemaContractProvider(), new SchemaManifestProvider());
+
+            SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.Curvas);
+
+            Assert.Equal("CUR-B20260923", package.Release.BaselineId);
+            Assert.Equal(1, package.Release.BaselineVersion);
+            Assert.Equal(1, package.Release.LatestSchemaVersion);
+            Assert.Empty(package.Migrations);
+        }
+
+        [Fact]
         public void ProductosServiciosContract_V1RemainsImmutableAndV2OnlyWidensThreeDescriptions()
         {
             var provider = new ProductosServiciosSchemaContractProvider();

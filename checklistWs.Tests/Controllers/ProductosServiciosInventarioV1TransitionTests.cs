@@ -33,5 +33,15 @@ namespace checklistWs.Tests.Controllers
             Assert.Contains("dbo.InventarioMovimientos", source);
             Assert.Contains("Inventario V1 requiere sucursal, origen e idempotencia", source);
         }
+
+        [Fact]
+        public void ProductosServiciosCatalogStatusChangeMatchesHistoricalIdentityKey()
+        {
+            string source = File.ReadAllText(ControllerPath);
+
+            Assert.Contains("COALESCE(identityKey, id) AS identityKey", source);
+            Assert.Contains("AND (id = @Id OR identityKey = @Id)", source);
+            Assert.Contains("AND (id=@Id OR identityKey=@Id) AND EsSistema=1", source);
+        }
     }
 }
