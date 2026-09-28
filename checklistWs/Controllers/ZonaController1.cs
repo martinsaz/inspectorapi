@@ -117,7 +117,7 @@ namespace checklistWs.Controllers
                                 {
                                     Id = reader.GetGuid(reader.GetOrdinal("Id")),
                                     Nombre = reader.GetString(reader.GetOrdinal("Nombre")),
-                                    Notas = reader.GetString(reader.GetOrdinal("Notas")),
+                                    Notas = reader.IsDBNull(reader.GetOrdinal("Notas")) ? string.Empty : reader.GetString(reader.GetOrdinal("Notas")),
                                     Fecha = reader.IsDBNull(reader.GetOrdinal("Fecha")) ? DateTime.MinValue : reader.GetDateTime(reader.GetOrdinal("Fecha")),
                                     IdEmpresa = reader.GetGuid(reader.GetOrdinal("IdEmpresa")),
                                     borrado = reader.IsDBNull(reader.GetOrdinal("borrado")) ? false : reader.GetBoolean(reader.GetOrdinal("borrado"))

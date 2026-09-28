@@ -1276,6 +1276,13 @@ WHERE ps.idEmpresa = @IdEmpresa
                         return BadRequest(new ProductoServicioOperacionResponse { Mensaje = "Ya existe un producto o servicio con el mismo código." });
                     }
 
+                    string unidadServicioValidation = await ResolveUnidadMedidaCompatibilidadServicioAsync(connection, transaction, context.IdEmpresa, normalized, esNuevo, existente);
+                    if (!string.IsNullOrWhiteSpace(unidadServicioValidation))
+                    {
+                        transaction.Rollback();
+                        return BadRequest(new ProductoServicioOperacionResponse { Mensaje = unidadServicioValidation });
+                    }
+
                     string catalogoValidation = await ValidateCatalogReferencesAsync(connection, transaction, context.IdEmpresa, normalized, esNuevo, existente);
                     if (!string.IsNullOrWhiteSpace(catalogoValidation))
                     {
@@ -3818,6 +3825,56 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
             await Task.CompletedTask;
         }
 
+        private async Task<string> ResolveUnidadMedidaCompatibilidadServicioAsync(
+            SqlConnection connection,
+            SqlTransaction transaction,
+            Guid idEmpresa,
+            NormalizedProductoServicioRequest request,
+            bool esNuevo,
+            ProductoServicioSnapshot? existente)
+        {
+            if (request.Tipo != TipoServicio)
+            {
+                return string.Empty;
+            }
+
+            if (!esNuevo && existente != null && existente.IdUnidadMedida != Guid.Empty)
+            {
+                request.IdUnidadMedida = existente.IdUnidadMedida;
+                return string.Empty;
+            }
+
+            if (request.IdUnidadMedida != Guid.Empty)
+            {
+                return string.Empty;
+            }
+
+            using SqlCommand command = new SqlCommand(@"
+SELECT TOP (1) id
+FROM dbo.ProductosServiciosUnidadesMedida
+WHERE idEmpresa = @IdEmpresa
+  AND Activo = 1
+ORDER BY
+    CASE
+        WHEN UPPER(ISNULL(Codigo, '')) IN ('US', 'SERV', 'SERVICIO') THEN 0
+        WHEN UPPER(ISNULL(Abreviatura, '')) IN ('US', 'SERV') THEN 1
+        WHEN Nombre LIKE '%servicio%' THEN 2
+        ELSE 3
+    END,
+    Nombre,
+    id", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+
+            object? result = await command.ExecuteScalarAsync();
+            if (result == null || result == DBNull.Value)
+            {
+                return "No existe una unidad de medida activa para compatibilidad física de servicios.";
+            }
+
+            request.IdUnidadMedida = (Guid)result;
+            return string.Empty;
+        }
+
         private async Task<string> ValidateCatalogReferencesAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, NormalizedProductoServicioRequest request, bool esNuevo, ProductoServicioSnapshot? existente)
         {
             ProductoServicioCategoriaDto? categoria = await ObtenerCategoriaInternaAsync(connection, transaction, idEmpresa, request.IdCategoria);
@@ -4048,7 +4105,7 @@ WHERE idEmpresa = @IdEmpresa
                 return "Selecciona una categoría.";
             }
 
-            if (request.IdUnidadMedida == Guid.Empty)
+            if (request.Tipo == TipoProducto && request.IdUnidadMedida == Guid.Empty)
             {
                 return "Selecciona una unidad de medida.";
             }
@@ -4671,6 +4728,7 @@ WHERE idEmpresa = @IdEmpresa
                 normalized.PermiteVentaSinExistencia = false;
                 normalized.ExistenciaInicial = null;
                 normalized.ExistenciaMinima = null;
+                normalized.PresentacionesVenta = new List<ProductoServicioPresentacionVentaGuardarRequest>();
             }
             else if (!normalized.CausaInventario)
             {
@@ -6263,13 +6321,6 @@ WHERE vv.idEmpresa = @IdEmpresa AND pv.idProductoServicio = @IdProductoServicio"
             deleteValores.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
             await deleteValores.ExecuteNonQueryAsync();
 
-            using SqlCommand deleteVariantes = new SqlCommand(@"
-DELETE FROM dbo.ProductosServiciosVariantes
-WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", connection, transaction);
-            deleteVariantes.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
-            deleteVariantes.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
-            await deleteVariantes.ExecuteNonQueryAsync();
-
             HashSet<Guid> finalVariantIds = new HashSet<Guid>();
             foreach (ProductoServicioVarianteGuardarRequest variante in variantes.OrderBy(x => x.Orden))
             {
@@ -6307,15 +6358,39 @@ WHERE idEmpresa = @IdEmpresa AND idProductoServicio = @IdProductoServicio", conn
                     result.FinalCleanups.Add(imageMutation.PreviousImageCleanup);
                 }
 
-                using SqlCommand insert = new SqlCommand(@"
+                bool varianteExistente = variantesActualesPorId.ContainsKey(idVariante);
+                using SqlCommand insert = varianteExistente
+                    ? new SqlCommand(@"
+UPDATE dbo.ProductosServiciosVariantes
+SET
+    Sku = @Sku,
+    Nombre = @Nombre,
+    ClaveCombinacion = @ClaveCombinacion,
+    ImagenUrl = @ImagenUrl,
+    ImagenNombre = @ImagenNombre,
+    Costo = @Costo,
+    PrecioPublico = @PrecioPublico,
+    PrecioComparacion = @PrecioComparacion,
+    PrecioUnitarioMonto = @PrecioUnitarioMonto,
+    PrecioUnitarioBaseCantidad = @PrecioUnitarioBaseCantidad,
+    PrecioUnitarioUnidad = @PrecioUnitarioUnidad,
+    Orden = @Orden,
+    Activo = 1,
+    FechaActualizacion = @FechaActualizacion
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction)
+                    : new SqlCommand(@"
 INSERT INTO dbo.ProductosServiciosVariantes
     (id, idEmpresa, identityKey, idProductoServicio, Sku, Nombre, ClaveCombinacion, ImagenUrl, ImagenNombre, Costo, PrecioPublico, PrecioComparacion, PrecioUnitarioMonto, PrecioUnitarioBaseCantidad, PrecioUnitarioUnidad, Orden, Activo, FechaCreacion, FechaActualizacion)
 VALUES
     (@Id, @IdEmpresa, @IdentityKey, @IdProductoServicio, @Sku, @Nombre, @ClaveCombinacion, @ImagenUrl, @ImagenNombre, @Costo, @PrecioPublico, @PrecioComparacion, @PrecioUnitarioMonto, @PrecioUnitarioBaseCantidad, @PrecioUnitarioUnidad, @Orden, 1, @FechaCreacion, @FechaActualizacion)", connection, transaction);
                 insert.Parameters.AddWithValue("@Id", idVariante);
                 insert.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
-                insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
-                insert.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+                if (!varianteExistente)
+                {
+                    insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
+                    insert.Parameters.AddWithValue("@IdProductoServicio", idProductoServicio);
+                    insert.Parameters.AddWithValue("@FechaCreacion", ahora);
+                }
                 insert.Parameters.AddWithValue("@Sku", string.IsNullOrWhiteSpace(variante.Sku) ? DBNull.Value : variante.Sku.Trim());
                 insert.Parameters.AddWithValue("@Nombre", variante.Nombre.Trim());
                 insert.Parameters.AddWithValue("@ClaveCombinacion", variante.ClaveCombinacion.Trim());
@@ -6328,7 +6403,6 @@ VALUES
                 insert.Parameters.AddWithValue("@PrecioUnitarioBaseCantidad", variante.PrecioUnitarioBaseCantidad.HasValue ? variante.PrecioUnitarioBaseCantidad.Value : DBNull.Value);
                 insert.Parameters.AddWithValue("@PrecioUnitarioUnidad", string.IsNullOrWhiteSpace(variante.PrecioUnitarioUnidad) ? DBNull.Value : variante.PrecioUnitarioUnidad.Trim());
                 insert.Parameters.AddWithValue("@Orden", variante.Orden);
-                insert.Parameters.AddWithValue("@FechaCreacion", ahora);
                 insert.Parameters.AddWithValue("@FechaActualizacion", ahora);
                 await insert.ExecuteNonQueryAsync();
 
@@ -6356,11 +6430,14 @@ VALUES
 
             foreach (ProductoServicioVarianteDto varianteEliminada in variantesActuales.Where(x => !finalVariantIds.Contains(x.Id)))
             {
-                FirebaseCleanupItem? cleanup = TryBuildCleanupItemFromUrl(varianteEliminada.ImagenUrl);
-                if (cleanup != null)
-                {
-                    result.FinalCleanups.Add(cleanup);
-                }
+                using SqlCommand archive = new SqlCommand(@"
+UPDATE dbo.ProductosServiciosVariantes
+SET Activo = 0, FechaActualizacion = @FechaActualizacion
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+                archive.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                archive.Parameters.AddWithValue("@Id", varianteEliminada.Id);
+                archive.Parameters.AddWithValue("@FechaActualizacion", ahora);
+                await archive.ExecuteNonQueryAsync();
             }
 
             return result;
@@ -7214,7 +7291,7 @@ WHERE ov.idEmpresa = @IdEmpresa
 
         private IActionResult HandleException(Exception ex, string operation, string safeMessage)
         {
-            _logger.LogError("Error en ProductosServicios. ReferenceId={ReferenceId} Operation={Operation} ReasonCode={ReasonCode}", Guid.NewGuid().ToString("N"), operation, "OPERATION_FAILED");
+            _logger.LogError(ex, "Error en ProductosServicios. ReferenceId={ReferenceId} Operation={Operation} ReasonCode={ReasonCode}", Guid.NewGuid().ToString("N"), operation, "OPERATION_FAILED");
             if (IsTenantDatabaseUnavailable(ex))
             {
                 return StatusCode(503, new ProductoServicioOperacionResponse { Mensaje = "La base de datos de la empresa no está disponible en este momento." });
@@ -7693,23 +7770,13 @@ WHERE ov.idEmpresa = @IdEmpresa
         {
             container.EnsureSpace(165).Row(row =>
             {
-                row.RelativeItem(4.8f).PaddingRight(16).Height(155).Element(visual =>
+                row.ConstantItem(155).Height(155).Element(visual =>
                 {
-                    if (image != null)
-                        visual.AlignMiddle().Image(image).FitArea();
-                    else
-                    {
-                        string initials = string.Concat((ficha.Nombre ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                            .Take(2).Select(word => word.Substring(0, 1))).ToUpperInvariant();
-                        visual.Background(FichaSurface).Padding(16).AlignCenter().AlignMiddle().Column(fallback =>
-                        {
-                            fallback.Spacing(6);
-                            fallback.Item().AlignCenter().Text(initials.Length > 0 ? initials : "S").SemiBold().FontSize(36).FontColor(FichaMuted);
-                            fallback.Item().AlignCenter().Text(string.IsNullOrWhiteSpace(ficha.Categoria) ? "Servicio" : ficha.Categoria).FontSize(9).FontColor(FichaMuted);
-                        });
-                    }
+                    string initials = string.Concat((ficha.Nombre ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                        .Take(2).Select(word => word.Substring(0, 1))).ToUpperInvariant();
+                    ComposeFichaSquareImageFrame(visual, image, initials.Length > 0 ? initials : "S", string.IsNullOrWhiteSpace(ficha.Categoria) ? "Servicio" : ficha.Categoria);
                 });
-                row.RelativeItem(5.2f).AlignMiddle().Column(identity =>
+                row.RelativeItem().PaddingLeft(16).AlignMiddle().Column(identity =>
                 {
                     identity.Spacing(9);
                     if (!string.IsNullOrWhiteSpace(ficha.Categoria))
@@ -7746,7 +7813,6 @@ WHERE ov.idEmpresa = @IdEmpresa
                 ("Tipo", FichaTextOrDash(ficha.TipoNombre)),
                 ("Estatus", FichaTextOrDash(ficha.EstatusNombre)),
                 ("Categoría", FichaTextOrDash(ficha.Categoria)),
-                ("Unidad base", BuildUnidadLabel(ficha.UnidadMedida, ficha.UnidadAbreviatura)),
                 ("Etiquetas", string.Join(" · ", ficha.Tags.Select(tag => FichaTextOrDash(tag.Nombre))))
             };
             if (!string.IsNullOrWhiteSpace(ficha.Marca)) fields.Add(("Marca", ficha.Marca));
@@ -7766,14 +7832,13 @@ WHERE ov.idEmpresa = @IdEmpresa
 
         private static void ComposeFichaGeneralSection(IContainer container, ProductoServicioFichaTecnicaDto ficha, byte[]? imagenPrincipal)
         {
-            container.EnsureSpace(190).Row(row =>
+            container.EnsureSpace(165).Row(row =>
             {
-                row.RelativeItem(3.4f).PaddingRight(14).Height(190).Background(FichaSurface).CornerRadius(5).Padding(9).Element(image =>
+                row.ConstantItem(155).Height(155).Element(image =>
                 {
-                    if (imagenPrincipal != null) image.Image(imagenPrincipal).FitArea();
-                    else image.AlignCenter().AlignMiddle().Text("Sin imagen").FontColor(FichaMuted);
+                    ComposeFichaSquareImageFrame(image, imagenPrincipal, "PS", "Sin imagen");
                 });
-                row.RelativeItem(6.6f).Column(details =>
+                row.RelativeItem().PaddingLeft(14).Column(details =>
                 {
                     details.Spacing(5);
                     if (!string.IsNullOrWhiteSpace(ficha.Categoria)) details.Item().Text(ficha.Categoria.ToUpperInvariant()).FontSize(8).FontColor(FichaAccent);
@@ -7808,6 +7873,26 @@ WHERE ov.idEmpresa = @IdEmpresa
                         });
                     }
                 });
+            });
+        }
+
+        private static void ComposeFichaSquareImageFrame(IContainer container, byte[]? image, string fallbackInitials, string fallbackText)
+        {
+            container.Background(FichaSurface).Border(0.5f).BorderColor(FichaRule).CornerRadius(6).Padding(8).Element(content =>
+            {
+                if (image != null)
+                {
+                    content.Background("#FFFFFF").CornerRadius(5).AlignCenter().AlignMiddle().Image(image).FitArea();
+                }
+                else
+                {
+                    content.Background("#FFFFFF").CornerRadius(5).AlignCenter().AlignMiddle().Column(fallback =>
+                    {
+                        fallback.Spacing(6);
+                        fallback.Item().AlignCenter().Text(fallbackInitials).SemiBold().FontSize(30).FontColor(FichaMuted);
+                        fallback.Item().AlignCenter().Text(fallbackText).FontSize(8.5f).FontColor(FichaMuted);
+                    });
+                }
             });
         }
 
