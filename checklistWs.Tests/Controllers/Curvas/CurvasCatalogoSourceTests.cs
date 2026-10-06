@@ -77,7 +77,8 @@ public sealed class CurvasCatalogoSourceTests
 
         Assert.Contains("api/Usuario/ObtenerUsuarioPorEmail", source);
         Assert.Contains("api/Usuario/ObtenerUsuario", source);
-        Assert.Contains("FindPermission(JsonNode.Parse(permisos), CurvasCatalogoPermissionCode)", source);
+        Assert.Contains("FindPermission(JsonNode.Parse(permisos), permissionCode)", source);
+        Assert.Contains("HasCurvasAccessAsync(CurvasCatalogoPermissionCode)", source);
         Assert.Contains("No fue posible resolver", File.ReadAllText(Path.Combine(ApiRoot, "Controllers", "Curvas", "CurvasCatalogoController.cs")));
     }
 }

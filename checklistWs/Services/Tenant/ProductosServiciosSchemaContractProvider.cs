@@ -4,16 +4,29 @@ namespace checklistWs.Services.Tenant
     {
         public const int V1 = 1;
         public const int V2 = 2;
-        public const int LatestVersion = V2;
+        public const int V3 = 3;
+        public const int LatestVersion = V3;
         public const int SucursalesLatestVersion = V2;
         public const int ProveedoresLatestVersion = V1;
         public const int OrdenesCompraLatestVersion = V2;
         public const int InventarioLatestVersion = V1;
         public const int RecepcionLatestVersion = V1;
         public const int CurvasLatestVersion = V1;
+        public const int ListaPreciosLatestVersion = V2;
+        public const int CotizacionesLatestVersion = V2;
 
         public SchemaContract GetContract(string scope, int? version = null)
         {
+            if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase))
+            {
+                return CotizacionesSchemaContractFactory.GetContract(version ?? CotizacionesLatestVersion);
+            }
+
+            if (string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase))
+            {
+                return ListaPreciosSchemaContractFactory.GetContract(version ?? ListaPreciosLatestVersion);
+            }
+
             if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
             {
                 return RecepcionSchemaContractFactory.GetContract(version ?? RecepcionLatestVersion);
@@ -50,6 +63,11 @@ namespace checklistWs.Services.Tenant
             }
 
             int contractVersion = version ?? LatestVersion;
+            if (contractVersion == V3)
+            {
+                return ProductosServiciosComercialContractProposal.CreateTargetContract(this);
+            }
+
             if (contractVersion is not V1 and not V2)
             {
                 throw new InvalidOperationException("SCHEMA_CONTRACT_VERSION_NOT_SUPPORTED");

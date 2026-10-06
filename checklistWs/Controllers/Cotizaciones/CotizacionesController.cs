@@ -8,6 +8,7 @@ using System.Text;
 using checklistWs.Models.Configuracion;
 using checklistWs.Models.Cotizaciones;
 using checklistWs.Services;
+using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
@@ -36,7 +37,10 @@ namespace checklistWs.Controllers.Cotizaciones
         private static readonly TimeSpan ProxyHeaderTolerance = TimeSpan.FromMinutes(5);
 
         private readonly IConfiguration _configuration;
-        private readonly SqlConnectionFactory _connectionFactory;
+        private readonly ITenantDatabaseResolver _tenantDatabaseResolver;
+        private readonly ITenantSqlConnectionFactory _connectionFactory;
+        private readonly IProductosServiciosCompatibilityGate _compatibilityGate;
+        private readonly IProductosServiciosAuthorizationService _authorizationService;
         private readonly IDataProtector _protector;
         private readonly DocumentEmailService _documentEmailService;
         private readonly ILogger<CotizacionesController> _logger;
@@ -45,10 +49,17 @@ namespace checklistWs.Controllers.Cotizaciones
             IConfiguration configuration,
             ILogger<CotizacionesController> logger,
             IDataProtectionProvider dataProtectionProvider,
-            DocumentEmailService documentEmailService)
+            DocumentEmailService documentEmailService,
+            ITenantDatabaseResolver tenantDatabaseResolver,
+            ITenantSqlConnectionFactory connectionFactory,
+            IProductosServiciosCompatibilityGate compatibilityGate,
+            IProductosServiciosAuthorizationService authorizationService)
         {
             _configuration = configuration;
-            _connectionFactory = new SqlConnectionFactory(configuration);
+            _tenantDatabaseResolver = tenantDatabaseResolver;
+            _connectionFactory = connectionFactory;
+            _compatibilityGate = compatibilityGate;
+            _authorizationService = authorizationService;
             _protector = dataProtectionProvider.CreateProtector("checklistWs.Configuracion.CorreoSaliente.Password.v1");
             _documentEmailService = documentEmailService;
             _logger = logger;
@@ -69,9 +80,8 @@ namespace checklistWs.Controllers.Cotizaciones
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
 
                 StringBuilder query = new StringBuilder(@"
 SELECT
@@ -186,9 +196,8 @@ WHERE c.idEmpresa = @IdEmpresa
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
 
                 StringBuilder query = new StringBuilder(@"
 SELECT
@@ -256,9 +265,8 @@ WHERE idEmpresa = @IdEmpresa
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
 
                 using SqlCommand command = new SqlCommand(@"
 SELECT
@@ -287,7 +295,10 @@ SELECT
     ISNULL(c.MotivoCancelacion, '') AS MotivoCancelacion,
     c.FechaCancelacion,
     c.FechaCreacion,
-    c.FechaActualizacion
+    c.FechaActualizacion,
+    c.idListaPrecio,
+    c.ListaPrecioNivel,
+    c.idCotizacionOrigen
 FROM dbo.Cotizaciones c
 INNER JOIN dbo.Clientes cl
     ON cl.id = c.idCliente AND cl.idEmpresa = c.idEmpresa
@@ -338,7 +349,11 @@ WHERE c.idEmpresa = @IdEmpresa
                         MotivoCancelacion = ReadString(reader, "MotivoCancelacion"),
                         FechaCancelacion = ReadNullableDateTime(reader, "FechaCancelacion"),
                         FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
-                        FechaActualizacion = ReadDateTime(reader, "FechaActualizacion")
+                        FechaActualizacion = ReadDateTime(reader, "FechaActualizacion"),
+                        IdListaPrecio = ReadNullableGuid(reader, "idListaPrecio"),
+                        ListaPrecioNivel = ReadNullableByte(reader, "ListaPrecioNivel"),
+                        IdCotizacionOrigen = ReadNullableGuid(reader, "idCotizacionOrigen"),
+                        EsPreLp08 = reader.IsDBNull(reader.GetOrdinal("ListaPrecioNivel"))
                     };
                 }
 
@@ -349,6 +364,61 @@ WHERE c.idEmpresa = @IdEmpresa
             {
                 return HandleException(ex, "ObtenerCotizacion", "No fue posible cargar la cotización.");
             }
+        }
+
+        [HttpGet("BuscarIdentidades")]
+        public async Task<IActionResult> BuscarIdentidades(Guid idEmpresa, string busqueda = "", int nivel = ListaPreciosConstants.NivelDefault)
+        {
+            if (!TryResolveRequestContext(idEmpresa, out RequestContext context, out IActionResult? error)) return error!;
+            if (nivel < ListaPreciosConstants.NivelMinimo || nivel > ListaPreciosConstants.NivelMaximo)
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = ListaPreciosResolutionCodes.ListaInvalida });
+
+            IListaPreciosService service = new ListaPreciosService(new SqlListaPreciosRepository(_connectionFactory, context.TenantDatabase));
+            IReadOnlyList<ListaPreciosConsultaRowDto> rows = await service.ConsultarAsync(context.IdEmpresa, new ListaPreciosConsultaRequest
+            {
+                Nivel = nivel,
+                Busqueda = Truncate(busqueda?.Trim() ?? string.Empty, BusquedaLength),
+                Estatus = "activos"
+            }, HttpContext.RequestAborted);
+            return Ok(rows.Take(20));
+        }
+
+        [HttpPost("PreviewPrecios")]
+        public async Task<IActionResult> PreviewPrecios(Guid idEmpresa, [FromBody] CotizacionGuardarRequest request)
+        {
+            if (!TryResolveRequestContext(idEmpresa, out RequestContext context, out IActionResult? error)) return error!;
+            if (request == null || request.ListaPrecioNivel < 1 || request.ListaPrecioNivel > 10) return BadRequest(new { code = ListaPreciosResolutionCodes.ListaInvalida });
+            IListaPreciosService service = new ListaPreciosService(new SqlListaPreciosRepository(_connectionFactory, context.TenantDatabase));
+            List<object> rows = new();
+            foreach (CotizacionPartidaGuardarRequest line in request.Partidas ?? new())
+            {
+                ListaPreciosResolutionResult resolution = await service.ResolverPrecioAsync(context.IdEmpresa, new ListaPreciosResolverRequest
+                {
+                    Nivel = request.ListaPrecioNivel,
+                    TipoIdentidad = line.TipoIdentidad,
+                    IdProductoServicio = line.IdProductoServicio,
+                    IdVariante = line.IdVariante,
+                    IdPresentacionVenta = line.IdPresentacionVenta,
+                    RequiereActivo = true
+                }, HttpContext.RequestAborted);
+                rows.Add(new
+                {
+                    line.Id,
+                    line.IdProductoServicio,
+                    line.IdVariante,
+                    line.IdPresentacionVenta,
+                    resolution.Resuelto,
+                    resolution.CodigoResolucion,
+                    resolution.PrecioBase,
+                    resolution.PrecioLista,
+                    resolution.DescuentoPct,
+                    resolution.PrecioFinal,
+                    resolution.OrigenPrecio,
+                    resolution.ReglaVersion,
+                    resolution.CorrelationId
+                });
+            }
+            return Ok(new { listaPrecioNivel = request.ListaPrecioNivel, partidas = rows });
         }
 
         [HttpPost("GuardarCotizacion")]
@@ -375,11 +445,25 @@ WHERE c.idEmpresa = @IdEmpresa
                 return BadRequest(new CotizacionOperacionResponse { Mensaje = validation });
             }
 
+            return await GuardarCotizacionLp08Async(context, request);
+        }
+
+        private async Task<IActionResult> GuardarCotizacionLp08Async(RequestContext context, CotizacionGuardarRequest request)
+        {
+            if (request.ListaPrecioNivel < ListaPreciosConstants.NivelMinimo || request.ListaPrecioNivel > ListaPreciosConstants.NivelMaximo)
+            {
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = ListaPreciosResolutionCodes.ListaInvalida });
+            }
+
+            if (request.Partidas.Any(item => item == null || item.Cantidad <= 0 || item.DescuentoPct < 0 || item.DescuentoPct > 100))
+            {
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = "Cantidad y descuento adicional deben ser válidos; el descuento permitido es de 0 a 100." });
+            }
+
             try
             {
-                using SqlConnection connection = CreateConnection();
-                await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
+                using SqlConnection connection = CreateConnection(context);
+                await connection.OpenAsync(HttpContext.RequestAborted);
                 using SqlTransaction transaction = connection.BeginTransaction();
 
                 ClienteContext cliente = await ObtenerClienteAsync(connection, transaction, context.IdEmpresa, request.IdCliente);
@@ -390,102 +474,128 @@ WHERE c.idEmpresa = @IdEmpresa
                 }
 
                 UserMetadata usuario = await ResolveUserMetadataAsync(connection, transaction, context);
-                Guid? sucursalId = request.IdSucursal ?? usuario.IdSucursal;
-                string vendedor = usuario.Nombre;
+                Guid cotizacionId = request.Id.GetValueOrDefault(Guid.NewGuid());
+                bool isEdit = request.Id.HasValue && request.Id.Value != Guid.Empty;
+                CotizacionPersistedRow persisted = isEdit
+                    ? await ObtenerCotizacionPersistidaAsync(connection, transaction, context.IdEmpresa, cotizacionId)
+                    : new CotizacionPersistedRow();
+                if (isEdit && persisted.Id == Guid.Empty)
+                {
+                    transaction.Rollback();
+                    return NotFound(new CotizacionOperacionResponse { Mensaje = "La cotización no está disponible." });
+                }
 
-                List<CotizacionPartidaDbRow> partidas = await NormalizePartidasAsync(connection, transaction, context.IdEmpresa, request.Partidas, cliente.Descuento);
+                if (isEdit && persisted.Estado != CotizacionEstados.Borrador)
+                {
+                    transaction.Rollback();
+                    return BadRequest(new CotizacionOperacionResponse { Mensaje = "Solo se pueden editar cotizaciones en borrador." });
+                }
+
+                if (isEdit && !persisted.ListaPrecioNivel.HasValue)
+                {
+                    transaction.Rollback();
+                    return Conflict(new CotizacionOperacionResponse { Mensaje = "La cotización es PRE_LP08 y se conserva sin recalcular. Clónala para crear una oferta vigente." });
+                }
+
+                bool listaCambio = isEdit && persisted.ListaPrecioNivel != request.ListaPrecioNivel;
+                if (listaCambio && !request.ConfirmarCambioLista)
+                {
+                    transaction.Rollback();
+                    return Conflict(new CotizacionOperacionResponse { Mensaje = "Confirma el cambio de lista; las partidas se re-resolverán con LP-08." });
+                }
+
+                Dictionary<Guid, CotizacionPartidaDbRow> existentes = isEdit
+                    ? await ObtenerPartidasPersistidasAsync(connection, transaction, context.IdEmpresa, cotizacionId)
+                    : new Dictionary<Guid, CotizacionPartidaDbRow>();
+
+                bool solicitaOverride = request.Partidas.Any(item => item.PrecioOverride);
+                if (solicitaOverride)
+                {
+                    ProductosServiciosAuthorizationDecision authorization = await _authorizationService.AuthorizeAsync(
+                        new ProductosServiciosAuthorizationRequest
+                        {
+                            IdEmpresa = context.IdEmpresa,
+                            UserId = context.UserId,
+                            TenantDatabase = context.TenantDatabase,
+                            Requirement = ProductosServiciosPermissionRequirement.Write,
+                            PermissionCode = ProductosServiciosAuthorizationDefaults.ListaPreciosAdministrarPermissionCode
+                        }, HttpContext.RequestAborted);
+                    if (!authorization.IsAllowed(ProductosServiciosPermissionRequirement.Write))
+                    {
+                        transaction.Rollback();
+                        return StatusCode(403, new { code = "PRECIO_OVERRIDE_FORBIDDEN", message = "No tienes permiso para modificar el precio aplicado.", referenceId = authorization.ReferenceId });
+                    }
+                }
+
+                IListaPreciosService listaPrecios = new ListaPreciosService(new SqlListaPreciosRepository(_connectionFactory, context.TenantDatabase));
+                List<CotizacionPartidaDbRow> partidas = await BuildLp08PartidasAsync(
+                    connection, transaction, context, request, existentes, listaPrecios, usuario, listaCambio);
                 if (partidas.Count == 0)
                 {
                     transaction.Rollback();
-                    return BadRequest(new CotizacionOperacionResponse { Mensaje = "Agrega al menos un producto válido a la cotización." });
+                    return BadRequest(new CotizacionOperacionResponse { Mensaje = "Agrega al menos una identidad válida a la cotización." });
                 }
 
+                Guid idListaPrecio = partidas[0].IdListaPrecio;
                 TotalesCotizacion totals = BuildTotales(partidas);
-                Guid cotizacionId = request.Id ?? Guid.NewGuid();
-                bool isEdit = request.Id.HasValue && request.Id.Value != Guid.Empty;
                 DateTime now = DateTime.UtcNow;
-                int vigenciaDias = Math.Max(0, request.VigenciaDias ?? 0);
-                DateTime fechaCotizacion = now;
-                DateTime? fechaVigencia = vigenciaDias > 0 ? now.Date.AddDays(vigenciaDias) : null;
-                string folio;
+                int vigenciaDias = request.VigenciaDias ?? 0;
+                DateTime fechaCotizacion = isEdit ? persisted.FechaCotizacion : now;
+                DateTime? fechaVigencia = vigenciaDias > 0 ? fechaCotizacion.Date.AddDays(vigenciaDias) : null;
+                Guid? sucursalId = request.IdSucursal ?? usuario.IdSucursal ?? persisted.IdSucursal;
+                string folio = isEdit ? persisted.Folio : await GenerateFolioAsync(connection, transaction, context.IdEmpresa);
 
                 if (isEdit)
                 {
-                    CotizacionPersistedRow persisted = await ObtenerCotizacionPersistidaAsync(connection, transaction, context.IdEmpresa, cotizacionId);
-                    if (persisted.Id == Guid.Empty)
-                    {
-                        transaction.Rollback();
-                        return NotFound(new CotizacionOperacionResponse { Mensaje = "La cotización no está disponible." });
-                    }
-
-                    if (persisted.Estado != CotizacionEstados.Borrador)
-                    {
-                        transaction.Rollback();
-                        return BadRequest(new CotizacionOperacionResponse { Mensaje = "Solo se pueden editar cotizaciones en borrador." });
-                    }
-
-                    folio = persisted.Folio;
-                    fechaCotizacion = persisted.FechaCotizacion;
-                    if (persisted.IdSucursal.HasValue && !sucursalId.HasValue)
-                    {
-                        sucursalId = persisted.IdSucursal;
-                    }
-
                     using SqlCommand update = new SqlCommand(@"
 UPDATE dbo.Cotizaciones
-SET idCliente = @IdCliente,
-    idSucursal = @IdSucursal,
-    Vendedor = @Vendedor,
-    Caja = @Caja,
-    Observaciones = @Observaciones,
-    VigenciaDias = @VigenciaDias,
-    FechaVigencia = @FechaVigencia,
-    Subtotal = @Subtotal,
-    DescuentoTotal = @DescuentoTotal,
-    Total = @Total,
-    TotalPiezas = @TotalPiezas,
-    FechaActualizacion = @FechaActualizacion
-WHERE idEmpresa = @IdEmpresa
-  AND id = @IdCotizacion", connection, transaction);
-                    FillCotizacionParameters(update, context.IdEmpresa, cotizacionId, request.IdCliente, sucursalId, vendedor, request.Caja, request.Observaciones, vigenciaDias, fechaVigencia, totals, now);
-                    await update.ExecuteNonQueryAsync();
-
-                    using SqlCommand clearPartidas = new SqlCommand(@"
-DELETE FROM dbo.CotizacionesPartidas
-WHERE idEmpresa = @IdEmpresa
-  AND idCotizacion = @IdCotizacion", connection, transaction);
-                    clearPartidas.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
-                    clearPartidas.Parameters.AddWithValue("@IdCotizacion", cotizacionId);
-                    await clearPartidas.ExecuteNonQueryAsync();
+SET idCliente = @IdCliente, idSucursal = @IdSucursal, Vendedor = @Vendedor, Caja = @Caja,
+    Observaciones = @Observaciones, VigenciaDias = @VigenciaDias, FechaVigencia = @FechaVigencia,
+    Subtotal = @Subtotal, DescuentoTotal = @DescuentoTotal, Total = @Total, TotalPiezas = @TotalPiezas,
+    idListaPrecio = @IdListaPrecio, ListaPrecioNivel = @ListaPrecioNivel,
+    idUsuarioActualizacion = @IdUsuario, FechaActualizacion = @FechaActualizacion
+WHERE idEmpresa = @IdEmpresa AND id = @IdCotizacion AND Estado = @EstadoBorrador", connection, transaction);
+                    FillCotizacionParameters(update, context.IdEmpresa, cotizacionId, request.IdCliente, sucursalId, usuario.Nombre, request.Caja, request.Observaciones, vigenciaDias, fechaVigencia, totals, now);
+                    update.Parameters.AddWithValue("@IdListaPrecio", idListaPrecio);
+                    update.Parameters.AddWithValue("@ListaPrecioNivel", request.ListaPrecioNivel);
+                    update.Parameters.AddWithValue("@IdUsuario", usuario.Id == Guid.Empty ? DBNull.Value : usuario.Id);
+                    update.Parameters.AddWithValue("@EstadoBorrador", CotizacionEstados.Borrador);
+                    await update.ExecuteNonQueryAsync(HttpContext.RequestAborted);
                 }
                 else
                 {
-                    folio = await GenerateFolioAsync(connection, transaction, context.IdEmpresa);
+                    if (request.IdCotizacionOrigen.HasValue && !await CotizacionOrigenPerteneceAEmpresaAsync(connection, transaction, context.IdEmpresa, request.IdCotizacionOrigen.Value))
+                    {
+                        transaction.Rollback();
+                        return StatusCode(403, new CotizacionOperacionResponse { Mensaje = "La cotización origen no pertenece a la empresa activa." });
+                    }
+
                     using SqlCommand insert = new SqlCommand(@"
 INSERT INTO dbo.Cotizaciones
-(
-    id, idEmpresa, identityKey, Folio, Estado, FechaCotizacion, VigenciaDias, FechaVigencia, idCliente, idSucursal,
-    Vendedor, Caja, Observaciones, Subtotal, DescuentoTotal, Total, TotalPiezas, MotivoCancelacion, FechaCancelacion,
-    idUsuarioCreacion, idUsuarioActualizacion, idUsuarioCancelacion, FechaCreacion, FechaActualizacion, FechaArchivado, Activo
-)
+(id, idEmpresa, identityKey, Folio, Estado, FechaCotizacion, VigenciaDias, FechaVigencia, idCliente, idSucursal,
+ Vendedor, Caja, Observaciones, Subtotal, DescuentoTotal, Total, TotalPiezas, MotivoCancelacion, FechaCancelacion,
+ idUsuarioCreacion, idUsuarioActualizacion, idUsuarioCancelacion, FechaCreacion, FechaActualizacion, FechaArchivado, Activo,
+ idListaPrecio, ListaPrecioNivel, idCotizacionOrigen)
 VALUES
-(
-    @IdCotizacion, @IdEmpresa, @IdentityKey, @Folio, @Estado, @FechaCotizacion, @VigenciaDias, @FechaVigencia, @IdCliente, @IdSucursal,
-    @Vendedor, @Caja, @Observaciones, @Subtotal, @DescuentoTotal, @Total, @TotalPiezas, N'', NULL,
-    @IdUsuario, @IdUsuario, NULL, @FechaCreacion, @FechaActualizacion, NULL, 1
-)", connection, transaction);
+(@IdCotizacion, @IdEmpresa, @IdentityKey, @Folio, @Estado, @FechaCotizacion, @VigenciaDias, @FechaVigencia, @IdCliente, @IdSucursal,
+ @Vendedor, @Caja, @Observaciones, @Subtotal, @DescuentoTotal, @Total, @TotalPiezas, N'', NULL,
+ @IdUsuario, @IdUsuario, NULL, @FechaCreacion, @FechaActualizacion, NULL, 1,
+ @IdListaPrecio, @ListaPrecioNivel, @IdCotizacionOrigen)", connection, transaction);
                     insert.Parameters.AddWithValue("@IdCotizacion", cotizacionId);
                     insert.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
                     insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
                     insert.Parameters.AddWithValue("@Folio", folio);
                     insert.Parameters.AddWithValue("@Estado", CotizacionEstados.Borrador);
                     insert.Parameters.AddWithValue("@FechaCotizacion", fechaCotizacion);
-                    insert.Parameters.AddWithValue("@IdUsuario", (object?)context.UsuarioId ?? DBNull.Value);
-                    FillCotizacionParameters(insert, context.IdEmpresa, cotizacionId, request.IdCliente, sucursalId, vendedor, request.Caja, request.Observaciones, vigenciaDias, fechaVigencia, totals, now);
-                    await insert.ExecuteNonQueryAsync();
+                    insert.Parameters.AddWithValue("@IdUsuario", usuario.Id == Guid.Empty ? DBNull.Value : usuario.Id);
+                    insert.Parameters.AddWithValue("@IdListaPrecio", idListaPrecio);
+                    insert.Parameters.AddWithValue("@ListaPrecioNivel", request.ListaPrecioNivel);
+                    insert.Parameters.AddWithValue("@IdCotizacionOrigen", (object?)request.IdCotizacionOrigen ?? DBNull.Value);
+                    FillCotizacionParameters(insert, context.IdEmpresa, cotizacionId, request.IdCliente, sucursalId, usuario.Nombre, request.Caja, request.Observaciones, vigenciaDias, fechaVigencia, totals, now);
+                    await insert.ExecuteNonQueryAsync(HttpContext.RequestAborted);
                 }
 
-                await InsertarPartidasAsync(connection, transaction, context.IdEmpresa, cotizacionId, partidas, now);
+                await SincronizarPartidasLp08Async(connection, transaction, context, cotizacionId, partidas, existentes, usuario, listaCambio, request.IdCotizacionOrigen.HasValue, now);
                 transaction.Commit();
 
                 return Ok(new CotizacionOperacionResponse
@@ -498,8 +608,15 @@ VALUES
                     EstadoNombre = GetEstadoNombre(CotizacionEstados.Borrador),
                     Subtotal = totals.Subtotal,
                     DescuentoTotal = totals.DescuentoTotal,
-                    Total = totals.Total
+                    Total = totals.Total,
+                    ListaPrecioNivel = request.ListaPrecioNivel,
+                    IdListaPrecio = idListaPrecio,
+                    IdCotizacionOrigen = request.IdCotizacionOrigen
                 });
+            }
+            catch (CotizacionBusinessException ex)
+            {
+                return BadRequest(new CotizacionOperacionResponse { Mensaje = ex.Code });
             }
             catch (Exception ex)
             {
@@ -528,9 +645,8 @@ VALUES
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
 
                 using SqlCommand command = new SqlCommand(@"
 UPDATE dbo.Cotizaciones
@@ -590,9 +706,8 @@ WHERE idEmpresa = @IdEmpresa
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
 
                 using SqlCommand command = new SqlCommand(@"
 UPDATE dbo.Cotizaciones
@@ -648,9 +763,8 @@ WHERE idEmpresa = @IdEmpresa
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
 
                 CotizacionDocumentoExportDto documento = await ObtenerDocumentoCotizacionAsync(connection, context.IdEmpresa, idCotizacion);
                 if (documento.IdCotizacion == Guid.Empty)
@@ -697,9 +811,8 @@ WHERE idEmpresa = @IdEmpresa
 
             try
             {
-                using SqlConnection connection = CreateConnection();
+                using SqlConnection connection = CreateConnection(context);
                 await connection.OpenAsync();
-                await EnsureSchemaAsync(connection);
 
                 CorreoSalientePersistedConfiguration? storedConfiguration = await LoadCorreoSalienteConfigurationAsync(connection, context.IdEmpresa);
                 if (storedConfiguration == null || string.IsNullOrWhiteSpace(storedConfiguration.CredencialProtegida))
@@ -981,7 +1094,26 @@ SELECT
     p.DescuentoPct,
     p.ImporteBruto,
     p.DescuentoImporte,
-    p.Total
+    p.Total,
+    p.TipoIdentidad,
+    p.idVariante,
+    p.idPresentacionVenta,
+    p.idListaPrecio,
+    p.ListaPrecioNivel,
+    p.PrecioBase,
+    p.PrecioLista,
+    p.OrigenPrecio,
+    p.DescuentoListaPct,
+    p.SubtotalAntesRedondeo,
+    p.RedondeoModo,
+    p.PrecioFinal,
+    p.VigenciaInicio,
+    p.VigenciaFin,
+    p.ReglaVersion,
+    p.FechaResolucionUtc,
+    p.CorrelationId,
+    p.PrecioOverride,
+    p.MotivoPrecioOverride
 FROM dbo.CotizacionesPartidas p
 WHERE p.idEmpresa = @IdEmpresa
   AND p.idCotizacion = @IdCotizacion
@@ -1018,121 +1150,370 @@ ORDER BY p.NumeroPartida", connection);
                     DescuentoPct = ReadDecimal(reader, "DescuentoPct"),
                     ImporteBruto = ReadDecimal(reader, "ImporteBruto"),
                     DescuentoImporte = ReadDecimal(reader, "DescuentoImporte"),
-                    Total = ReadDecimal(reader, "Total")
+                    Total = ReadDecimal(reader, "Total"),
+                    TipoIdentidad = ReadNullableByte(reader, "TipoIdentidad"),
+                    IdVariante = ReadNullableGuid(reader, "idVariante"),
+                    IdPresentacionVenta = ReadNullableGuid(reader, "idPresentacionVenta"),
+                    IdListaPrecio = ReadNullableGuid(reader, "idListaPrecio"),
+                    ListaPrecioNivel = ReadNullableByte(reader, "ListaPrecioNivel"),
+                    PrecioBase = ReadNullableDecimal(reader, "PrecioBase"),
+                    PrecioLista = ReadNullableDecimal(reader, "PrecioLista"),
+                    OrigenPrecio = ReadString(reader, "OrigenPrecio"),
+                    DescuentoListaPct = ReadNullableDecimal(reader, "DescuentoListaPct"),
+                    SubtotalAntesRedondeo = ReadNullableDecimal(reader, "SubtotalAntesRedondeo"),
+                    RedondeoModo = ReadNullableByte(reader, "RedondeoModo"),
+                    PrecioFinal = ReadNullableDecimal(reader, "PrecioFinal"),
+                    VigenciaInicio = ReadNullableDateTime(reader, "VigenciaInicio"),
+                    VigenciaFin = ReadNullableDateTime(reader, "VigenciaFin"),
+                    ReglaVersion = ReadString(reader, "ReglaVersion"),
+                    FechaResolucionUtc = ReadNullableDateTime(reader, "FechaResolucionUtc"),
+                    CorrelationId = ReadNullableGuid(reader, "CorrelationId"),
+                    PrecioOverride = ReadNullableBool(reader, "PrecioOverride"),
+                    MotivoPrecioOverride = ReadString(reader, "MotivoPrecioOverride")
                 });
             }
 
             return items;
         }
 
-        private async Task<List<CotizacionPartidaDbRow>> NormalizePartidasAsync(
+        private async Task<List<CotizacionPartidaDbRow>> BuildLp08PartidasAsync(
             SqlConnection connection,
             SqlTransaction transaction,
-            Guid idEmpresa,
-            List<CotizacionPartidaGuardarRequest> requests,
-            decimal descuentoCliente)
+            RequestContext context,
+            CotizacionGuardarRequest quote,
+            IReadOnlyDictionary<Guid, CotizacionPartidaDbRow> existing,
+            IListaPreciosService listaPrecios,
+            UserMetadata user,
+            bool listChanged)
         {
             List<CotizacionPartidaDbRow> result = new();
-            foreach (CotizacionPartidaGuardarRequest request in requests)
+            HashSet<Guid> receivedIds = new();
+            foreach (CotizacionPartidaGuardarRequest request in quote.Partidas)
             {
-                if (request == null || request.IdProductoServicio == Guid.Empty || request.Cantidad <= 0 || request.PrecioUnitario <= 0)
+                ProductoContext product = await ObtenerProductoAsync(connection, transaction, context.IdEmpresa, request.IdProductoServicio);
+                if (product.Id == Guid.Empty)
                 {
-                    continue;
+                    throw new CotizacionBusinessException(ListaPreciosResolutionCodes.IdentidadInvalida);
                 }
 
-                ProductoContext producto = await ObtenerProductoAsync(connection, transaction, idEmpresa, request.IdProductoServicio);
-                if (producto.Id == Guid.Empty)
+                byte identityType = request.TipoIdentidad ?? (product.Tipo == ListaPreciosConstants.TipoServicio
+                    ? ListaPreciosConstants.IdentidadServicio
+                    : ListaPreciosConstants.IdentidadProducto);
+                ValidateIdentityShape(identityType, request);
+
+                CotizacionPartidaDbRow? previous = null;
+                if (request.Id.HasValue && request.Id.Value != Guid.Empty)
                 {
-                    continue;
+                    if (!receivedIds.Add(request.Id.Value) || !existing.TryGetValue(request.Id.Value, out previous))
+                    {
+                        throw new CotizacionBusinessException("PARTIDA_INVALIDA");
+                    }
                 }
 
-                decimal descuentoPct = Math.Max(0m, request.DescuentoPct);
-                if (descuentoPct <= 0m && descuentoCliente > 0m)
+                bool sameIdentity = previous != null && IdentityMatches(previous, identityType, request);
+                bool preserveSnapshot = sameIdentity && !listChanged && previous!.ListaPrecioNivel == quote.ListaPrecioNivel;
+                ListaPreciosResolutionResult? resolution = null;
+                if (!preserveSnapshot)
                 {
-                    descuentoPct = descuentoCliente;
+                    resolution = await listaPrecios.ResolverPrecioAsync(context.IdEmpresa, new ListaPreciosResolverRequest
+                    {
+                        Nivel = quote.ListaPrecioNivel,
+                        TipoIdentidad = identityType,
+                        IdProductoServicio = request.IdProductoServicio,
+                        IdVariante = request.IdVariante,
+                        IdPresentacionVenta = request.IdPresentacionVenta,
+                        RequiereActivo = true
+                    }, HttpContext.RequestAborted);
+                    if (resolution.Resuelto && resolution.PrecioEfectivo.HasValue && !resolution.IdListaPrecio.HasValue)
+                    {
+                        await listaPrecios.EnsureListaAsync(
+                            context.IdEmpresa,
+                            quote.ListaPrecioNivel,
+                            user.Id == Guid.Empty ? null : user.Id,
+                            HttpContext.RequestAborted);
+                        resolution = await listaPrecios.ResolverPrecioAsync(context.IdEmpresa, new ListaPreciosResolverRequest
+                        {
+                            Nivel = quote.ListaPrecioNivel,
+                            TipoIdentidad = identityType,
+                            IdProductoServicio = request.IdProductoServicio,
+                            IdVariante = request.IdVariante,
+                            IdPresentacionVenta = request.IdPresentacionVenta,
+                            RequiereActivo = true
+                        }, HttpContext.RequestAborted);
+                    }
+
+                    if (!resolution.Resuelto || !resolution.PrecioEfectivo.HasValue || !resolution.IdListaPrecio.HasValue)
+                    {
+                        throw new CotizacionBusinessException(string.IsNullOrWhiteSpace(resolution.CodigoResolucion)
+                            ? ListaPreciosResolutionCodes.SinPrecioResoluble
+                            : resolution.CodigoResolucion);
+                    }
                 }
 
-                descuentoPct = Math.Min(descuentoPct, 100m);
-                decimal cantidad = producto.UnidadPermiteDecimales
+                if (listChanged && previous?.PrecioOverride == true && !quote.ConfirmarReemplazoOverride)
+                {
+                    throw new CotizacionBusinessException("OVERRIDE_REQUIERE_CONFIRMACION");
+                }
+
+                bool overridePrice = request.PrecioOverride;
+                if (overridePrice && (!request.PrecioAplicado.HasValue || request.PrecioAplicado.Value < 0 || string.IsNullOrWhiteSpace(request.MotivoPrecioOverride) || user.Id == Guid.Empty))
+                {
+                    throw new CotizacionBusinessException("OVERRIDE_INVALIDO");
+                }
+
+                decimal quantity = product.UnidadPermiteDecimales
                     ? RoundMoney(request.Cantidad)
-                    : Math.Max(1m, Math.Round(request.Cantidad, 0, MidpointRounding.AwayFromZero));
-                decimal precioUnitario = RoundMoney(request.PrecioUnitario);
-                decimal importeBruto = RoundMoney(cantidad * precioUnitario);
-                decimal descuentoImporte = RoundMoney(importeBruto * (descuentoPct / 100m));
-                decimal total = RoundMoney(importeBruto - descuentoImporte);
-
-                result.Add(new CotizacionPartidaDbRow
-                {
-                    Id = Guid.NewGuid(),
-                    IdProductoServicio = producto.Id,
-                    Codigo = producto.Codigo,
-                    Nombre = producto.Nombre,
-                    Descripcion = producto.Descripcion,
-                    TipoProductoServicio = producto.Tipo,
-                    IdUnidadMedida = producto.IdUnidadMedida,
-                    UnidadMedida = producto.UnidadMedida,
-                    UnidadAbreviatura = producto.UnidadAbreviatura,
-                    UnidadPermiteDecimales = producto.UnidadPermiteDecimales,
-                    PermiteVentaSinExistencia = producto.PermiteVentaSinExistencia,
-                    ExistenciaActual = producto.ExistenciaActual,
-                    Cantidad = cantidad,
-                    PrecioUnitario = precioUnitario,
-                    DescuentoPct = descuentoPct,
-                    ImporteBruto = importeBruto,
-                    DescuentoImporte = descuentoImporte,
-                    Total = total
-                });
+                    : Math.Round(request.Cantidad, 0, MidpointRounding.AwayFromZero);
+                CotizacionPartidaDbRow row = preserveSnapshot
+                    ? CopySnapshot(previous!)
+                    : FromResolution(resolution!);
+                row.Id = previous?.Id ?? Guid.NewGuid();
+                row.IdentityKey = previous?.IdentityKey ?? Guid.NewGuid();
+                row.IdProductoServicio = product.Id;
+                row.TipoIdentidad = identityType;
+                row.IdVariante = request.IdVariante;
+                row.IdPresentacionVenta = request.IdPresentacionVenta;
+                row.Codigo = product.Codigo;
+                row.Nombre = product.Nombre;
+                row.Descripcion = product.Descripcion;
+                row.TipoProductoServicio = product.Tipo;
+                row.IdUnidadMedida = product.IdUnidadMedida;
+                row.UnidadMedida = product.UnidadMedida;
+                row.UnidadAbreviatura = product.UnidadAbreviatura;
+                row.UnidadPermiteDecimales = product.UnidadPermiteDecimales;
+                row.PermiteVentaSinExistencia = product.PermiteVentaSinExistencia;
+                row.ExistenciaActual = product.ExistenciaActual;
+                row.Cantidad = quantity;
+                row.DescuentoPct = request.DescuentoPct;
+                row.PrecioOverride = overridePrice;
+                row.PrecioUnitario = overridePrice ? RoundMoney(request.PrecioAplicado!.Value) : row.PrecioFinal;
+                row.MotivoPrecioOverride = overridePrice ? Truncate(request.MotivoPrecioOverride.Trim(), 500) : string.Empty;
+                row.IdUsuarioPrecioOverride = overridePrice ? user.Id : null;
+                row.FechaPrecioOverrideUtc = overridePrice ? DateTime.UtcNow : null;
+                row.ImporteBruto = RoundMoney(row.Cantidad * row.PrecioUnitario);
+                row.DescuentoImporte = RoundMoney(row.ImporteBruto * row.DescuentoPct / 100m);
+                row.Total = RoundMoney(row.ImporteBruto - row.DescuentoImporte);
+                result.Add(row);
             }
 
             return result;
         }
 
-        private async Task InsertarPartidasAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idCotizacion, List<CotizacionPartidaDbRow> partidas, DateTime now)
+        private static CotizacionPartidaDbRow FromResolution(ListaPreciosResolutionResult resolution) => new()
         {
-            for (int index = 0; index < partidas.Count; index++)
-            {
-                CotizacionPartidaDbRow partida = partidas[index];
-                using SqlCommand insert = new SqlCommand(@"
-INSERT INTO dbo.CotizacionesPartidas
-(
-    id, idCotizacion, idEmpresa, identityKey, NumeroPartida, idProductoServicio, Codigo, Nombre, Descripcion, TipoProductoServicio,
-    idUnidadMedida, UnidadMedida, UnidadAbreviatura, UnidadPermiteDecimales, PermiteVentaSinExistencia, ExistenciaActual,
-    Cantidad, PrecioUnitario, DescuentoPct, ImporteBruto, DescuentoImporte, Total, FechaCreacion, FechaActualizacion, FechaArchivado, Activo
-)
-VALUES
-(
-    @Id, @IdCotizacion, @IdEmpresa, @IdentityKey, @NumeroPartida, @IdProductoServicio, @Codigo, @Nombre, @Descripcion, @TipoProductoServicio,
-    @IdUnidadMedida, @UnidadMedida, @UnidadAbreviatura, @UnidadPermiteDecimales, @PermiteVentaSinExistencia, @ExistenciaActual,
-    @Cantidad, @PrecioUnitario, @DescuentoPct, @ImporteBruto, @DescuentoImporte, @Total, @FechaCreacion, @FechaActualizacion, NULL, 1
-)", connection, transaction);
+            IdListaPrecio = resolution.IdListaPrecio!.Value,
+            ListaPrecioNivel = resolution.ListaEfectiva,
+            PrecioBase = resolution.PrecioBase ?? 0m,
+            PrecioLista = resolution.PrecioLista,
+            OrigenPrecio = resolution.OrigenPrecio,
+            DescuentoListaPct = resolution.DescuentoPct,
+            SubtotalAntesRedondeo = resolution.SubtotalAntesRedondeo ?? resolution.PrecioEfectivo ?? 0m,
+            RedondeoModo = resolution.RedondeoModo,
+            PrecioFinal = resolution.PrecioFinal ?? resolution.PrecioEfectivo ?? 0m,
+            VigenciaInicio = resolution.VigenciaInicio,
+            VigenciaFin = resolution.VigenciaFin,
+            ReglaVersion = resolution.ReglaVersion,
+            FechaResolucionUtc = resolution.FechaResolucionUtc,
+            CorrelationId = resolution.CorrelationId
+        };
 
-                insert.Parameters.AddWithValue("@Id", partida.Id);
-                insert.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
-                insert.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
-                insert.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
-                insert.Parameters.AddWithValue("@NumeroPartida", index + 1);
-                insert.Parameters.AddWithValue("@IdProductoServicio", partida.IdProductoServicio);
-                insert.Parameters.AddWithValue("@Codigo", partida.Codigo);
-                insert.Parameters.AddWithValue("@Nombre", partida.Nombre);
-                insert.Parameters.AddWithValue("@Descripcion", partida.Descripcion);
-                insert.Parameters.AddWithValue("@TipoProductoServicio", partida.TipoProductoServicio);
-                insert.Parameters.AddWithValue("@IdUnidadMedida", partida.IdUnidadMedida);
-                insert.Parameters.AddWithValue("@UnidadMedida", partida.UnidadMedida);
-                insert.Parameters.AddWithValue("@UnidadAbreviatura", partida.UnidadAbreviatura);
-                insert.Parameters.AddWithValue("@UnidadPermiteDecimales", partida.UnidadPermiteDecimales);
-                insert.Parameters.AddWithValue("@PermiteVentaSinExistencia", partida.PermiteVentaSinExistencia);
-                insert.Parameters.AddWithValue("@ExistenciaActual", partida.ExistenciaActual.HasValue ? partida.ExistenciaActual.Value : DBNull.Value);
-                insert.Parameters.AddWithValue("@Cantidad", partida.Cantidad);
-                insert.Parameters.AddWithValue("@PrecioUnitario", partida.PrecioUnitario);
-                insert.Parameters.AddWithValue("@DescuentoPct", partida.DescuentoPct);
-                insert.Parameters.AddWithValue("@ImporteBruto", partida.ImporteBruto);
-                insert.Parameters.AddWithValue("@DescuentoImporte", partida.DescuentoImporte);
-                insert.Parameters.AddWithValue("@Total", partida.Total);
-                insert.Parameters.AddWithValue("@FechaCreacion", now);
-                insert.Parameters.AddWithValue("@FechaActualizacion", now);
-                await insert.ExecuteNonQueryAsync();
+        private static CotizacionPartidaDbRow CopySnapshot(CotizacionPartidaDbRow source) => new()
+        {
+            IdListaPrecio = source.IdListaPrecio,
+            ListaPrecioNivel = source.ListaPrecioNivel,
+            PrecioBase = source.PrecioBase,
+            PrecioLista = source.PrecioLista,
+            OrigenPrecio = source.OrigenPrecio,
+            DescuentoListaPct = source.DescuentoListaPct,
+            SubtotalAntesRedondeo = source.SubtotalAntesRedondeo,
+            RedondeoModo = source.RedondeoModo,
+            PrecioFinal = source.PrecioFinal,
+            VigenciaInicio = source.VigenciaInicio,
+            VigenciaFin = source.VigenciaFin,
+            ReglaVersion = source.ReglaVersion,
+            FechaResolucionUtc = source.FechaResolucionUtc,
+            CorrelationId = source.CorrelationId
+        };
+
+        private async Task<Dictionary<Guid, CotizacionPartidaDbRow>> ObtenerPartidasPersistidasAsync(
+            SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idCotizacion)
+        {
+            using SqlCommand command = new SqlCommand(@"
+SELECT id, identityKey, idProductoServicio, TipoIdentidad, idVariante, idPresentacionVenta,
+       idListaPrecio, ListaPrecioNivel, Cantidad, PrecioUnitario, DescuentoPct,
+       PrecioBase, PrecioLista, OrigenPrecio, DescuentoListaPct, SubtotalAntesRedondeo,
+       RedondeoModo, PrecioFinal, VigenciaInicio, VigenciaFin, ReglaVersion,
+       FechaResolucionUtc, CorrelationId, PrecioOverride, MotivoPrecioOverride,
+       idUsuarioPrecioOverride, FechaPrecioOverrideUtc
+FROM dbo.CotizacionesPartidas
+WHERE idEmpresa = @IdEmpresa AND idCotizacion = @IdCotizacion AND Activo = 1 AND FechaArchivado IS NULL", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+            Dictionary<Guid, CotizacionPartidaDbRow> rows = new();
+            using SqlDataReader reader = await command.ExecuteReaderAsync(HttpContext.RequestAborted);
+            while (await reader.ReadAsync(HttpContext.RequestAborted))
+            {
+                CotizacionPartidaDbRow row = new()
+                {
+                    Id = ReadGuid(reader, "id"), IdentityKey = ReadGuid(reader, "identityKey"),
+                    IdProductoServicio = ReadGuid(reader, "idProductoServicio"), TipoIdentidad = ReadByte(reader, "TipoIdentidad"),
+                    IdVariante = ReadNullableGuid(reader, "idVariante"), IdPresentacionVenta = ReadNullableGuid(reader, "idPresentacionVenta"),
+                    IdListaPrecio = ReadGuid(reader, "idListaPrecio"), ListaPrecioNivel = ReadByte(reader, "ListaPrecioNivel"),
+                    Cantidad = ReadDecimal(reader, "Cantidad"), PrecioUnitario = ReadDecimal(reader, "PrecioUnitario"),
+                    DescuentoPct = ReadDecimal(reader, "DescuentoPct"), PrecioBase = ReadDecimal(reader, "PrecioBase"),
+                    PrecioLista = ReadNullableDecimal(reader, "PrecioLista"), OrigenPrecio = ReadString(reader, "OrigenPrecio"),
+                    DescuentoListaPct = ReadNullableDecimal(reader, "DescuentoListaPct"), SubtotalAntesRedondeo = ReadDecimal(reader, "SubtotalAntesRedondeo"),
+                    RedondeoModo = ReadByte(reader, "RedondeoModo"), PrecioFinal = ReadDecimal(reader, "PrecioFinal"),
+                    VigenciaInicio = ReadNullableDateTime(reader, "VigenciaInicio"), VigenciaFin = ReadNullableDateTime(reader, "VigenciaFin"),
+                    ReglaVersion = ReadString(reader, "ReglaVersion"), FechaResolucionUtc = ReadDateTime(reader, "FechaResolucionUtc"),
+                    CorrelationId = ReadGuid(reader, "CorrelationId"), PrecioOverride = ReadBool(reader, "PrecioOverride"),
+                    MotivoPrecioOverride = ReadString(reader, "MotivoPrecioOverride"), IdUsuarioPrecioOverride = ReadNullableGuid(reader, "idUsuarioPrecioOverride"),
+                    FechaPrecioOverrideUtc = ReadNullableDateTime(reader, "FechaPrecioOverrideUtc")
+                };
+                rows[row.Id] = row;
+            }
+            return rows;
+        }
+
+        private async Task SincronizarPartidasLp08Async(
+            SqlConnection connection, SqlTransaction transaction, RequestContext context, Guid idCotizacion,
+            IReadOnlyList<CotizacionPartidaDbRow> current, IReadOnlyDictionary<Guid, CotizacionPartidaDbRow> existing,
+            UserMetadata user, bool listChanged, bool isClone, DateTime now)
+        {
+            HashSet<Guid> currentIds = current.Select(item => item.Id).ToHashSet();
+            foreach (CotizacionPartidaDbRow removed in existing.Values.Where(item => !currentIds.Contains(item.Id)))
+            {
+                using SqlCommand deactivate = new SqlCommand(@"
+UPDATE dbo.CotizacionesPartidas SET Activo = 0, FechaArchivado = @Now, FechaActualizacion = @Now
+WHERE idEmpresa = @IdEmpresa AND idCotizacion = @IdCotizacion AND id = @Id AND Activo = 1", connection, transaction);
+                deactivate.Parameters.AddWithValue("@Now", now);
+                deactivate.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                deactivate.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+                deactivate.Parameters.AddWithValue("@Id", removed.Id);
+                await deactivate.ExecuteNonQueryAsync(HttpContext.RequestAborted);
+                await AppendHistoryAsync(connection, transaction, context, idCotizacion, removed.Id, "BAJA_PARTIDA", "Activo", "1", "0", user, string.Empty, removed.CorrelationId);
+            }
+
+            for (int index = 0; index < current.Count; index++)
+            {
+                CotizacionPartidaDbRow row = current[index];
+                bool isNew = !existing.TryGetValue(row.Id, out CotizacionPartidaDbRow? previous);
+                string sql = isNew ? @"
+INSERT INTO dbo.CotizacionesPartidas
+(id, idCotizacion, idEmpresa, identityKey, NumeroPartida, idProductoServicio, Codigo, Nombre, Descripcion, TipoProductoServicio,
+ idUnidadMedida, UnidadMedida, UnidadAbreviatura, UnidadPermiteDecimales, PermiteVentaSinExistencia, ExistenciaActual,
+ Cantidad, PrecioUnitario, DescuentoPct, ImporteBruto, DescuentoImporte, Total, FechaCreacion, FechaActualizacion, FechaArchivado, Activo,
+ TipoIdentidad, idVariante, idPresentacionVenta, idListaPrecio, ListaPrecioNivel, PrecioBase, PrecioLista, OrigenPrecio,
+ DescuentoListaPct, SubtotalAntesRedondeo, RedondeoModo, PrecioFinal, VigenciaInicio, VigenciaFin, ReglaVersion,
+ FechaResolucionUtc, CorrelationId, PrecioOverride, MotivoPrecioOverride, idUsuarioPrecioOverride, FechaPrecioOverrideUtc)
+VALUES
+(@Id, @IdCotizacion, @IdEmpresa, @IdentityKey, @NumeroPartida, @IdProductoServicio, @Codigo, @Nombre, @Descripcion, @TipoProductoServicio,
+ @IdUnidadMedida, @UnidadMedida, @UnidadAbreviatura, @UnidadPermiteDecimales, @PermiteVentaSinExistencia, @ExistenciaActual,
+ @Cantidad, @PrecioUnitario, @DescuentoPct, @ImporteBruto, @DescuentoImporte, @Total, @Now, @Now, NULL, 1,
+ @TipoIdentidad, @IdVariante, @IdPresentacionVenta, @IdListaPrecio, @ListaPrecioNivel, @PrecioBase, @PrecioLista, @OrigenPrecio,
+ @DescuentoListaPct, @SubtotalAntesRedondeo, @RedondeoModo, @PrecioFinal, @VigenciaInicio, @VigenciaFin, @ReglaVersion,
+ @FechaResolucionUtc, @CorrelationId, @PrecioOverride, @MotivoPrecioOverride, @IdUsuarioPrecioOverride, @FechaPrecioOverrideUtc)" : @"
+UPDATE dbo.CotizacionesPartidas SET NumeroPartida=@NumeroPartida, idProductoServicio=@IdProductoServicio, Codigo=@Codigo,
+ Nombre=@Nombre, Descripcion=@Descripcion, TipoProductoServicio=@TipoProductoServicio, idUnidadMedida=@IdUnidadMedida,
+ UnidadMedida=@UnidadMedida, UnidadAbreviatura=@UnidadAbreviatura, UnidadPermiteDecimales=@UnidadPermiteDecimales,
+ PermiteVentaSinExistencia=@PermiteVentaSinExistencia, ExistenciaActual=@ExistenciaActual, Cantidad=@Cantidad,
+ PrecioUnitario=@PrecioUnitario, DescuentoPct=@DescuentoPct, ImporteBruto=@ImporteBruto, DescuentoImporte=@DescuentoImporte,
+ Total=@Total, TipoIdentidad=@TipoIdentidad, idVariante=@IdVariante, idPresentacionVenta=@IdPresentacionVenta,
+ idListaPrecio=@IdListaPrecio, ListaPrecioNivel=@ListaPrecioNivel, PrecioBase=@PrecioBase, PrecioLista=@PrecioLista,
+ OrigenPrecio=@OrigenPrecio, DescuentoListaPct=@DescuentoListaPct, SubtotalAntesRedondeo=@SubtotalAntesRedondeo,
+ RedondeoModo=@RedondeoModo, PrecioFinal=@PrecioFinal, VigenciaInicio=@VigenciaInicio, VigenciaFin=@VigenciaFin,
+ ReglaVersion=@ReglaVersion, FechaResolucionUtc=@FechaResolucionUtc, CorrelationId=@CorrelationId,
+ PrecioOverride=@PrecioOverride, MotivoPrecioOverride=@MotivoPrecioOverride, idUsuarioPrecioOverride=@IdUsuarioPrecioOverride,
+ FechaPrecioOverrideUtc=@FechaPrecioOverrideUtc, FechaActualizacion=@Now, FechaArchivado=NULL, Activo=1
+WHERE idEmpresa=@IdEmpresa AND idCotizacion=@IdCotizacion AND id=@Id";
+                using SqlCommand command = new SqlCommand(sql, connection, transaction);
+                AddPartidaParameters(command, context.IdEmpresa, idCotizacion, index + 1, row, now);
+                await command.ExecuteNonQueryAsync(HttpContext.RequestAborted);
+
+                if (isNew)
+                {
+                    await AppendHistoryAsync(connection, transaction, context, idCotizacion, row.Id, "ALTA_PARTIDA", "Identidad", null, IdentityText(row), user, string.Empty, row.CorrelationId);
+                    await AppendHistoryAsync(connection, transaction, context, idCotizacion, row.Id, isClone ? "CLON_RE_RESOLUCION" : "NUEVA_RESOLUCION", "PrecioFinal", null, Money(row.PrecioFinal), user, string.Empty, row.CorrelationId);
+                }
+                else
+                {
+                    if (listChanged) await AppendHistoryAsync(connection, transaction, context, idCotizacion, row.Id, "CAMBIO_LISTA", "ListaPrecioNivel", previous!.ListaPrecioNivel.ToString(CultureInfo.InvariantCulture), row.ListaPrecioNivel.ToString(CultureInfo.InvariantCulture), user, string.Empty, row.CorrelationId);
+                    if (!IdentityMatches(previous!, row)) await AppendHistoryAsync(connection, transaction, context, idCotizacion, row.Id, "CAMBIO_IDENTIDAD", "Identidad", IdentityText(previous!), IdentityText(row), user, string.Empty, row.CorrelationId);
+                    if (previous!.Cantidad != row.Cantidad) await AppendHistoryAsync(connection, transaction, context, idCotizacion, row.Id, "CAMBIO_CANTIDAD", "Cantidad", Money(previous.Cantidad), Money(row.Cantidad), user, string.Empty, row.CorrelationId);
+                    if (previous.DescuentoPct != row.DescuentoPct) await AppendHistoryAsync(connection, transaction, context, idCotizacion, row.Id, "DESCUENTO_ADICIONAL", "DescuentoPct", Money(previous.DescuentoPct), Money(row.DescuentoPct), user, string.Empty, row.CorrelationId);
+                    if (previous.PrecioOverride != row.PrecioOverride || previous.PrecioUnitario != row.PrecioUnitario) await AppendHistoryAsync(connection, transaction, context, idCotizacion, row.Id, "OVERRIDE_PRECIO", "PrecioUnitario", Money(previous.PrecioUnitario), Money(row.PrecioUnitario), user, row.MotivoPrecioOverride, row.CorrelationId);
+                }
             }
         }
+
+        private static void AddPartidaParameters(SqlCommand command, Guid idEmpresa, Guid idCotizacion, int number, CotizacionPartidaDbRow row, DateTime now)
+        {
+            command.Parameters.AddWithValue("@Id", row.Id); command.Parameters.AddWithValue("@IdCotizacion", idCotizacion);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa); command.Parameters.AddWithValue("@IdentityKey", row.IdentityKey);
+            command.Parameters.AddWithValue("@NumeroPartida", number); command.Parameters.AddWithValue("@IdProductoServicio", row.IdProductoServicio);
+            command.Parameters.AddWithValue("@Codigo", row.Codigo); command.Parameters.AddWithValue("@Nombre", row.Nombre);
+            command.Parameters.AddWithValue("@Descripcion", row.Descripcion); command.Parameters.AddWithValue("@TipoProductoServicio", row.TipoProductoServicio);
+            command.Parameters.AddWithValue("@IdUnidadMedida", row.IdUnidadMedida); command.Parameters.AddWithValue("@UnidadMedida", row.UnidadMedida);
+            command.Parameters.AddWithValue("@UnidadAbreviatura", row.UnidadAbreviatura); command.Parameters.AddWithValue("@UnidadPermiteDecimales", row.UnidadPermiteDecimales);
+            command.Parameters.AddWithValue("@PermiteVentaSinExistencia", row.PermiteVentaSinExistencia); command.Parameters.AddWithValue("@ExistenciaActual", (object?)row.ExistenciaActual ?? DBNull.Value);
+            command.Parameters.AddWithValue("@Cantidad", row.Cantidad); command.Parameters.AddWithValue("@PrecioUnitario", row.PrecioUnitario);
+            command.Parameters.AddWithValue("@DescuentoPct", row.DescuentoPct); command.Parameters.AddWithValue("@ImporteBruto", row.ImporteBruto);
+            command.Parameters.AddWithValue("@DescuentoImporte", row.DescuentoImporte); command.Parameters.AddWithValue("@Total", row.Total);
+            command.Parameters.AddWithValue("@TipoIdentidad", row.TipoIdentidad); command.Parameters.AddWithValue("@IdVariante", (object?)row.IdVariante ?? DBNull.Value);
+            command.Parameters.AddWithValue("@IdPresentacionVenta", (object?)row.IdPresentacionVenta ?? DBNull.Value); command.Parameters.AddWithValue("@IdListaPrecio", row.IdListaPrecio);
+            command.Parameters.AddWithValue("@ListaPrecioNivel", row.ListaPrecioNivel); command.Parameters.AddWithValue("@PrecioBase", row.PrecioBase);
+            command.Parameters.AddWithValue("@PrecioLista", (object?)row.PrecioLista ?? DBNull.Value); command.Parameters.AddWithValue("@OrigenPrecio", row.OrigenPrecio);
+            command.Parameters.AddWithValue("@DescuentoListaPct", (object?)row.DescuentoListaPct ?? DBNull.Value); command.Parameters.AddWithValue("@SubtotalAntesRedondeo", row.SubtotalAntesRedondeo);
+            command.Parameters.AddWithValue("@RedondeoModo", row.RedondeoModo); command.Parameters.AddWithValue("@PrecioFinal", row.PrecioFinal);
+            command.Parameters.AddWithValue("@VigenciaInicio", (object?)row.VigenciaInicio ?? DBNull.Value); command.Parameters.AddWithValue("@VigenciaFin", (object?)row.VigenciaFin ?? DBNull.Value);
+            command.Parameters.AddWithValue("@ReglaVersion", row.ReglaVersion); command.Parameters.AddWithValue("@FechaResolucionUtc", row.FechaResolucionUtc);
+            command.Parameters.AddWithValue("@CorrelationId", row.CorrelationId); command.Parameters.AddWithValue("@PrecioOverride", row.PrecioOverride);
+            command.Parameters.AddWithValue("@MotivoPrecioOverride", row.PrecioOverride ? row.MotivoPrecioOverride : DBNull.Value);
+            command.Parameters.AddWithValue("@IdUsuarioPrecioOverride", (object?)row.IdUsuarioPrecioOverride ?? DBNull.Value);
+            command.Parameters.AddWithValue("@FechaPrecioOverrideUtc", (object?)row.FechaPrecioOverrideUtc ?? DBNull.Value); command.Parameters.AddWithValue("@Now", now);
+        }
+
+        private async Task AppendHistoryAsync(SqlConnection connection, SqlTransaction transaction, RequestContext context, Guid quoteId, Guid? lineId,
+            string operation, string field, string? before, string? after, UserMetadata user, string reason, Guid correlationId)
+        {
+            using SqlCommand command = new SqlCommand(@"
+INSERT INTO dbo.CotizacionesHistorial
+(id, idEmpresa, idCotizacion, idPartida, Operacion, Campo, ValorAnterior, ValorNuevo, idUsuario, Usuario, Motivo, CorrelationId, FechaUtc)
+VALUES (NEWID(), @IdEmpresa, @IdCotizacion, @IdPartida, @Operacion, @Campo, @Anterior, @Nuevo, @IdUsuario, @Usuario, @Motivo, @CorrelationId, SYSUTCDATETIME())", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa); command.Parameters.AddWithValue("@IdCotizacion", quoteId);
+            command.Parameters.AddWithValue("@IdPartida", (object?)lineId ?? DBNull.Value); command.Parameters.AddWithValue("@Operacion", operation);
+            command.Parameters.AddWithValue("@Campo", (object?)field ?? DBNull.Value); command.Parameters.AddWithValue("@Anterior", (object?)before ?? DBNull.Value);
+            command.Parameters.AddWithValue("@Nuevo", (object?)after ?? DBNull.Value); command.Parameters.AddWithValue("@IdUsuario", user.Id == Guid.Empty ? DBNull.Value : user.Id);
+            command.Parameters.AddWithValue("@Usuario", string.IsNullOrWhiteSpace(context.Correo) ? user.Nombre : context.Correo);
+            command.Parameters.AddWithValue("@Motivo", string.IsNullOrWhiteSpace(reason) ? DBNull.Value : Truncate(reason, 500)); command.Parameters.AddWithValue("@CorrelationId", correlationId);
+            await command.ExecuteNonQueryAsync(HttpContext.RequestAborted);
+        }
+
+        private async Task<bool> CotizacionOrigenPerteneceAEmpresaAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid id)
+        {
+            using SqlCommand command = new SqlCommand("SELECT COUNT(1) FROM dbo.Cotizaciones WHERE idEmpresa=@IdEmpresa AND id=@Id", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa); command.Parameters.AddWithValue("@Id", id);
+            return Convert.ToInt32(await command.ExecuteScalarAsync(HttpContext.RequestAborted), CultureInfo.InvariantCulture) == 1;
+        }
+
+        private static void ValidateIdentityShape(byte type, CotizacionPartidaGuardarRequest request)
+        {
+            bool valid = type switch
+            {
+                ListaPreciosConstants.IdentidadProducto or ListaPreciosConstants.IdentidadServicio => !request.IdVariante.HasValue && !request.IdPresentacionVenta.HasValue,
+                ListaPreciosConstants.IdentidadVariante => request.IdVariante.HasValue && !request.IdPresentacionVenta.HasValue,
+                ListaPreciosConstants.IdentidadPresentacionVenta => !request.IdVariante.HasValue && request.IdPresentacionVenta.HasValue,
+                _ => false
+            };
+            if (!valid || request.IdProductoServicio == Guid.Empty) throw new CotizacionBusinessException(ListaPreciosResolutionCodes.IdentidadInvalida);
+        }
+
+        private static bool IdentityMatches(CotizacionPartidaDbRow previous, byte type, CotizacionPartidaGuardarRequest request)
+            => previous.TipoIdentidad == type && previous.IdProductoServicio == request.IdProductoServicio && previous.IdVariante == request.IdVariante && previous.IdPresentacionVenta == request.IdPresentacionVenta;
+        private static bool IdentityMatches(CotizacionPartidaDbRow left, CotizacionPartidaDbRow right)
+            => left.TipoIdentidad == right.TipoIdentidad && left.IdProductoServicio == right.IdProductoServicio && left.IdVariante == right.IdVariante && left.IdPresentacionVenta == right.IdPresentacionVenta;
+        private static string IdentityText(CotizacionPartidaDbRow row) => string.Join("/", row.TipoIdentidad, row.IdProductoServicio, row.IdVariante, row.IdPresentacionVenta);
+        private static string Money(decimal value) => value.ToString("0.00", CultureInfo.InvariantCulture);
 
         private static TotalesCotizacion BuildTotales(List<CotizacionPartidaDbRow> partidas)
         {
@@ -1298,7 +1679,9 @@ SELECT TOP (1)
     Folio,
     Estado,
     FechaCotizacion,
-    idSucursal
+    idSucursal,
+    idListaPrecio,
+    ListaPrecioNivel
 FROM dbo.Cotizaciones
 WHERE idEmpresa = @IdEmpresa
   AND id = @IdCotizacion
@@ -1319,7 +1702,9 @@ WHERE idEmpresa = @IdEmpresa
                 Folio = ReadString(reader, "Folio"),
                 Estado = ReadByte(reader, "Estado"),
                 FechaCotizacion = ReadDateTime(reader, "FechaCotizacion"),
-                IdSucursal = ReadNullableGuid(reader, "idSucursal")
+                IdSucursal = ReadNullableGuid(reader, "idSucursal"),
+                IdListaPrecio = ReadNullableGuid(reader, "idListaPrecio"),
+                ListaPrecioNivel = ReadNullableByte(reader, "ListaPrecioNivel")
             };
         }
 
@@ -1524,12 +1909,46 @@ END;", connection);
                 usuarioId = parsedUserId;
             }
 
+            TenantDatabaseDescriptor tenantDatabase;
+            try
+            {
+                tenantDatabase = _tenantDatabaseResolver.ResolveAsync(
+                    new TenantDatabaseContext { EmpresaKey = empresaHeader, IdEmpresa = empresaId },
+                    HttpContext.RequestAborted).GetAwaiter().GetResult();
+            }
+            catch (TenantDatabaseResolutionException ex)
+            {
+                _logger.LogWarning("Resolución tenant Cotizaciones falló. Categoria={TenantResolutionCode} IdEmpresa={IdEmpresa}", ex.Code, empresaId);
+                error = StatusCode(503, new CotizacionOperacionResponse { Mensaje = "No fue posible resolver la base de datos de la empresa." });
+                return false;
+            }
+
+            CompatibilityDecision cotizacionesGate = _compatibilityGate
+                .EvaluateAsync(tenantDatabase, DatabaseScopes.Cotizaciones, HttpContext.RequestAborted)
+                .GetAwaiter().GetResult();
+            if (!cotizacionesGate.IsAllowed)
+            {
+                error = StatusCode(503, new { code = cotizacionesGate.ReasonCode, message = "Cotizaciones no está disponible temporalmente.", referenceId = cotizacionesGate.ReferenceId });
+                return false;
+            }
+
+            CompatibilityDecision listaPreciosGate = _compatibilityGate
+                .EvaluateAsync(tenantDatabase, DatabaseScopes.ListaPrecios, HttpContext.RequestAborted)
+                .GetAwaiter().GetResult();
+            if (!listaPreciosGate.IsAllowed)
+            {
+                error = StatusCode(503, new { code = listaPreciosGate.ReasonCode, message = "Lista de Precios no está disponible temporalmente.", referenceId = listaPreciosGate.ReferenceId });
+                return false;
+            }
+
             context = new RequestContext
             {
                 IdEmpresa = empresaId,
                 Empresa = empresaHeader,
                 UsuarioId = usuarioId,
-                Correo = correo?.Trim() ?? string.Empty
+                Correo = correo?.Trim() ?? string.Empty,
+                UserId = usuarioIdRaw?.Trim() ?? string.Empty,
+                TenantDatabase = tenantDatabase
             };
 
             return true;
@@ -1549,7 +1968,7 @@ END;", connection);
             return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
         }
 
-        private SqlConnection CreateConnection() => _connectionFactory.CreateConnection();
+        private SqlConnection CreateConnection(RequestContext context) => _connectionFactory.CreateConnection(context.TenantDatabase);
 
         private ObjectResult HandleException(Exception ex, string actionName, string userMessage)
         {
@@ -1575,8 +1994,10 @@ END;", connection);
         private static Guid? ReadNullableGuid(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? null : reader.GetGuid(reader.GetOrdinal(name));
         private static string ReadString(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? string.Empty : Convert.ToString(reader[name], CultureInfo.InvariantCulture) ?? string.Empty;
         private static byte ReadByte(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? (byte)0 : Convert.ToByte(reader[name], CultureInfo.InvariantCulture);
+        private static byte? ReadNullableByte(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? null : Convert.ToByte(reader[name], CultureInfo.InvariantCulture);
         private static int ReadInt(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? 0 : Convert.ToInt32(reader[name], CultureInfo.InvariantCulture);
         private static bool ReadBool(SqlDataReader reader, string name) => !reader.IsDBNull(reader.GetOrdinal(name)) && Convert.ToBoolean(reader[name], CultureInfo.InvariantCulture);
+        private static bool? ReadNullableBool(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? null : Convert.ToBoolean(reader[name], CultureInfo.InvariantCulture);
         private static decimal ReadDecimal(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? 0m : Convert.ToDecimal(reader[name], CultureInfo.InvariantCulture);
         private static decimal? ReadNullableDecimal(SqlDataReader reader, string name) => reader.IsDBNull(reader.GetOrdinal(name)) ? null : Convert.ToDecimal(reader[name], CultureInfo.InvariantCulture);
         private static DateTime ReadDateTime(SqlDataReader reader, string name) => reader.GetDateTime(reader.GetOrdinal(name));
@@ -2336,6 +2757,8 @@ END;", connection);
             public string Empresa { get; set; } = string.Empty;
             public Guid? UsuarioId { get; set; }
             public string Correo { get; set; } = string.Empty;
+            public string UserId { get; set; } = string.Empty;
+            public TenantDatabaseDescriptor TenantDatabase { get; set; } = null!;
         }
 
         private sealed class UserMetadata
@@ -2372,7 +2795,13 @@ END;", connection);
         private sealed class CotizacionPartidaDbRow
         {
             public Guid Id { get; set; }
+            public Guid IdentityKey { get; set; }
             public Guid IdProductoServicio { get; set; }
+            public byte TipoIdentidad { get; set; }
+            public Guid? IdVariante { get; set; }
+            public Guid? IdPresentacionVenta { get; set; }
+            public Guid IdListaPrecio { get; set; }
+            public int ListaPrecioNivel { get; set; }
             public string Codigo { get; set; } = string.Empty;
             public string Nombre { get; set; } = string.Empty;
             public string Descripcion { get; set; } = string.Empty;
@@ -2389,6 +2818,22 @@ END;", connection);
             public decimal ImporteBruto { get; set; }
             public decimal DescuentoImporte { get; set; }
             public decimal Total { get; set; }
+            public decimal PrecioBase { get; set; }
+            public decimal? PrecioLista { get; set; }
+            public string OrigenPrecio { get; set; } = string.Empty;
+            public decimal? DescuentoListaPct { get; set; }
+            public decimal SubtotalAntesRedondeo { get; set; }
+            public byte RedondeoModo { get; set; }
+            public decimal PrecioFinal { get; set; }
+            public DateTime? VigenciaInicio { get; set; }
+            public DateTime? VigenciaFin { get; set; }
+            public string ReglaVersion { get; set; } = string.Empty;
+            public DateTime FechaResolucionUtc { get; set; }
+            public Guid CorrelationId { get; set; }
+            public bool PrecioOverride { get; set; }
+            public string MotivoPrecioOverride { get; set; } = string.Empty;
+            public Guid? IdUsuarioPrecioOverride { get; set; }
+            public DateTime? FechaPrecioOverrideUtc { get; set; }
         }
 
         private sealed class TotalesCotizacion
@@ -2406,6 +2851,14 @@ END;", connection);
             public byte Estado { get; set; }
             public DateTime FechaCotizacion { get; set; }
             public Guid? IdSucursal { get; set; }
+            public Guid? IdListaPrecio { get; set; }
+            public int? ListaPrecioNivel { get; set; }
+        }
+
+        private sealed class CotizacionBusinessException : Exception
+        {
+            public CotizacionBusinessException(string code) : base(code) => Code = code;
+            public string Code { get; }
         }
     }
 }

@@ -46,6 +46,8 @@ namespace checklistWs.Services.Tenant
         public const string UnidadesMedidaPermissionCode = "05001005";
         public const string ColeccionesPermissionCode = "05001006";
         public const string EtiquetasPermissionCode = "05001007";
+        public const string ListaPreciosPermissionCode = "05001008";
+        public const string ListaPreciosAdministrarPermissionCode = "05001009";
         public const string PermissionCodeConfigurationKey = "ProductosServicios:PermissionCode";
         public const string AjustesPermissionCode = "04000000";
         public const string SucursalesPermissionCode = "04003000";
@@ -62,5 +64,6 @@ namespace checklistWs.Services.Tenant
         public const string RecepcionReportePermissionCode = "05004002";
         public const string CurvasPermissionCode = "05005000";
         public const string CurvasCatalogoPermissionCode = "05005001";
+        public const string CurvasSiembraPermissionCode = "05005002";
     }
 }

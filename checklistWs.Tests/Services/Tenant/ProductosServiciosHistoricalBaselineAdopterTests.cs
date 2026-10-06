@@ -127,11 +127,68 @@ namespace checklistWs.Tests.Services.Tenant
             Assert.Equal(0, harness.DriftValidator.Calls);
         }
 
+        [Fact]
+        public async Task CotBoot06_ExistingExactV1_IsAdopted()
+        {
+            Harness harness = new(DatabaseScopes.Cotizaciones, expectedTableCount: 3, existingTableCount: 2)
+            {
+                ClassificationState = DatabaseStructureState.Partial,
+                ClassificationReasonCode = "SCOPE_TABLES_INCOMPLETE",
+                ExistingScopeTables = new[] { "dbo.Cotizaciones", "dbo.CotizacionesPartidas" }
+            };
+
+            HistoricalBaselineAdoptionResult result = await harness.Adopter.AdoptIfEligibleAsync(Descriptor, Identity, DatabaseScopes.Cotizaciones);
+
+            Assert.Equal(HistoricalBaselineAdoptionStatus.Adopted, result.Status);
+            Assert.Equal(ProductosServiciosHistoricalBaselineAdopter.CotizacionesBaselineId, harness.Repository.State!.BaselineId);
+            Assert.Equal(harness.ExpectedManifestHash, harness.Repository.State.ManifestHash);
+        }
+
+        [Fact]
+        public async Task CotBoot07_PartialV1_IsRejected()
+        {
+            Harness harness = new(DatabaseScopes.Cotizaciones, expectedTableCount: 3, existingTableCount: 1)
+            {
+                ClassificationState = DatabaseStructureState.Partial,
+                ClassificationReasonCode = "SCOPE_TABLES_INCOMPLETE",
+                ExistingScopeTables = new[] { "dbo.Cotizaciones" }
+            };
+
+            HistoricalBaselineAdoptionResult result = await harness.Adopter.AdoptIfEligibleAsync(Descriptor, Identity, DatabaseScopes.Cotizaciones);
+
+            Assert.Equal(HistoricalBaselineAdoptionStatus.NoAdoption, result.Status);
+            Assert.Equal("CLASSIFICATION_NOT_ADOPTABLE", result.ReasonCode);
+            Assert.Equal(0, harness.Repository.Mutations);
+        }
+
+        [Theory]
+        [InlineData(SchemaValidationGlobalResult.SchemaDrift, "COLUMN_TYPE_MISMATCH")]
+        [InlineData(SchemaValidationGlobalResult.VersionIncompatible, "MANIFEST_HASH_MISMATCH")]
+        public async Task CotBoot08And09_DriftOrUnexpectedHash_IsRejected(SchemaValidationGlobalResult resultType, string reasonCode)
+        {
+            Harness harness = new(DatabaseScopes.Cotizaciones, expectedTableCount: 3, existingTableCount: 2)
+            {
+                ClassificationState = DatabaseStructureState.Partial,
+                ClassificationReasonCode = "SCOPE_TABLES_INCOMPLETE",
+                ExistingScopeTables = new[] { "dbo.Cotizaciones", "dbo.CotizacionesPartidas" }
+            };
+            harness.DriftValidator.Report = harness.CreateDriftReport(resultType, includeItem: true, reasonCode: reasonCode);
+
+            HistoricalBaselineAdoptionResult result = await harness.Adopter.AdoptIfEligibleAsync(Descriptor, Identity, DatabaseScopes.Cotizaciones);
+
+            Assert.Equal(HistoricalBaselineAdoptionStatus.Blocked, result.Status);
+            Assert.Equal("PHYSICAL_VALIDATION_NOT_SCHEMA_OK", result.ReasonCode);
+            Assert.Equal(0, harness.Repository.Mutations);
+        }
+
         private sealed class Harness
         {
-            public Harness()
+            public Harness(string scope = DatabaseScopes.ProductosServicios, int expectedTableCount = 20, int existingTableCount = 20)
             {
-                ExpectedManifestHash = new SchemaManifestProvider().CreateManifest(new ProductosServiciosSchemaContractProvider().GetContract(DatabaseScopes.ProductosServicios, 1)).ManifestHash;
+                Scope = scope;
+                ExpectedTableCount = expectedTableCount;
+                ExistingTableCount = existingTableCount;
+                ExpectedManifestHash = new SchemaManifestProvider().CreateManifest(new ProductosServiciosSchemaContractProvider().GetContract(scope, 1)).ManifestHash;
                 Classifier = new FakeClassifier(this);
                 Repository = new FakeRepository();
                 VersionProvider = new KnownSchemaVersionProvider();
@@ -159,21 +216,23 @@ namespace checklistWs.Tests.Services.Tenant
             public FakeDriftValidator DriftValidator { get; }
             public FakeLock Lock { get; }
             public string ExpectedManifestHash { get; }
+            public string Scope { get; }
             public DatabaseStructureState ClassificationState { get; set; } = DatabaseStructureState.Unknown;
             public string ClassificationReasonCode { get; set; } = "VERSION_EVIDENCE_MISSING";
-            public int ExpectedTableCount { get; set; } = 20;
-            public int ExistingTableCount { get; set; } = 20;
+            public int ExpectedTableCount { get; set; }
+            public int ExistingTableCount { get; set; }
+            public IReadOnlyCollection<string> ExistingScopeTables { get; set; } = Array.Empty<string>();
 
-            public SchemaDriftReport CreateDriftReport(SchemaValidationGlobalResult globalResult, bool includeItem) => new()
+            public SchemaDriftReport CreateDriftReport(SchemaValidationGlobalResult globalResult, bool includeItem, string reasonCode = "TABLE_MISSING") => new()
             {
                 SanitizedIdentity = Identity.ToSanitizedString(),
-                Scope = DatabaseScopes.ProductosServicios,
+                Scope = Scope,
                 DeclaredVersion = 1,
                 ExpectedManifestHash = ExpectedManifestHash,
                 PersistedManifestHash = ExpectedManifestHash,
                 GlobalResult = globalResult,
                 Items = includeItem
-                    ? new[] { new SchemaDriftItem(Identity.ToSanitizedString(), DatabaseScopes.ProductosServicios, 1, ExpectedManifestHash, "TABLE", "dbo.ProductosServicios", "TABLE_MISSING", "TABLE", null, SchemaDriftSeverity.Critical, "YES", "TABLE_MISSING") }
+                    ? new[] { new SchemaDriftItem(Identity.ToSanitizedString(), Scope, 1, ExpectedManifestHash, "TABLE", "dbo.Cotizaciones", reasonCode, "EXPECTED", "ACTUAL", SchemaDriftSeverity.Critical, "NO", reasonCode) }
                     : Array.Empty<SchemaDriftItem>(),
                 DetectedTables = 20,
                 DetectedColumns = 255,
@@ -200,6 +259,7 @@ namespace checklistWs.Tests.Services.Tenant
                     ReasonCode = _harness.ClassificationReasonCode,
                     ExpectedScopeTableCount = _harness.ExpectedTableCount,
                     ExistingScopeTableCount = _harness.ExistingTableCount,
+                    ExistingScopeTables = _harness.ExistingScopeTables,
                     IsAvailable = true
                 });
             }

@@ -114,6 +114,16 @@ namespace checklistWs.Services.Tenant
                 return ProductosServiciosSchemaContractProvider.CurvasLatestVersion;
             }
 
+            if (string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProductosServiciosSchemaContractProvider.ListaPreciosLatestVersion;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProductosServiciosSchemaContractProvider.CotizacionesLatestVersion;
+            }
+
             return null;
         }
     }

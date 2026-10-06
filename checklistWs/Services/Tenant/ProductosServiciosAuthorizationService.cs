@@ -206,6 +206,7 @@ WHERE u.idEmpresa = @IdEmpresa
             return string.Equals(permissionCode, "05000000", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.ModulePermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.CatalogosPermissionCode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.ListaPreciosPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.AjustesPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.SucursalesPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.OrdenesCompraPermissionCode, StringComparison.OrdinalIgnoreCase) ||

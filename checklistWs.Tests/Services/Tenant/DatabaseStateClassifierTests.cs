@@ -90,7 +90,7 @@ namespace checklistWs.Tests.Services.Tenant
 
             Assert.Equal(DatabaseStructureState.Unknown, result.State);
             Assert.Equal("VERSION_EVIDENCE_MISSING", result.ReasonCode);
-            Assert.Equal(20, result.ExistingScopeTableCount);
+            Assert.Equal(22, result.ExistingScopeTableCount);
         }
 
         [Fact]

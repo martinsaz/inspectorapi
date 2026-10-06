@@ -16,15 +16,25 @@ namespace checklistWs.Models.Cotizaciones
         public string Observaciones { get; set; } = string.Empty;
         public int? VigenciaDias { get; set; }
         public string Caja { get; set; } = string.Empty;
+        public int ListaPrecioNivel { get; set; } = 1;
+        public Guid? IdCotizacionOrigen { get; set; }
+        public bool ConfirmarCambioLista { get; set; }
+        public bool ConfirmarReemplazoOverride { get; set; }
         public List<CotizacionPartidaGuardarRequest> Partidas { get; set; } = new();
     }
 
     public sealed class CotizacionPartidaGuardarRequest
     {
+        public Guid? Id { get; set; }
+        public byte? TipoIdentidad { get; set; }
         public Guid IdProductoServicio { get; set; }
+        public Guid? IdVariante { get; set; }
+        public Guid? IdPresentacionVenta { get; set; }
         public decimal Cantidad { get; set; }
-        public decimal PrecioUnitario { get; set; }
         public decimal DescuentoPct { get; set; }
+        public bool PrecioOverride { get; set; }
+        public decimal? PrecioAplicado { get; set; }
+        public string MotivoPrecioOverride { get; set; } = string.Empty;
     }
 
     public sealed class CotizacionCancelarRequest
@@ -61,6 +71,10 @@ namespace checklistWs.Models.Cotizaciones
         public decimal Subtotal { get; set; }
         public decimal DescuentoTotal { get; set; }
         public decimal Total { get; set; }
+        public int? ListaPrecioNivel { get; set; }
+        public Guid? IdListaPrecio { get; set; }
+        public Guid? IdCotizacionOrigen { get; set; }
+        public bool EsPreLp08 { get; set; }
     }
 
     public sealed class CotizacionListadoDto
@@ -115,6 +129,10 @@ namespace checklistWs.Models.Cotizaciones
         public DateTime? FechaCancelacion { get; set; }
         public DateTime FechaCreacion { get; set; }
         public DateTime FechaActualizacion { get; set; }
+        public int? ListaPrecioNivel { get; set; }
+        public Guid? IdListaPrecio { get; set; }
+        public Guid? IdCotizacionOrigen { get; set; }
+        public bool EsPreLp08 { get; set; }
         public List<CotizacionPartidaDetalleDto> Partidas { get; set; } = new();
     }
 
@@ -140,6 +158,26 @@ namespace checklistWs.Models.Cotizaciones
         public decimal ImporteBruto { get; set; }
         public decimal DescuentoImporte { get; set; }
         public decimal Total { get; set; }
+        public byte? TipoIdentidad { get; set; }
+        public Guid? IdVariante { get; set; }
+        public Guid? IdPresentacionVenta { get; set; }
+        public Guid? IdListaPrecio { get; set; }
+        public int? ListaPrecioNivel { get; set; }
+        public decimal? PrecioBase { get; set; }
+        public decimal? PrecioLista { get; set; }
+        public string OrigenPrecio { get; set; } = string.Empty;
+        public decimal? DescuentoListaPct { get; set; }
+        public decimal? SubtotalAntesRedondeo { get; set; }
+        public byte? RedondeoModo { get; set; }
+        public decimal? PrecioFinal { get; set; }
+        public DateTime? VigenciaInicio { get; set; }
+        public DateTime? VigenciaFin { get; set; }
+        public string ReglaVersion { get; set; } = string.Empty;
+        public DateTime? FechaResolucionUtc { get; set; }
+        public Guid? CorrelationId { get; set; }
+        public bool? PrecioOverride { get; set; }
+        public string MotivoPrecioOverride { get; set; } = string.Empty;
+        public bool EsPreLp08 => string.IsNullOrWhiteSpace(ReglaVersion);
     }
 
     public sealed class CotizacionResumenDto

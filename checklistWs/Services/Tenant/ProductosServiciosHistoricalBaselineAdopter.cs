@@ -7,6 +7,7 @@ namespace checklistWs.Services.Tenant
         public const string BaselineId = "PRODUCTOSSERVICIOS_V1_HISTORICAL_BASELINE";
         public const string SucursalesBaselineId = "SUCURSALES_V1_HISTORICAL_BASELINE";
         public const string ProveedoresBaselineId = "PROVEEDORES_V1_HISTORICAL_BASELINE";
+        public const string CotizacionesBaselineId = "COTIZACIONES_V1_HISTORICAL_BASELINE";
 
         private readonly IDatabaseStateClassifier _classifier;
         private readonly ISchemaVersionRepository _repository;
@@ -87,14 +88,23 @@ namespace checklistWs.Services.Tenant
                 return NoAdoption(identity, scope, "DATABASE_UNAVAILABLE");
             }
 
-            if (classification.State != DatabaseStructureState.Unknown ||
-                !string.Equals(classification.ReasonCode, "VERSION_EVIDENCE_MISSING", StringComparison.OrdinalIgnoreCase))
+            bool historicalCotizacionesInventory =
+                string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase) &&
+                classification.State == DatabaseStructureState.Partial &&
+                string.Equals(classification.ReasonCode, "SCOPE_TABLES_INCOMPLETE", StringComparison.OrdinalIgnoreCase) &&
+                classification.ExistingScopeTables.OrderBy(item => item, StringComparer.OrdinalIgnoreCase).SequenceEqual(
+                    contract.Tables.Select(table => table.FullName).OrderBy(item => item, StringComparer.OrdinalIgnoreCase),
+                    StringComparer.OrdinalIgnoreCase);
+
+            if (!historicalCotizacionesInventory &&
+                (classification.State != DatabaseStructureState.Unknown ||
+                 !string.Equals(classification.ReasonCode, "VERSION_EVIDENCE_MISSING", StringComparison.OrdinalIgnoreCase)))
             {
                 return NoAdoption(identity, scope, "CLASSIFICATION_NOT_ADOPTABLE");
             }
 
-            if (classification.ExpectedScopeTableCount == 0 ||
-                classification.ExistingScopeTableCount != classification.ExpectedScopeTableCount)
+            int requiredTableCount = contract.Tables.Count;
+            if (requiredTableCount == 0 || classification.ExistingScopeTableCount != requiredTableCount)
             {
                 return NoAdoption(identity, scope, "PHYSICAL_SCOPE_NOT_COMPLETE");
             }
@@ -244,7 +254,9 @@ namespace checklistWs.Services.Tenant
                 string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ResolveBaselineId(string scope)
@@ -277,6 +289,16 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
             {
                 return "CURVAS_V1_EMPTY_BASELINE";
+            }
+
+            if (string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase))
+            {
+                return "LISTAPRECIOS_V1_EMPTY_BASELINE";
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase))
+            {
+                return CotizacionesBaselineId;
             }
 
             return BaselineId;

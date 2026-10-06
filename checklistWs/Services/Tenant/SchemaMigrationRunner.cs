@@ -55,11 +55,6 @@ namespace checklistWs.Services.Tenant
                     return Result(SchemaMigrationExecutionStatus.NoProvision, "MIGRATION_NOT_ALLOWED_EMPTY_BOOTSTRAP_REQUIRED", identity, scope);
                 }
 
-                if (classification.State == DatabaseStructureState.Partial || classification.State == DatabaseStructureState.Unknown)
-                {
-                    return Result(SchemaMigrationExecutionStatus.RequiresReview, "REQUIERE_REVISION", identity, scope);
-                }
-
                 SchemaControlState? state = await _repository.GetStateAsync(descriptor, identity, scope, lockedCancellationToken);
                 if (state?.CurrentVersion == null)
                 {
@@ -67,7 +62,13 @@ namespace checklistWs.Services.Tenant
                 }
 
                 IReadOnlyCollection<SchemaControlHistory> history = await _repository.GetHistoryAsync(descriptor, identity, scope, lockedCancellationToken);
-                SchemaMigrationResolution resolution = _resolver.GetPendingMigrations(identity, scope, state.CurrentVersion.Value, package.Release.LatestSchemaVersion, package, history);
+                SchemaMigrationResolution resolution = _resolver.GetPendingMigrations(identity, scope, state.CurrentVersion.Value, package.Release.LatestSchemaVersion, package, history, state.ManifestHash);
+                if ((classification.State == DatabaseStructureState.Partial || classification.State == DatabaseStructureState.Unknown) &&
+                    !await CanProceedFromIncompleteInventoryAsync(descriptor, state, resolution, lockedCancellationToken))
+                {
+                    return Result(SchemaMigrationExecutionStatus.RequiresReview, "REQUIERE_REVISION", identity, scope);
+                }
+
                 if (resolution.Status == SchemaMigrationResolutionStatus.NoPendingMigrations || resolution.Status == SchemaMigrationResolutionStatus.AlreadyApplied)
                 {
                     return Result(SchemaMigrationExecutionStatus.NoProvision, resolution.ReasonCode, identity, scope);
@@ -226,7 +227,56 @@ namespace checklistWs.Services.Tenant
                 string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task<bool> CanProceedFromIncompleteInventoryAsync(
+            TenantDatabaseDescriptor descriptor,
+            SchemaControlState state,
+            SchemaMigrationResolution resolution,
+            CancellationToken cancellationToken)
+        {
+            if (resolution.Status != SchemaMigrationResolutionStatus.Ready || resolution.PendingMigrations.Count == 0)
+            {
+                return false;
+            }
+
+            SchemaMigrationDefinition first = resolution.PendingMigrations.OrderBy(item => item.Order).First();
+            if (state.CurrentVersion != first.FromVersion)
+            {
+                return false;
+            }
+
+            if (first.SourceContract == null)
+            {
+                return false;
+            }
+
+            string? hash = state.ManifestHash;
+            string[] sourceHashDependencies = first.Dependencies
+                .Where(IsSha256)
+                .ToArray();
+            if (sourceHashDependencies.Length == 0 ||
+                string.IsNullOrWhiteSpace(hash) ||
+                !sourceHashDependencies.Contains(hash, StringComparer.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            SchemaContractValidationResult validation = await _validator.ValidateAsync(descriptor, first.SourceContract, cancellationToken);
+            return validation.IsValid;
+        }
+
+        private static bool IsSha256(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) &&
+                value.Length == 64 &&
+                value.All(character =>
+                    (character >= '0' && character <= '9') ||
+                    (character >= 'a' && character <= 'f') ||
+                    (character >= 'A' && character <= 'F'));
         }
 
         private static SchemaMigrationExecutionResult Result(

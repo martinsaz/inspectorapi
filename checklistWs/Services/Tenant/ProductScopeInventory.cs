@@ -23,7 +23,9 @@ namespace checklistWs.Services.Tenant
             "dbo.ProductosServiciosMultimedia",
             "dbo.ProductosServiciosExistencias",
             "dbo.ProductosServiciosMovimientosInventario",
-            "dbo.ProductosServiciosPresentacionesVenta"
+            "dbo.ProductosServiciosPresentacionesVenta",
+            "dbo.ProductosServiciosIdentidadComercial",
+            "dbo.ProductosServiciosIdentidadComercialHistorial"
         };
 
         private static readonly IReadOnlyCollection<string> SucursalesTables = new[]
@@ -71,6 +73,21 @@ namespace checklistWs.Services.Tenant
             "dbo.CurvasSugerenciasSnapshot"
         };
 
+        private static readonly IReadOnlyCollection<string> ListaPreciosTables = new[]
+        {
+            "dbo.ListaPreciosListas",
+            "dbo.ListaPreciosDetalle",
+            "dbo.ListaPreciosPromociones",
+            "dbo.ListaPreciosHistorial"
+        };
+
+        private static readonly IReadOnlyCollection<string> CotizacionesTables = new[]
+        {
+            "dbo.Cotizaciones",
+            "dbo.CotizacionesPartidas",
+            "dbo.CotizacionesHistorial"
+        };
+
         public IReadOnlyCollection<string> GetExpectedTables(string scope)
         {
             if (string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
@@ -106,6 +123,16 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
             {
                 return CurvasTables;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase))
+            {
+                return ListaPreciosTables;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase))
+            {
+                return CotizacionesTables;
             }
 
             return Array.Empty<string>();

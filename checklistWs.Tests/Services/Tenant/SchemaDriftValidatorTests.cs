@@ -40,6 +40,26 @@ namespace checklistWs.Tests.Services.Tenant
         [Fact] public async Task FkUntrustedDisabled_IsDetected() => await Expect(s => s.ForeignKeys = new[] { s.ForeignKeys.Single() with { IsNotTrusted = true } }, SchemaValidationGlobalResult.SchemaDrift, "FK_STATE_MISMATCH");
         [Fact] public async Task MissingCheck_IsDetected() => await Expect(s => s.Checks = Array.Empty<SchemaCheckSnapshot>(), SchemaValidationGlobalResult.SchemaDrift, "CHECK_MISSING");
         [Fact] public async Task CheckDefinition_IsDetected() => await Expect(s => s.Checks = new[] { s.Checks.Single() with { Definition = "Activo IN (0)" } }, SchemaValidationGlobalResult.SchemaDrift, "CHECK_DEFINITION_MISMATCH");
+        [Theory]
+        [InlineData("CHECK (Nivel BETWEEN 1 AND 10)", "([Nivel]>=(1) AND [Nivel]<=(10))")]
+        [InlineData("Nivel BETWEEN 1 AND 10", "(( [Nivel] >= (1) ) AND ( [Nivel] <= (10) ))")]
+        [InlineData("[Nivel] BETWEEN (1) AND (10)", "([Nivel]<=(10) AND [Nivel]>=(1))")]
+        public void CheckBetweenAndInclusiveRange_AreEquivalent(string expected, string actual)
+        {
+            Assert.True(SchemaDefinitionNormalizer.Same(actual, expected));
+        }
+
+        [Theory]
+        [InlineData("Nivel BETWEEN 1 AND 10", "([Nivel]>=(1) AND [Nivel]<=(9))")]
+        [InlineData("Nivel BETWEEN 1 AND 10", "([Nivel]>=(0) AND [Nivel]<=(10))")]
+        [InlineData("Nivel BETWEEN 1 AND 10", "([Nivel]>=(1) AND [Nivel]<=(11))")]
+        [InlineData("Nivel BETWEEN 1 AND 10", "([Nivel]>(1) AND [Nivel]<=(10))")]
+        [InlineData("Nivel BETWEEN 1 AND 10", "([Nivel]>=(1) AND [Nivel]<(10))")]
+        public void CheckBetweenAndNonEquivalentRange_AreDrift(string expected, string actual)
+        {
+            Assert.False(SchemaDefinitionNormalizer.Same(actual, expected));
+        }
+
         [Fact] public async Task CheckDisabledUntrusted_IsDetected() => await Expect(s => s.Checks = new[] { s.Checks.Single() with { IsDisabled = true } }, SchemaValidationGlobalResult.SchemaDrift, "CHECK_STATE_MISMATCH");
         [Fact] public async Task ManifestHashMismatch_IsCritical() => await Expect(null, SchemaValidationGlobalResult.SchemaDriftCritico, "MANIFEST_HASH_MISMATCH", persistedHash: "bad");
         [Fact] public async Task VersionWithoutContract_FailsClosed() { var report = await Validator().ValidateAsync(new SqlConnection(), null, Identity, DatabaseScopes.ProductosServicios, 99, null); Assert.Equal(SchemaValidationGlobalResult.VersionIncompatible, report.GlobalResult); }

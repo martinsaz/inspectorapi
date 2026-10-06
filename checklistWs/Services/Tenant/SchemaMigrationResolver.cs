@@ -8,7 +8,8 @@ namespace checklistWs.Services.Tenant
             int currentVersion,
             int? targetVersion,
             SchemaMigrationPackage package,
-            IReadOnlyCollection<SchemaControlHistory> history)
+            IReadOnlyCollection<SchemaControlHistory> history,
+            string? currentManifestHash = null)
         {
             if (identity == null || string.IsNullOrWhiteSpace(scope) || package == null)
             {
@@ -29,11 +30,6 @@ namespace checklistWs.Services.Tenant
             if (currentVersion > package.Release.LatestSchemaVersion)
             {
                 return Block(SchemaMigrationResolutionStatus.RequiresReview, "VERSION_FUTURA_REQUIERE_REVISION");
-            }
-
-            if (currentVersion == target)
-            {
-                return new SchemaMigrationResolution { Status = SchemaMigrationResolutionStatus.NoPendingMigrations, ReasonCode = "NO_PENDING_MIGRATIONS" };
             }
 
             if (currentVersion > target)
@@ -79,13 +75,45 @@ namespace checklistWs.Services.Tenant
 
                 string? sqlHash = SchemaMigrationHistoryDetails.Get(applied.Details, "SqlHash");
                 string? targetHash = SchemaMigrationHistoryDetails.Get(applied.Details, "TargetManifestHash");
+                bool knownTargetHash = string.Equals(targetHash, packageMigration.TargetManifestHash, StringComparison.OrdinalIgnoreCase) ||
+                    (packageMigration.SupersededTargetManifestHashes?.Contains(targetHash ?? string.Empty, StringComparer.OrdinalIgnoreCase) ?? false);
                 if (!string.Equals(sqlHash, packageMigration.SqlHash, StringComparison.OrdinalIgnoreCase) ||
-                    !string.Equals(targetHash, packageMigration.TargetManifestHash, StringComparison.OrdinalIgnoreCase) ||
+                    !knownTargetHash ||
                     applied.FromVersion != packageMigration.FromVersion ||
                     applied.ToVersion != packageMigration.ToVersion)
                 {
                     return Block(SchemaMigrationResolutionStatus.HistoryInconsistent, "HISTORIAL_INCONSISTENTE");
                 }
+            }
+
+            if (currentVersion == target)
+            {
+                if (string.Equals(currentManifestHash, package.Release.LatestManifestHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new SchemaMigrationResolution { Status = SchemaMigrationResolutionStatus.NoPendingMigrations, ReasonCode = "NO_PENDING_MIGRATIONS" };
+                }
+
+                SchemaMigrationDefinition[] reconciliations = package.Migrations
+                    .Where(migration => migration.FromVersion == currentVersion &&
+                        migration.ToVersion == currentVersion &&
+                        migration.Dependencies.Contains(currentManifestHash ?? string.Empty, StringComparer.OrdinalIgnoreCase) &&
+                        !IsApplied(history, migration.MigrationId))
+                    .OrderBy(migration => migration.Order)
+                    .ToArray();
+
+                if (reconciliations.Length > 1)
+                {
+                    return Block(SchemaMigrationResolutionStatus.ChainBranch, "MIGRATION_RECONCILIATION_BRANCH");
+                }
+
+                return reconciliations.Length == 1
+                    ? new SchemaMigrationResolution
+                    {
+                        Status = SchemaMigrationResolutionStatus.Ready,
+                        ReasonCode = "PENDING_RECONCILIATION_RESOLVED",
+                        PendingMigrations = reconciliations
+                    }
+                    : new SchemaMigrationResolution { Status = SchemaMigrationResolutionStatus.NoPendingMigrations, ReasonCode = "NO_PENDING_MIGRATIONS" };
             }
 
             List<SchemaMigrationDefinition> pending = new();
@@ -193,6 +221,14 @@ namespace checklistWs.Services.Tenant
             }
 
             return null;
+        }
+
+        private static bool IsApplied(IReadOnlyCollection<SchemaControlHistory> history, string migrationId)
+        {
+            return history.Any(item =>
+                string.Equals(item.EventType, "MIGRATED", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Result, "PASS", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(SchemaMigrationHistoryDetails.Get(item.Details, "MigrationId") ?? item.OperationId, migrationId, StringComparison.OrdinalIgnoreCase));
         }
 
         private static SchemaMigrationResolution Block(SchemaMigrationResolutionStatus status, string reasonCode)

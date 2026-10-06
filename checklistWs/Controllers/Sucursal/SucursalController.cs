@@ -261,26 +261,7 @@ namespace checklistWs.Controllers.Sucursal
 
                             while (await reader.ReadAsync())
                             {
-                                var sucursal = new Sucursales
-                                {
-                                    Id = reader.GetGuid(reader.GetOrdinal("Id")),
-                                    IdEmpresa = reader.GetGuid(reader.GetOrdinal("IdEmpresa")),
-                                    Nombre = reader.GetString(reader.GetOrdinal("Nombre")),
-                                    Direccion = reader.GetString(reader.GetOrdinal("Direccion")),
-                                    Ciudad = reader.GetString(reader.GetOrdinal("Ciudad")),
-                                    Telefono = reader.GetString(reader.GetOrdinal("Telefono")),
-                                    Numero = reader.GetString(reader.GetOrdinal("Numero")),
-                                    Correo = reader.GetString(reader.GetOrdinal("Correo")),
-                                    Pais = reader.GetString(reader.GetOrdinal("Pais")),
-                                    IdTitular = reader.GetGuid(reader.GetOrdinal("IdTitular")),
-                                    IdRazonSocial = reader.GetGuid(reader.GetOrdinal("IdRazonSocial")),
-                                    IdZona = reader.GetGuid(reader.GetOrdinal("IdZona")),
-                                    IdSucursalTipo = reader.GetGuid(reader.GetOrdinal("IdSucursaltipo")),
-                                    borrado = reader.GetBoolean(reader.GetOrdinal("borrado")),
-                                    Fecha = reader.GetDateTime(reader.GetOrdinal("Fecha")),
-                                    Notas = reader.GetString(reader.GetOrdinal("Notas")),
-                                    LinkImagen = reader.GetString(reader.GetOrdinal("LinkImagen"))
-                                };
+                                Sucursales sucursal = MapSucursal(reader);
 
                                 sucursales.Add(sucursal);
                             }
@@ -295,6 +276,36 @@ namespace checklistWs.Controllers.Sucursal
                 Console.WriteLine($"Error: {e.Message}");
                 return StatusCode(500, $"Error interno del servidor: {e.Message}");
             }
+        }
+
+        private static Sucursales MapSucursal(IDataRecord reader)
+        {
+            return new Sucursales
+            {
+                Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                IdEmpresa = reader.GetGuid(reader.GetOrdinal("IdEmpresa")),
+                Nombre = reader.GetString(reader.GetOrdinal("Nombre")),
+                Direccion = reader.GetString(reader.GetOrdinal("Direccion")),
+                Ciudad = reader.GetString(reader.GetOrdinal("Ciudad")),
+                Telefono = reader.GetString(reader.GetOrdinal("Telefono")),
+                Numero = reader.GetString(reader.GetOrdinal("Numero")),
+                Correo = reader.GetString(reader.GetOrdinal("Correo")),
+                Pais = reader.GetString(reader.GetOrdinal("Pais")),
+                IdTitular = reader.GetGuid(reader.GetOrdinal("IdTitular")),
+                IdRazonSocial = reader.GetGuid(reader.GetOrdinal("IdRazonSocial")),
+                IdZona = reader.GetGuid(reader.GetOrdinal("IdZona")),
+                IdSucursalTipo = reader.GetGuid(reader.GetOrdinal("IdSucursaltipo")),
+                borrado = reader.GetBoolean(reader.GetOrdinal("borrado")),
+                Fecha = reader.GetDateTime(reader.GetOrdinal("Fecha")),
+                Notas = GetNullableString(reader, "Notas"),
+                LinkImagen = reader.GetString(reader.GetOrdinal("LinkImagen"))
+            };
+        }
+
+        private static string? GetNullableString(IDataRecord reader, string column)
+        {
+            int ordinal = reader.GetOrdinal(column);
+            return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
         }
 
         [HttpGet("ObtenerSucursalesPorUsuario")]

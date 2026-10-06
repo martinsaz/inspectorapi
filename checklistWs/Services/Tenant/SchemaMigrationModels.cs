@@ -57,7 +57,9 @@ namespace checklistWs.Services.Tenant
         IReadOnlyCollection<string> Dependencies,
         string RecoveryPolicy,
         string UpSql,
-        SchemaContract TargetContract);
+        SchemaContract TargetContract,
+        SchemaContract? SourceContract = null,
+        IReadOnlyCollection<string>? SupersededTargetManifestHashes = null);
 
     public sealed class SchemaMigrationPackage
     {
@@ -107,7 +109,8 @@ namespace checklistWs.Services.Tenant
             int currentVersion,
             int? targetVersion,
             SchemaMigrationPackage package,
-            IReadOnlyCollection<SchemaControlHistory> history);
+            IReadOnlyCollection<SchemaControlHistory> history,
+            string? currentManifestHash = null);
     }
 
     public interface ISchemaMigrationSqlExecutor
@@ -150,6 +153,146 @@ namespace checklistWs.Services.Tenant
 
         public SchemaMigrationPackage GetPackage(string scope)
         {
+            if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract cotizacionesV1 = _contractProvider.GetContract(DatabaseScopes.Cotizaciones, ProductosServiciosSchemaContractProvider.V1);
+                SchemaContract cotizacionesV2 = _contractProvider.GetContract(DatabaseScopes.Cotizaciones, ProductosServiciosSchemaContractProvider.CotizacionesLatestVersion);
+                SchemaContract supersededCotizacionesV2 = CotizacionesSchemaContractFactory.GetSupersededV2Contract();
+                SchemaManifest manifest = _manifestProvider.CreateManifest(cotizacionesV2);
+                string cotizacionesMigrationSql = CotizacionesSchemaContractFactory.BuildV1ToV2Sql();
+                SchemaMigrationDefinition migration = new(
+                    "COT-M20260930-V1-V2-LP08-SNAPSHOT",
+                    ProductosServiciosHistoricalBaselineAdopter.CotizacionesBaselineId,
+                    DatabaseScopes.Cotizaciones,
+                    cotizacionesV1.ContractVersion,
+                    cotizacionesV2.ContractVersion,
+                    1,
+                    new[]
+                    {
+                        "dbo.Cotizaciones.idListaPrecio",
+                        "dbo.Cotizaciones.ListaPrecioNivel",
+                        "dbo.Cotizaciones.idCotizacionOrigen",
+                        "dbo.CotizacionesPartidas.LP08Snapshot",
+                        "dbo.CotizacionesHistorial"
+                    },
+                    CotizacionesSchemaContractFactory.BuildV1ToV2Preconditions(),
+                    new[]
+                    {
+                        "NO_DML_BUSINESS_ROWS",
+                        "NO_COMMERCIAL_BACKFILL",
+                        "PRESERVE_PRE_LP08_NULLS",
+                        "PRESERVE_PRECIO_UNITARIO_AS_PRECIO_APLICADO",
+                        "PRESERVE_PARTIDA_ACTIVO_FOR_LOGICAL_DELETE"
+                    },
+                    SchemaMigrationHash.Sha256(cotizacionesMigrationSql),
+                    manifest.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    new[] { _manifestProvider.CreateManifest(cotizacionesV1).ManifestHash },
+                    "ReconcileAfterUncertainCommit",
+                    cotizacionesMigrationSql,
+                    cotizacionesV2,
+                    cotizacionesV1,
+                    new[] { CotizacionesSchemaContractFactory.SupersededV2ManifestHash });
+
+                string reconciliationSql = CotizacionesSchemaContractFactory.BuildV2HistoricalObjectsReconciliationSql();
+                SchemaMigrationDefinition reconciliation = new(
+                    "COT-M20261001-V2-RECONCILE-HISTORICAL-OBJECTS",
+                    ProductosServiciosHistoricalBaselineAdopter.CotizacionesBaselineId,
+                    DatabaseScopes.Cotizaciones,
+                    cotizacionesV2.ContractVersion,
+                    cotizacionesV2.ContractVersion,
+                    2,
+                    new[]
+                    {
+                        "dbo.Cotizaciones.IX_Cotizaciones_Empresa_Cliente",
+                        "dbo.CotizacionesPartidas.FK_CotizacionesPartidas_Cotizaciones"
+                    },
+                    CotizacionesSchemaContractFactory.BuildV2HistoricalObjectsReconciliationPreconditions(),
+                    new[]
+                    {
+                        "NO_DML_BUSINESS_ROWS",
+                        "PRESERVE_V2_COMMERCIAL_VERSION",
+                        "PRESERVE_EXISTING_V2_OBJECTS"
+                    },
+                    SchemaMigrationHash.Sha256(reconciliationSql),
+                    manifest.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    new[] { CotizacionesSchemaContractFactory.SupersededV2ManifestHash },
+                    "ReconcileAfterUncertainCommit",
+                    reconciliationSql,
+                    cotizacionesV2,
+                    supersededCotizacionesV2);
+
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.Cotizaciones,
+                        ProductosServiciosHistoricalBaselineAdopter.CotizacionesBaselineId,
+                        cotizacionesV1.ContractVersion,
+                        cotizacionesV2.ContractVersion,
+                        manifest.ManifestHash,
+                        new[] { migration.MigrationId, reconciliation.MigrationId }),
+                    new[] { migration, reconciliation });
+            }
+
+            if (string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract listaPreciosV1 = _contractProvider.GetContract(DatabaseScopes.ListaPrecios, ProductosServiciosSchemaContractProvider.V1);
+                SchemaContract listaPreciosV2 = _contractProvider.GetContract(DatabaseScopes.ListaPrecios, ProductosServiciosSchemaContractProvider.ListaPreciosLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(listaPreciosV2);
+                string listaPreciosMigrationSql = BuildListaPreciosV1ToV2Sql();
+                SchemaMigrationDefinition lpV1ToV2 = new(
+                    "LP-M20260929-V1-V2-COMERCIAL",
+                    "LP-B20260928",
+                    DatabaseScopes.ListaPrecios,
+                    listaPreciosV1.ContractVersion,
+                    listaPreciosV2.ContractVersion,
+                    1,
+                    new[]
+                    {
+                        "dbo.ListaPreciosDetalle.DescuentoPct",
+                        "dbo.ListaPreciosDetalle.RedondeoModo",
+                        "dbo.ListaPreciosDetalle.VigenciaInicio",
+                        "dbo.ListaPreciosDetalle.VigenciaFin",
+                        "dbo.ListaPreciosPromociones",
+                        "dbo.ListaPreciosHistorial"
+                    },
+                    BuildListaPreciosV1ToV2Preconditions(),
+                    new[]
+                    {
+                        "PRESERVE_V1_PRECIO_AND_ZERO",
+                        "NO_PRICE_FINAL_SOURCE_OF_TRUTH",
+                        "NO_LEGACY_P1_D1_COLUMNS",
+                        "NO_MONEDERO_FUNCTIONAL_SCHEMA"
+                    },
+                    SchemaMigrationHash.Sha256(listaPreciosMigrationSql),
+                    manifest.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    new[] { _manifestProvider.CreateManifest(listaPreciosV1).ManifestHash },
+                    "ReconcileAfterUncertainCommit",
+                    listaPreciosMigrationSql,
+                    listaPreciosV2,
+                    listaPreciosV1);
+
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.ListaPrecios,
+                        "LP-B20260928",
+                        listaPreciosV1.ContractVersion,
+                        ProductosServiciosSchemaContractProvider.ListaPreciosLatestVersion,
+                        manifest.ManifestHash,
+                        new[] { lpV1ToV2.MigrationId }),
+                    new[] { lpV1ToV2 });
+            }
+
             if (string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase))
             {
                 SchemaContract curvas = _contractProvider.GetContract(DatabaseScopes.Curvas, ProductosServiciosSchemaContractProvider.CurvasLatestVersion);
@@ -312,6 +455,13 @@ namespace checklistWs.Services.Tenant
                 throw new ArgumentOutOfRangeException(nameof(scope), scope, null);
             }
 
+            return ProductosServiciosSchemaContractProvider.LatestVersion == ProductosServiciosSchemaContractProvider.V3
+                ? GetPreparedProductosServiciosV3Package()
+                : BuildProductosServiciosV2Package();
+        }
+
+        private SchemaMigrationPackage BuildProductosServiciosV2Package()
+        {
             SchemaContract v1 = _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 1);
             SchemaContract v2 = _contractProvider.GetContract(DatabaseScopes.ProductosServicios, ProductosServiciosSchemaContractProvider.V2);
             SchemaManifest v2Manifest = _manifestProvider.CreateManifest(v2);
@@ -358,6 +508,81 @@ namespace checklistWs.Services.Tenant
                 new[] { v1ToV2 });
         }
 
+        /// <summary>
+        /// Paquete oficial V3 de ProductosServicios activado después de certificar
+        /// CHECKAPPERP y UMBRELLA mediante LP-QA05S3.
+        /// </summary>
+        public SchemaMigrationPackage GetPreparedProductosServiciosV3Package()
+        {
+            SchemaMigrationPackage activeV2Package = BuildProductosServiciosV2Package();
+            SchemaContract source = _contractProvider.GetContract(
+                DatabaseScopes.ProductosServicios,
+                ProductosServiciosComercialContractProposal.SourceVersion);
+            SchemaContract target = _contractProvider.GetContract(
+                DatabaseScopes.ProductosServicios,
+                ProductosServiciosComercialContractProposal.TargetVersion);
+            SchemaManifest sourceManifest = _manifestProvider.CreateManifest(source);
+            SchemaManifest targetManifest = _manifestProvider.CreateManifest(target);
+            string sql = ProductosServiciosComercialContractProposal.BuildV2ToV3Sql();
+
+            SchemaMigrationDefinition v2ToV3 = new(
+                ProductosServiciosComercialContractProposal.MigrationId,
+                activeV2Package.Release.BaselineId,
+                DatabaseScopes.ProductosServicios,
+                source.ContractVersion,
+                target.ContractVersion,
+                2,
+                new[]
+                {
+                    "dbo.ProductosServiciosIdentidadComercial",
+                    "dbo.ProductosServiciosIdentidadComercialHistorial"
+                },
+                BuildProductosServiciosV2ToV3ExecutablePreconditions(sourceManifest.ManifestHash),
+                ProductosServiciosComercialContractProposal.BuildV2ToV3DataPreconditions(),
+                SchemaMigrationHash.Sha256(sql),
+                targetManifest.ManifestHash,
+                "SingleTransaction",
+                "Medium",
+                true,
+                TimeSpan.FromMinutes(2),
+                new[] { sourceManifest.ManifestHash },
+                "ReconcileAfterUncertainCommit",
+                sql,
+                target,
+                source,
+                new[] { "086c8e7fe0aced219dda9e3937ac0ddc2299c27b202ec2827c5eeda3916b732d" });
+
+            return new SchemaMigrationPackage(
+                new SchemaReleaseManifest(
+                    DatabaseScopes.ProductosServicios,
+                    activeV2Package.Release.BaselineId,
+                    activeV2Package.Release.BaselineVersion,
+                    target.ContractVersion,
+                    targetManifest.ManifestHash,
+                    activeV2Package.Release.ApprovedMigrationIds.Concat(new[] { v2ToV3.MigrationId }).ToArray()),
+                activeV2Package.Migrations.Concat(new[] { v2ToV3 }).ToArray());
+        }
+
+        private static IReadOnlyCollection<string> BuildProductosServiciosV2ToV3ExecutablePreconditions(string sourceManifestHash) => new[]
+        {
+            $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM dbo.CheckAppSchemaState
+    WHERE Scope = N'{DatabaseScopes.ProductosServicios}'
+      AND CurrentVersion = {ProductosServiciosComercialContractProposal.SourceVersion}
+      AND ManifestHash = N'{sourceManifestHash}'
+) THEN 1 ELSE 0 END;",
+            @"SELECT CASE WHEN
+    OBJECT_ID(N'dbo.ProductosServicios', N'U') IS NOT NULL
+    AND OBJECT_ID(N'dbo.ProductosServiciosVariantes', N'U') IS NOT NULL
+    AND OBJECT_ID(N'dbo.ProductosServiciosPresentacionesVenta', N'U') IS NOT NULL
+THEN 1 ELSE 0 END;",
+            @"SELECT CASE WHEN
+    OBJECT_ID(N'dbo.ProductosServiciosIdentidadComercial', N'U') IS NULL
+    AND OBJECT_ID(N'dbo.ProductosServiciosIdentidadComercialHistorial', N'U') IS NULL
+THEN 1 ELSE 0 END;"
+        };
+
         private static string BuildOrdenesCompraV1ToV2Sql() => @"
 IF COL_LENGTH('dbo.OrdenesCompraPresentacionesCompra', 'PermiteCantidadBase') IS NULL
 BEGIN
@@ -365,6 +590,150 @@ BEGIN
         ADD PermiteCantidadBase bit NOT NULL
             CONSTRAINT DF_OrdenesCompraPresentacionesCompra_PermiteCantidadBase DEFAULT ((0));
 END";
+
+        private static IReadOnlyCollection<string> BuildListaPreciosV1ToV2Preconditions()
+        {
+            return new[]
+            {
+                TableExistsPrecondition("ListaPreciosListas"),
+                TableExistsPrecondition("ListaPreciosDetalle"),
+                ColumnExistsPrecondition("ListaPreciosDetalle", "Precio"),
+                ColumnMissingOrCompatiblePrecondition("ListaPreciosDetalle", "DescuentoPct"),
+                ColumnMissingOrCompatiblePrecondition("ListaPreciosDetalle", "RedondeoModo"),
+                ColumnMissingOrCompatiblePrecondition("ListaPreciosDetalle", "VigenciaInicio"),
+                ColumnMissingOrCompatiblePrecondition("ListaPreciosDetalle", "VigenciaFin"),
+                TableMissingOrCompatiblePrecondition("ListaPreciosPromociones"),
+                TableMissingOrCompatiblePrecondition("ListaPreciosHistorial")
+            };
+        }
+
+        private static string BuildListaPreciosV1ToV2Sql() => @"
+IF COL_LENGTH('dbo.ListaPreciosDetalle', 'DescuentoPct') IS NULL
+BEGIN
+    ALTER TABLE dbo.ListaPreciosDetalle ADD DescuentoPct decimal(5,2) NULL;
+END;
+
+IF COL_LENGTH('dbo.ListaPreciosDetalle', 'RedondeoModo') IS NULL
+BEGIN
+    ALTER TABLE dbo.ListaPreciosDetalle ADD RedondeoModo tinyint NOT NULL
+        CONSTRAINT DF_ListaPreciosDetalle_RedondeoModo DEFAULT ((0));
+END;
+
+IF COL_LENGTH('dbo.ListaPreciosDetalle', 'VigenciaInicio') IS NULL
+BEGIN
+    ALTER TABLE dbo.ListaPreciosDetalle ADD VigenciaInicio date NULL;
+END;
+
+IF COL_LENGTH('dbo.ListaPreciosDetalle', 'VigenciaFin') IS NULL
+BEGIN
+    ALTER TABLE dbo.ListaPreciosDetalle ADD VigenciaFin date NULL;
+END;
+
+IF OBJECT_ID(N'dbo.CK_ListaPreciosDetalle_DescuentoPct', N'C') IS NULL
+BEGIN
+    EXEC(N'ALTER TABLE dbo.ListaPreciosDetalle ADD CONSTRAINT CK_ListaPreciosDetalle_DescuentoPct CHECK (DescuentoPct IS NULL OR (DescuentoPct >= 0 AND DescuentoPct <= 100));');
+END;
+
+IF OBJECT_ID(N'dbo.CK_ListaPreciosDetalle_RedondeoModo', N'C') IS NULL
+BEGIN
+    EXEC(N'ALTER TABLE dbo.ListaPreciosDetalle ADD CONSTRAINT CK_ListaPreciosDetalle_RedondeoModo CHECK (RedondeoModo IN (0, 1, 2));');
+END;
+
+IF OBJECT_ID(N'dbo.CK_ListaPreciosDetalle_Vigencia', N'C') IS NULL
+BEGIN
+    EXEC(N'ALTER TABLE dbo.ListaPreciosDetalle ADD CONSTRAINT CK_ListaPreciosDetalle_Vigencia CHECK (VigenciaInicio IS NULL OR VigenciaFin IS NULL OR VigenciaInicio <= VigenciaFin);');
+END;
+
+IF OBJECT_ID(N'dbo.ListaPreciosPromociones', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ListaPreciosPromociones
+    (
+        id uniqueidentifier NOT NULL CONSTRAINT DF_ListaPreciosPromociones_id DEFAULT (NEWID()),
+        idEmpresa uniqueidentifier NOT NULL,
+        identityKey uniqueidentifier NOT NULL CONSTRAINT DF_ListaPreciosPromociones_identityKey DEFAULT (NEWID()),
+        idListaPrecio uniqueidentifier NOT NULL,
+        TipoPromocion tinyint NOT NULL,
+        TipoIdentidad tinyint NOT NULL,
+        idProductoServicio uniqueidentifier NOT NULL,
+        TipoProductoServicio tinyint NOT NULL,
+        idVariante uniqueidentifier NULL,
+        idPresentacionVenta uniqueidentifier NULL,
+        DescuentoSegundoPct decimal(5,2) NULL,
+        VigenciaInicio date NULL,
+        VigenciaFin date NULL,
+        Activo bit NOT NULL CONSTRAINT DF_ListaPreciosPromociones_Activo DEFAULT ((1)),
+        FechaCreacion datetime2(0) NOT NULL CONSTRAINT DF_ListaPreciosPromociones_FechaCreacion DEFAULT (SYSUTCDATETIME()),
+        FechaActualizacion datetime2(0) NOT NULL CONSTRAINT DF_ListaPreciosPromociones_FechaActualizacion DEFAULT (SYSUTCDATETIME()),
+        FechaArchivado datetime2(0) NULL,
+        idUsuarioCreacion uniqueidentifier NULL,
+        idUsuarioActualizacion uniqueidentifier NULL,
+        idUsuarioArchivado uniqueidentifier NULL,
+        CONSTRAINT PK_ListaPreciosPromociones PRIMARY KEY CLUSTERED (id),
+        CONSTRAINT CK_ListaPreciosPromociones_TipoPromocion CHECK (TipoPromocion IN (1, 2, 3)),
+        CONSTRAINT CK_ListaPreciosPromociones_TipoIdentidad CHECK (TipoIdentidad IN (1, 2, 3, 4)),
+        CONSTRAINT CK_ListaPreciosPromociones_TipoProductoServicio CHECK (TipoProductoServicio IN (1, 2)),
+        CONSTRAINT CK_ListaPreciosPromociones_Identidad CHECK ((TipoIdentidad = 1 AND TipoProductoServicio = 1 AND idVariante IS NULL AND idPresentacionVenta IS NULL) OR (TipoIdentidad = 2 AND TipoProductoServicio = 2 AND idVariante IS NULL AND idPresentacionVenta IS NULL) OR (TipoIdentidad = 3 AND TipoProductoServicio = 1 AND idVariante IS NOT NULL AND idPresentacionVenta IS NULL) OR (TipoIdentidad = 4 AND TipoProductoServicio = 1 AND idVariante IS NULL AND idPresentacionVenta IS NOT NULL)),
+        CONSTRAINT CK_ListaPreciosPromociones_DescuentoSegundo CHECK ((TipoPromocion = 3 AND DescuentoSegundoPct IS NOT NULL AND DescuentoSegundoPct >= 0 AND DescuentoSegundoPct <= 100) OR (TipoPromocion IN (1, 2) AND DescuentoSegundoPct IS NULL)),
+        CONSTRAINT CK_ListaPreciosPromociones_Vigencia CHECK (VigenciaInicio IS NULL OR VigenciaFin IS NULL OR VigenciaInicio <= VigenciaFin),
+        CONSTRAINT CK_ListaPreciosPromociones_Archivado CHECK ((Activo = 1 AND FechaArchivado IS NULL AND idUsuarioArchivado IS NULL) OR (Activo = 0 AND FechaArchivado IS NOT NULL))
+    );
+END;
+
+IF OBJECT_ID(N'dbo.ListaPreciosHistorial', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ListaPreciosHistorial
+    (
+        id uniqueidentifier NOT NULL CONSTRAINT DF_ListaPreciosHistorial_id DEFAULT (NEWID()),
+        idEmpresa uniqueidentifier NOT NULL,
+        idListaPrecio uniqueidentifier NULL,
+        TipoIdentidad tinyint NULL,
+        idProductoServicio uniqueidentifier NULL,
+        idVariante uniqueidentifier NULL,
+        idPresentacionVenta uniqueidentifier NULL,
+        Campo nvarchar(60) NOT NULL,
+        Operacion nvarchar(40) NOT NULL,
+        ValorAnterior nvarchar(4000) NULL,
+        ValorNuevo nvarchar(4000) NULL,
+        idUsuario uniqueidentifier NULL,
+        Usuario nvarchar(256) NULL,
+        Origen nvarchar(40) NOT NULL,
+        CorrelationId uniqueidentifier NOT NULL CONSTRAINT DF_ListaPreciosHistorial_CorrelationId DEFAULT (NEWID()),
+        Motivo nvarchar(500) NULL,
+        FechaUtc datetime2(0) NOT NULL CONSTRAINT DF_ListaPreciosHistorial_FechaUtc DEFAULT (SYSUTCDATETIME()),
+        CONSTRAINT PK_ListaPreciosHistorial PRIMARY KEY CLUSTERED (id),
+        CONSTRAINT CK_ListaPreciosHistorial_TipoIdentidad CHECK (TipoIdentidad IS NULL OR TipoIdentidad IN (1, 2, 3, 4)),
+        CONSTRAINT CK_ListaPreciosHistorial_Origen CHECK (Origen IN (N'INDIVIDUAL', N'MASIVO', N'COPIA_LISTA', N'DESCUENTO_MARCA', N'PROMOCION', N'SISTEMA'))
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ListaPreciosPromociones_Empresa_Id' AND object_id = OBJECT_ID(N'dbo.ListaPreciosPromociones'))
+    EXEC(N'CREATE UNIQUE NONCLUSTERED INDEX UX_ListaPreciosPromociones_Empresa_Id ON dbo.ListaPreciosPromociones (idEmpresa, id);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ListaPreciosPromociones_Empresa_Lista_Tipo_Identidad_Activo' AND object_id = OBJECT_ID(N'dbo.ListaPreciosPromociones'))
+    EXEC(N'CREATE UNIQUE NONCLUSTERED INDEX UX_ListaPreciosPromociones_Empresa_Lista_Tipo_Identidad_Activo ON dbo.ListaPreciosPromociones (idEmpresa, idListaPrecio, TipoPromocion, TipoIdentidad, idProductoServicio, idVariante, idPresentacionVenta) WHERE Activo = 1 AND FechaArchivado IS NULL;');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ListaPreciosPromociones_Empresa_Lista' AND object_id = OBJECT_ID(N'dbo.ListaPreciosPromociones'))
+    EXEC(N'CREATE NONCLUSTERED INDEX IX_ListaPreciosPromociones_Empresa_Lista ON dbo.ListaPreciosPromociones (idEmpresa, idListaPrecio);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ListaPreciosPromociones_Empresa_Producto' AND object_id = OBJECT_ID(N'dbo.ListaPreciosPromociones'))
+    EXEC(N'CREATE NONCLUSTERED INDEX IX_ListaPreciosPromociones_Empresa_Producto ON dbo.ListaPreciosPromociones (idEmpresa, idProductoServicio);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ListaPreciosPromociones_Empresa_Activo' AND object_id = OBJECT_ID(N'dbo.ListaPreciosPromociones'))
+    EXEC(N'CREATE NONCLUSTERED INDEX IX_ListaPreciosPromociones_Empresa_Activo ON dbo.ListaPreciosPromociones (idEmpresa, Activo);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_ListaPreciosHistorial_Empresa_Id' AND object_id = OBJECT_ID(N'dbo.ListaPreciosHistorial'))
+    EXEC(N'CREATE UNIQUE NONCLUSTERED INDEX UX_ListaPreciosHistorial_Empresa_Id ON dbo.ListaPreciosHistorial (idEmpresa, id);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ListaPreciosHistorial_Empresa_Fecha' AND object_id = OBJECT_ID(N'dbo.ListaPreciosHistorial'))
+    EXEC(N'CREATE NONCLUSTERED INDEX IX_ListaPreciosHistorial_Empresa_Fecha ON dbo.ListaPreciosHistorial (idEmpresa, FechaUtc);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ListaPreciosHistorial_Empresa_Correlation' AND object_id = OBJECT_ID(N'dbo.ListaPreciosHistorial'))
+    EXEC(N'CREATE NONCLUSTERED INDEX IX_ListaPreciosHistorial_Empresa_Correlation ON dbo.ListaPreciosHistorial (idEmpresa, CorrelationId);');
+
+IF OBJECT_ID(N'dbo.FK_ListaPreciosPromociones_Listas_EmpresaId', N'F') IS NULL
+    EXEC(N'ALTER TABLE dbo.ListaPreciosPromociones ADD CONSTRAINT FK_ListaPreciosPromociones_Listas_EmpresaId FOREIGN KEY (idEmpresa, idListaPrecio) REFERENCES dbo.ListaPreciosListas (idEmpresa, id);');
+IF OBJECT_ID(N'dbo.FK_ListaPreciosPromociones_ProductosServicios_EmpresaId', N'F') IS NULL
+    EXEC(N'ALTER TABLE dbo.ListaPreciosPromociones ADD CONSTRAINT FK_ListaPreciosPromociones_ProductosServicios_EmpresaId FOREIGN KEY (idEmpresa, idProductoServicio) REFERENCES dbo.ProductosServicios (idEmpresa, id);');
+IF OBJECT_ID(N'dbo.FK_ListaPreciosPromociones_Variantes_EmpresaId', N'F') IS NULL
+    EXEC(N'ALTER TABLE dbo.ListaPreciosPromociones ADD CONSTRAINT FK_ListaPreciosPromociones_Variantes_EmpresaId FOREIGN KEY (idEmpresa, idVariante) REFERENCES dbo.ProductosServiciosVariantes (idEmpresa, id);');
+IF OBJECT_ID(N'dbo.FK_ListaPreciosPromociones_PresentacionesVenta_EmpresaId', N'F') IS NULL
+    EXEC(N'ALTER TABLE dbo.ListaPreciosPromociones ADD CONSTRAINT FK_ListaPreciosPromociones_PresentacionesVenta_EmpresaId FOREIGN KEY (idEmpresa, idPresentacionVenta) REFERENCES dbo.ProductosServiciosPresentacionesVenta (idEmpresa, id);');
+IF OBJECT_ID(N'dbo.FK_ListaPreciosHistorial_Listas_EmpresaId', N'F') IS NULL
+    EXEC(N'ALTER TABLE dbo.ListaPreciosHistorial ADD CONSTRAINT FK_ListaPreciosHistorial_Listas_EmpresaId FOREIGN KEY (idEmpresa, idListaPrecio) REFERENCES dbo.ListaPreciosListas (idEmpresa, id);');";
 
         private static IReadOnlyCollection<string> BuildV1ToV2Preconditions()
         {
@@ -432,6 +801,41 @@ END";
     WHERE s.name = N'dbo'
       AND t.name = N'{table}'
       AND c.name = N'Descripcion'
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string TableExistsPrecondition(string table)
+        {
+            return $@"SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.tables t
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string TableMissingOrCompatiblePrecondition(string table)
+        {
+            return $@"SELECT CASE WHEN NOT EXISTS (
+    SELECT 1
+    FROM sys.tables t
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+) THEN 1 ELSE 0 END;";
+        }
+
+        private static string ColumnMissingOrCompatiblePrecondition(string table, string column)
+        {
+            return $@"SELECT CASE WHEN NOT EXISTS (
+    SELECT 1
+    FROM sys.columns c
+    INNER JOIN sys.tables t ON t.object_id = c.object_id
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE s.name = N'dbo'
+      AND t.name = N'{table}'
+      AND c.name = N'{column}'
 ) THEN 1 ELSE 0 END;";
         }
 

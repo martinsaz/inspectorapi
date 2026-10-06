@@ -44,7 +44,7 @@ namespace checklistWs.Services.Tenant
                 return NotAllowed(initialClassification);
             }
 
-            SchemaContract contract = _contractProvider.GetContract(scope);
+            SchemaContract contract = _contractProvider.GetContract(scope, ResolveBootstrapVersion(scope));
             SchemaManifest manifest = _manifestProvider.CreateManifest(contract);
 
             try
@@ -194,7 +194,16 @@ namespace checklistWs.Services.Tenant
                 string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int? ResolveBootstrapVersion(string scope)
+        {
+            return string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase)
+                ? ProductosServiciosSchemaContractProvider.V1
+                : null;
         }
 
         private static SchemaProvisionResult NotAllowed(DatabaseClassificationResult classification)

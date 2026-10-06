@@ -33,13 +33,14 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void ContractVersion_DefaultIsLatestAndV1RemainsAvailable()
+        public void ContractVersion_DefaultIsActiveV3()
         {
             SchemaContract contract = Contract();
 
             Assert.Equal(ProductosServiciosSchemaContractProvider.LatestVersion, contract.ContractVersion);
             Assert.Equal(1, _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 1).ContractVersion);
-            Assert.Throws<InvalidOperationException>(() => _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 3));
+            Assert.Equal(3, _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 3).ContractVersion);
+            Assert.Throws<InvalidOperationException>(() => _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 4));
         }
 
         [Fact]
@@ -49,7 +50,7 @@ namespace checklistWs.Tests.Services.Tenant
             IReadOnlyCollection<string> expected = new ProductScopeInventory().GetExpectedTables(DatabaseScopes.ProductosServicios);
 
             Assert.Equal(expected.OrderBy(x => x), contract.Tables.Select(t => t.FullName).OrderBy(x => x));
-            Assert.Equal(20, contract.Tables.Count);
+            Assert.Equal(22, contract.Tables.Count);
         }
 
         [Fact]
@@ -190,7 +191,7 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void RuntimeV1Contract_IsRepeatableAfterCallerSideProjectionMutation()
+        public void RuntimeV3Contract_IsRepeatableAfterCallerSideProjectionMutation()
         {
             SchemaContract first = Contract();
             SchemaContract callerSideChanged = ReplaceFirstTable(first, table => table with { Name = table.Name + "Changed" });
@@ -198,7 +199,7 @@ namespace checklistWs.Tests.Services.Tenant
 
             SchemaContract second = Contract();
 
-            Assert.Equal(20, second.Tables.Count);
+            Assert.Equal(22, second.Tables.Count);
             Assert.DoesNotContain(second.Tables, table => table.Name.EndsWith("Changed", StringComparison.Ordinal));
             Assert.Equal(Manifest(first).ManifestHash, Manifest(second).ManifestHash);
         }

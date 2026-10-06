@@ -290,14 +290,15 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void RealProductosServiciosPackage_DeclaresApprovedV2Migration()
+        public void RealProductosServiciosPackage_DeclaresApprovedV3Chain()
         {
             var provider = new ProductosServiciosMigrationPackageProvider(new ProductosServiciosSchemaContractProvider(), new SchemaManifestProvider());
 
             SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(2, package.Release.LatestSchemaVersion);
-            SchemaMigrationDefinition migration = Assert.Single(package.Migrations);
+            Assert.Equal(3, package.Release.LatestSchemaVersion);
+            Assert.Equal(2, package.Migrations.Count);
+            SchemaMigrationDefinition migration = package.Migrations.Single(x => x.MigrationId == "PS-M20260916-V1-V2-DESCRIPCIONES-NVARCHAR-MAX");
             Assert.Equal(1, migration.FromVersion);
             Assert.Equal(2, migration.ToVersion);
             Assert.Equal("PS-M20260916-V1-V2-DESCRIPCIONES-NVARCHAR-MAX", migration.MigrationId);
@@ -309,6 +310,9 @@ namespace checklistWs.Tests.Services.Tenant
             }, migration.ObjectsAffected);
             Assert.Equal(3, CountOccurrences(migration.UpSql, "ALTER COLUMN [Descripcion] NVARCHAR(MAX) NULL"));
             Assert.DoesNotContain("ProductosServiciosUnidadesMedida", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            SchemaMigrationDefinition v3 = package.Migrations.Single(x => x.MigrationId == ProductosServiciosComercialContractProposal.MigrationId);
+            Assert.Equal(2, v3.FromVersion);
+            Assert.Equal(3, v3.ToVersion);
         }
 
         [Fact]
@@ -329,6 +333,27 @@ namespace checklistWs.Tests.Services.Tenant
             Assert.Contains("DEFAULT ((0))", migration.UpSql, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("PresentacionesVenta", migration.UpSql, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(migration.TargetManifestHash, package.Release.LatestManifestHash);
+        }
+
+        [Fact]
+        public void RealListaPreciosPackage_UsesExecutableDependentBatches()
+        {
+            var provider = new ProductosServiciosMigrationPackageProvider(new ProductosServiciosSchemaContractProvider(), new SchemaManifestProvider());
+
+            SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.ListaPrecios);
+
+            Assert.Equal(2, package.Release.LatestSchemaVersion);
+            Assert.Equal("e7a388ec985a19fb2b3beb73e8c2cf28d5dda17d3f3bb2f0363683c166092882", package.Release.LatestManifestHash);
+            SchemaMigrationDefinition migration = Assert.Single(package.Migrations);
+            Assert.Equal("LP-M20260929-V1-V2-COMERCIAL", migration.MigrationId);
+            Assert.DoesNotContain("\nGO", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("ADD DescuentoPct decimal(5,2) NULL", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("EXEC(N'ALTER TABLE dbo.ListaPreciosDetalle ADD CONSTRAINT CK_ListaPreciosDetalle_DescuentoPct", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("EXEC(N'ALTER TABLE dbo.ListaPreciosDetalle ADD CONSTRAINT CK_ListaPreciosDetalle_RedondeoModo", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("EXEC(N'ALTER TABLE dbo.ListaPreciosDetalle ADD CONSTRAINT CK_ListaPreciosDetalle_Vigencia", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("EXEC(N'CREATE UNIQUE NONCLUSTERED INDEX UX_ListaPreciosPromociones_Empresa_Id", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("EXEC(N'ALTER TABLE dbo.ListaPreciosPromociones ADD CONSTRAINT FK_ListaPreciosPromociones_Listas_EmpresaId", migration.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(SchemaMigrationHash.Sha256(migration.UpSql), migration.SqlHash);
         }
 
         [Fact]
@@ -389,6 +414,105 @@ namespace checklistWs.Tests.Services.Tenant
             SchemaMigrationExecutionResult result = await harness.Runner.MigrateToLatestAsync(Descriptor, Identity, DatabaseScopes.ProductosServicios);
 
             Assert.Equal("MIGRATION_NOT_ALLOWED_EMPTY_BOOTSTRAP_REQUIRED", result.ReasonCode);
+            Assert.Equal(0, harness.ExecutorExecutionCount);
+        }
+
+        [Fact]
+        public async Task PartialScope_WithConfirmedSourceVersionAndHash_AppliesApprovedMigration()
+        {
+            string sourceHash = HashContract(1);
+            SchemaMigrationDefinition migration = M(1, 2) with { Dependencies = new[] { sourceHash }, SourceContract = Contract(1) };
+            Harness harness = new(Package(migration))
+            {
+                ClassificationState = DatabaseStructureState.Partial
+            };
+            harness.Repository.State = State(1, sourceHash);
+
+            SchemaMigrationExecutionResult result = await harness.Runner.MigrateToLatestAsync(Descriptor, Identity, DatabaseScopes.ProductosServicios);
+
+            Assert.Equal(SchemaMigrationExecutionStatus.Migrated, result.Status);
+            Assert.Equal(1, harness.ExecutorExecutionCount);
+            Assert.Equal(2, harness.Repository.State!.CurrentVersion);
+        }
+
+        [Fact]
+        public async Task SameVersionReconciliation_WithAuthorizedSupersededHash_AppliesOnceAndUpdatesManifest()
+        {
+            string supersededHash = new string('b', 64);
+            SchemaMigrationDefinition reconciliation = M(2, 2) with
+            {
+                Dependencies = new[] { supersededHash },
+                SourceContract = Contract(2)
+            };
+            Harness harness = new(Package(reconciliation))
+            {
+                ClassificationState = DatabaseStructureState.Partial
+            };
+            harness.Repository.State = State(2, supersededHash);
+
+            SchemaMigrationExecutionResult first = await harness.Runner.MigrateToLatestAsync(Descriptor, Identity, DatabaseScopes.ProductosServicios);
+            harness.ClassificationState = DatabaseStructureState.Current;
+            SchemaMigrationExecutionResult second = await harness.Runner.MigrateToLatestAsync(Descriptor, Identity, DatabaseScopes.ProductosServicios);
+
+            Assert.Equal(SchemaMigrationExecutionStatus.Migrated, first.Status);
+            Assert.Equal(2, harness.Repository.State!.CurrentVersion);
+            Assert.Equal(reconciliation.TargetManifestHash, harness.Repository.State.ManifestHash);
+            Assert.Equal(SchemaMigrationExecutionStatus.NoProvision, second.Status);
+            Assert.Equal(1, harness.ExecutorExecutionCount);
+            Assert.Single(harness.Repository.History, item => item.OperationId == reconciliation.MigrationId && item.Result == "PASS");
+        }
+
+        [Fact]
+        public async Task PartialScope_WithUnexpectedSourceHash_RequiresReview()
+        {
+            SchemaMigrationDefinition migration = M(1, 2) with { Dependencies = new[] { HashContract(1) }, SourceContract = Contract(1) };
+            Harness harness = new(Package(migration))
+            {
+                ClassificationState = DatabaseStructureState.Partial
+            };
+            harness.Repository.State = State(1, "0000000000000000000000000000000000000000000000000000000000000000");
+
+            SchemaMigrationExecutionResult result = await harness.Runner.MigrateToLatestAsync(Descriptor, Identity, DatabaseScopes.ProductosServicios);
+
+            Assert.Equal(SchemaMigrationExecutionStatus.RequiresReview, result.Status);
+            Assert.Equal("REQUIERE_REVISION", result.ReasonCode);
+            Assert.Equal(0, harness.ExecutorExecutionCount);
+        }
+
+        [Fact]
+        public async Task PartialScope_WithUnexpectedSourceVersion_RequiresReview()
+        {
+            string sourceHash = HashContract(1);
+            SchemaMigrationDefinition migration = M(1, 2) with { Dependencies = new[] { sourceHash }, SourceContract = Contract(1) };
+            Harness harness = new(Package(migration))
+            {
+                ClassificationState = DatabaseStructureState.Partial
+            };
+            harness.Repository.State = State(3, sourceHash);
+
+            SchemaMigrationExecutionResult result = await harness.Runner.MigrateToLatestAsync(Descriptor, Identity, DatabaseScopes.ProductosServicios);
+
+            Assert.Equal(SchemaMigrationExecutionStatus.RequiresReview, result.Status);
+            Assert.Equal("VERSION_FUTURA_REQUIERE_REVISION", result.ReasonCode);
+            Assert.Equal(0, harness.ExecutorExecutionCount);
+        }
+
+        [Fact]
+        public async Task PartialScope_WithSourceDrift_RequiresReview()
+        {
+            string sourceHash = HashContract(1);
+            SchemaMigrationDefinition migration = M(1, 2) with { Dependencies = new[] { sourceHash }, SourceContract = Contract(1) };
+            Harness harness = new(Package(migration))
+            {
+                ClassificationState = DatabaseStructureState.Partial,
+                SourceValidationFails = true
+            };
+            harness.Repository.State = State(1, sourceHash);
+
+            SchemaMigrationExecutionResult result = await harness.Runner.MigrateToLatestAsync(Descriptor, Identity, DatabaseScopes.ProductosServicios);
+
+            Assert.Equal(SchemaMigrationExecutionStatus.RequiresReview, result.Status);
+            Assert.Equal("REQUIERE_REVISION", result.ReasonCode);
             Assert.Equal(0, harness.ExecutorExecutionCount);
         }
 
@@ -514,7 +638,7 @@ namespace checklistWs.Tests.Services.Tenant
         {
             private readonly FakePackageProvider _packageProvider;
             private readonly FakeClassifier _classifier;
-            private readonly FakeValidator _validator = new();
+            private readonly FakeValidator _validator;
             private readonly FakeLock _lock;
             private readonly FakeExecutor _executor;
 
@@ -523,6 +647,7 @@ namespace checklistWs.Tests.Services.Tenant
                 _packageProvider = new FakePackageProvider(package);
                 Repository = new FakeRepository { State = State(1, package.Release.LatestManifestHash) };
                 _classifier = new FakeClassifier(this);
+                _validator = new FakeValidator(this);
                 _lock = new FakeLock(this);
                 _executor = new FakeExecutor(this);
                 Runner = new SchemaMigrationRunner(_classifier, Repository, _packageProvider, new SchemaMigrationResolver(), _executor, _lock, _validator);
@@ -531,8 +656,9 @@ namespace checklistWs.Tests.Services.Tenant
             public FakeRepository Repository { get; }
             public SchemaMigrationRunner Runner { get; }
             public ExecutorMode ExecutorMode { get; init; }
-            public DatabaseStructureState ClassificationState { get; init; } = DatabaseStructureState.Current;
+            public DatabaseStructureState ClassificationState { get; set; } = DatabaseStructureState.Current;
             public bool LockThrows { get; init; }
+            public bool SourceValidationFails { get; init; }
             public int InitialVersion { get => Repository.State?.CurrentVersion ?? 1; init => Repository.State = State(value, _packageProvider.Package.Release.LatestManifestHash); }
             public int AppliedDdlCount { get; set; }
             public int ExecutorExecutionCount { get; set; }
@@ -588,8 +714,17 @@ namespace checklistWs.Tests.Services.Tenant
 
             private sealed class FakeValidator : ISchemaContractPhysicalValidator
             {
+                private readonly Harness _harness;
+
+                public FakeValidator(Harness harness) => _harness = harness;
+
                 public Task<SchemaContractValidationResult> ValidateAsync(TenantDatabaseDescriptor descriptor, SchemaContract contract, CancellationToken cancellationToken = default)
                 {
+                    if (_harness.SourceValidationFails && contract.ContractVersion == 1)
+                    {
+                        return Task.FromResult(new SchemaContractValidationResult { Discrepancies = new[] { "COLUMN_MISSING dbo.ProductosServicios.id" } });
+                    }
+
                     return Task.FromResult(new SchemaContractValidationResult { DetectedTables = contract.Tables.Count });
                 }
             }

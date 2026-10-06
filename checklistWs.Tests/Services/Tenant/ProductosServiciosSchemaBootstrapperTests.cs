@@ -36,43 +36,43 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesTwentyTables()
+        public async Task EmptyScope_CreatesTwentyTwoTables()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(20, result.TablesCreated);
+            Assert.Equal(22, result.TablesCreated);
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesTwoHundredFiftyFiveColumns()
+        public async Task EmptyScope_CreatesTwoHundredNinetyFourColumns()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(255, result.ColumnsCreated);
+            Assert.Equal(294, result.ColumnsCreated);
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesFiftyIndexes()
+        public async Task EmptyScope_CreatesSixtyTwoIndexes()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(50, result.IndexesCreated);
+            Assert.Equal(62, result.IndexesCreated);
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesTwentyFourForeignKeys()
+        public async Task EmptyScope_CreatesThirtyForeignKeys()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(24, result.ForeignKeysCreated);
+            Assert.Equal(30, result.ForeignKeysCreated);
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesFourteenChecks()
+        public async Task EmptyScope_CreatesTwentyTwoChecks()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(14, result.ChecksCreated);
+            Assert.Equal(22, result.ChecksCreated);
         }
 
         [Fact]
@@ -327,6 +327,111 @@ namespace checklistWs.Tests.Services.Tenant
             Assert.Equal(new SchemaManifestProvider().CreateManifest(Contract()).ManifestHash, harness.Repository.States.Single().ManifestHash);
         }
 
+        [Fact]
+        public async Task CotBoot01_EmptyAuthorizedContext_ProvisionsV1()
+        {
+            Harness harness = new();
+
+            SchemaProvisionResult result = await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.Cotizaciones);
+
+            Assert.Equal(SchemaProvisionResultStatus.Provisioned, result.Status);
+            Assert.Equal("PROVISIONED", result.ReasonCode);
+            Assert.Equal(ProductosServiciosSchemaContractProvider.V1, result.ContractVersion);
+            Assert.Equal(2, result.TablesCreated);
+        }
+
+        [Fact]
+        public async Task CotBoot02_ResultingContract_IsExactOfficialV1()
+        {
+            Harness harness = new();
+
+            await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.Cotizaciones);
+
+            SchemaContract contract = Assert.IsType<SchemaContract>(harness.Executor.LastContract);
+            Assert.Equal(DatabaseScopes.Cotizaciones, contract.Scope);
+            Assert.Equal(1, contract.ContractVersion);
+            Assert.Equal(new[] { "Cotizaciones", "CotizacionesPartidas" }, contract.Tables.Select(table => table.Name));
+            Assert.Equal(new[] { 26, 26 }, contract.Tables.Select(table => table.Columns.Count));
+            Assert.All(contract.Tables, table => Assert.Empty(table.CheckConstraints));
+            Assert.Contains(contract.Tables.Single(table => table.Name == "Cotizaciones").Indexes, index => index.Name == "IX_Cotizaciones_Empresa_Cliente");
+            Assert.Contains(contract.Tables.Single(table => table.Name == "CotizacionesPartidas").ForeignKeys, fk => fk.Name == "FK_CotizacionesPartidas_Cotizaciones");
+        }
+
+        [Fact]
+        public async Task CotBoot03_StateAndManifest_AreOfficialV1()
+        {
+            Harness harness = new();
+
+            SchemaProvisionResult result = await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.Cotizaciones);
+
+            SchemaControlState state = Assert.Single(harness.Repository.States);
+            Assert.Equal(1, state.CurrentVersion);
+            Assert.Equal("ae905dfc622135c5858fdf2c551287b38193fe3f92d4ccbe61eec374a1deb9b8", state.ManifestHash);
+            Assert.Equal(state.ManifestHash, result.ManifestHash);
+        }
+
+        [Fact]
+        public async Task CotBoot04_ValidatedV1_WritesStateOnlyAfterPhysicalPass()
+        {
+            Harness harness = new();
+
+            await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.Cotizaciones);
+
+            Assert.True(harness.Repository.StateWrittenAfterExecutor);
+            Assert.Equal(1, harness.Executor.ProvisionCalls);
+            Assert.Equal("PASS", Assert.Single(harness.Repository.Attempts).Result);
+            Assert.Single(harness.Repository.History, item => item.EventType == "PROVISIONED" && item.Result == "PASS");
+        }
+
+        [Fact]
+        public async Task CotBoot05_SecondBootstrap_DoesNotRecreateObjects()
+        {
+            Harness harness = new();
+
+            await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.Cotizaciones);
+            SchemaProvisionResult second = await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.Cotizaciones);
+
+            Assert.Equal(SchemaProvisionResultStatus.NoProvision, second.Status);
+            Assert.Equal("PROVISION_NOT_ALLOWED_PARTIAL", second.ReasonCode);
+            Assert.Equal(1, harness.Executor.ProvisionCalls);
+            Assert.Single(harness.Repository.History);
+        }
+
+        [Fact]
+        public async Task CotBoot10_MissingIdentity_RemainsFailClosed()
+        {
+            Harness harness = new();
+
+            SchemaProvisionResult result = await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, null!, DatabaseScopes.Cotizaciones);
+
+            Assert.Equal(SchemaProvisionResultStatus.NoProvision, result.Status);
+            Assert.Equal("PROVISION_NOT_ALLOWED_INVALID_CONTEXT", result.ReasonCode);
+            Assert.Equal(0, harness.Executor.ProvisionCalls);
+        }
+
+        [Fact]
+        public async Task CotBoot11_UnknownScope_IsRejected()
+        {
+            Harness harness = new();
+
+            SchemaProvisionResult result = await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, "UNKNOWN_SCOPE");
+
+            Assert.Equal(SchemaProvisionResultStatus.NoProvision, result.Status);
+            Assert.Equal("PROVISION_NOT_ALLOWED_INVALID_CONTEXT", result.ReasonCode);
+            Assert.Equal(0, harness.Executor.ProvisionCalls);
+        }
+
+        [Fact]
+        public async Task CotBoot12_OtherScopes_KeepLatestBootstrapBehavior()
+        {
+            Harness harness = new();
+
+            SchemaProvisionResult result = await harness.Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ListaPrecios);
+
+            Assert.Equal(SchemaProvisionResultStatus.Provisioned, result.Status);
+            Assert.Equal(ProductosServiciosSchemaContractProvider.ListaPreciosLatestVersion, result.ContractVersion);
+        }
+
         private static SchemaContract Contract() => new ProductosServiciosSchemaContractProvider().GetContract(DatabaseScopes.ProductosServicios);
 
         private sealed class Harness
@@ -374,10 +479,12 @@ namespace checklistWs.Tests.Services.Tenant
 
             public int ProvisionCalls => _calls;
             public int BusinessSeedRowsInserted { get; private set; }
+            public SchemaContract? LastContract { get; private set; }
 
             public async Task<SchemaProvisionExecutionResult> ProvisionAsync(TenantDatabaseDescriptor descriptor, DatabaseIdentity identity, SchemaContract contract, SchemaManifest manifest, CancellationToken cancellationToken = default)
             {
                 Interlocked.Increment(ref _calls);
+                LastContract = contract;
                 if (_mode.DelayMs > 0)
                 {
                     await Task.Delay(_mode.DelayMs, cancellationToken);
@@ -490,9 +597,16 @@ namespace checklistWs.Tests.Services.Tenant
                 lock (_sync)
                 {
                     if (_partialResidues.Contains(Key(identity, scope))) return DatabaseStructureState.Partial;
-                    return _states.TryGetValue(Key(identity, scope), out SchemaControlState? state) && state.CurrentVersion == ProductosServiciosSchemaContractProvider.LatestVersion
+                    if (!_states.TryGetValue(Key(identity, scope), out SchemaControlState? state)) return null;
+                    if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase) &&
+                        state.CurrentVersion == ProductosServiciosSchemaContractProvider.V1)
+                    {
+                        return DatabaseStructureState.Partial;
+                    }
+
+                    return state.CurrentVersion == new KnownSchemaVersionProvider().GetKnownCurrentVersion(scope)
                         ? DatabaseStructureState.Current
-                        : null;
+                        : DatabaseStructureState.Outdated;
                 }
             }
 
@@ -594,7 +708,7 @@ namespace checklistWs.Tests.Services.Tenant
             {
                 lock (_sync)
                 {
-                    if (state.CurrentVersion == ProductosServiciosSchemaContractProvider.LatestVersion) StateWrittenAfterExecutor = true;
+                    if (state.CurrentVersion != null) StateWrittenAfterExecutor = true;
                     _states[Key(state.DatabaseIdentityKey, state.Scope)] = state;
                 }
 

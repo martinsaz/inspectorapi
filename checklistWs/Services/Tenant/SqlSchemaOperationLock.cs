@@ -143,6 +143,11 @@ namespace checklistWs.Services.Tenant
                 return DatabaseScopes.Curvas;
             }
 
+            if (string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase))
+            {
+                return DatabaseScopes.ListaPrecios;
+            }
+
             return Regex.Replace(scope ?? string.Empty, @"[^A-Za-z0-9_\-]", string.Empty);
         }
 

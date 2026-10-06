@@ -36,32 +36,25 @@ namespace checklistWs.Services.Tenant
                 using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
                 await connection.OpenAsync(cancellationToken);
 
-                using SqlCommand command = new SqlCommand(@"
+                string[] tableNames = expectedTables
+                    .Select(GetUnqualifiedTableName)
+                    .ToArray();
+                string tableParameters = string.Join(", ", tableNames.Select((_, index) => $"@Table{index + 1:00}"));
+
+                using SqlCommand command = new SqlCommand($@"
 SELECT
     s.name AS SchemaName,
     t.name AS TableName
 FROM sys.tables t
 INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
 WHERE s.name = @SchemaName
-  AND t.name IN (
-    @Table01, @Table02, @Table03, @Table04, @Table05,
-    @Table06, @Table07, @Table08, @Table09, @Table10,
-    @Table11, @Table12, @Table13, @Table14, @Table15,
-    @Table16, @Table17, @Table18, @Table19, @Table20
-  );", connection);
+  AND t.name IN ({tableParameters});", connection);
 
                 command.Parameters.AddWithValue("@SchemaName", "dbo");
 
-                string[] tableNames = expectedTables
-                    .Select(GetUnqualifiedTableName)
-                    .ToArray();
-
-                for (int i = 0; i < 20; i++)
+                for (int i = 0; i < tableNames.Length; i++)
                 {
-                    string tableName = i < tableNames.Length
-                        ? tableNames[i]
-                        : $"__CheckAppScopeUnused{i + 1:00}";
-                    command.Parameters.AddWithValue($"@Table{i + 1:00}", tableName);
+                    command.Parameters.AddWithValue($"@Table{i + 1:00}", tableNames[i]);
                 }
 
                 List<string> existing = new();

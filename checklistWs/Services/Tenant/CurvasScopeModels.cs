@@ -33,6 +33,62 @@ namespace checklistWs.Services.Tenant
         public Guid? UsuarioId { get; set; }
     }
 
+    public sealed class CurvasSiembraSucursalDto
+    {
+        public Guid Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+    }
+
+    public sealed class CurvasSiembraCurvaDto
+    {
+        public Guid Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public int Renglones { get; set; }
+        public decimal CantidadObjetivo { get; set; }
+    }
+
+    public sealed class CurvasSiembraVigenteDto
+    {
+        public Guid IdSiembra { get; set; }
+        public Guid IdSucursal { get; set; }
+        public string Sucursal { get; set; } = string.Empty;
+        public Guid IdCurva { get; set; }
+        public string Curva { get; set; } = string.Empty;
+        public Guid IdProductoServicio { get; set; }
+        public string Producto { get; set; } = string.Empty;
+        public Guid? IdVariante { get; set; }
+        public string Variante { get; set; } = string.Empty;
+        public string UnidadBase { get; set; } = string.Empty;
+        public decimal CantidadBaseObjetivo { get; set; }
+        public DateTime FechaVigenciaInicio { get; set; }
+    }
+
+    public sealed class CurvasSembrarCurvaRequest
+    {
+        public Guid IdSucursal { get; set; }
+        public Guid IdCurva { get; set; }
+    }
+
+    public sealed class CurvasSembrarCurvaResponse
+    {
+        public bool Exito { get; set; }
+        public string Mensaje { get; set; } = string.Empty;
+        public int SiembrasAplicadas { get; set; }
+        public IReadOnlyList<CurvasSiembraVigenteDto> Vigentes { get; set; } = Array.Empty<CurvasSiembraVigenteDto>();
+    }
+
+    public sealed class CurvasCerrarSiembraRequest
+    {
+        public Guid IdSiembra { get; set; }
+    }
+
+    public sealed class CurvasCerrarSiembraResponse
+    {
+        public bool Exito { get; set; }
+        public bool Cerrada { get; set; }
+        public string Mensaje { get; set; } = string.Empty;
+    }
+
     public sealed class CurvaOperacionRequest
     {
         public string OperationKey { get; set; } = string.Empty;

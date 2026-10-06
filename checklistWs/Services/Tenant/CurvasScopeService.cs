@@ -8,6 +8,10 @@ namespace checklistWs.Services.Tenant
         Task<Guid> CrearCurvaAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaCrearRequest request, CancellationToken cancellationToken = default);
         Task<Guid> AgregarDetalleAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaDetalleRequest request, CancellationToken cancellationToken = default);
         Task<Guid> SembrarAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaSiembraRequest request, CancellationToken cancellationToken = default);
+        Task<bool> CerrarSiembraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idSiembra, Guid? usuarioId, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<CurvasSiembraSucursalDto>> ListarSucursalesSiembraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<CurvasSiembraCurvaDto>> ListarCurvasActivasSiembraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<CurvasSiembraVigenteDto>> ListarSiembrasVigentesAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid? idSucursal = null, CancellationToken cancellationToken = default);
         Task<CurvaOperacionResult> CrearOperacionAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaOperacionRequest request, CancellationToken cancellationToken = default);
         Task<Guid> RelacionarOrdenCompraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaOperacionOrdenCompraRequest request, CancellationToken cancellationToken = default);
         Task<Guid> CrearSnapshotAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaSnapshotRequest request, CancellationToken cancellationToken = default);
@@ -70,7 +74,6 @@ VALUES
             {
                 await EnsureVarianteAsync(connection, transaction, idEmpresa, request.IdProductoServicio, request.IdVariante.Value, cancellationToken);
             }
-
             Guid id = Guid.NewGuid();
             await ExecuteAsync(connection, transaction, @"
 INSERT INTO dbo.CurvasDetalle
@@ -403,6 +406,7 @@ ORDER BY Nombre", connection);
             {
                 await EnsureVarianteAsync(connection, transaction, idEmpresa, request.IdProductoServicio, request.IdVariante.Value, cancellationToken);
             }
+            await EnsureCurvaDetalleAsync(connection, transaction, idEmpresa, request.IdCurva, request.IdProductoServicio, request.IdVariante, cancellationToken);
 
             await ExecuteAsync(connection, transaction, @"
 UPDATE dbo.CurvasSiembra
@@ -434,6 +438,148 @@ VALUES
                 ("@Usuario", Db(request.UsuarioId)));
             transaction.Commit();
             return id;
+        }
+
+        public async Task<bool> CerrarSiembraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idSiembra, Guid? usuarioId, CancellationToken cancellationToken = default)
+        {
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+
+            Guid? idSucursal = await ScalarGuidAsync(connection, transaction, @"
+SELECT idSucursal
+FROM dbo.CurvasSiembra WITH (UPDLOCK, HOLDLOCK)
+WHERE idEmpresa = @IdEmpresa
+  AND id = @IdSiembra
+  AND Estado = 1
+  AND FechaVigenciaFin IS NULL", cancellationToken,
+                ("@IdEmpresa", idEmpresa),
+                ("@IdSiembra", idSiembra));
+
+            if (!idSucursal.HasValue)
+            {
+                transaction.Commit();
+                return false;
+            }
+
+            await EnsureSucursalAsync(connection, transaction, idEmpresa, idSucursal.Value, cancellationToken);
+            await ExecuteAsync(connection, transaction, @"
+UPDATE dbo.CurvasSiembra
+SET Estado = 3,
+    FechaVigenciaFin = SYSUTCDATETIME(),
+    FechaActualizacion = SYSUTCDATETIME(),
+    idUsuarioActualizacion = @Usuario
+WHERE idEmpresa = @IdEmpresa
+  AND id = @IdSiembra
+  AND idSucursal = @IdSucursal
+  AND Estado = 1
+  AND FechaVigenciaFin IS NULL", cancellationToken,
+                ("@Usuario", Db(usuarioId)),
+                ("@IdEmpresa", idEmpresa),
+                ("@IdSiembra", idSiembra),
+                ("@IdSucursal", idSucursal.Value));
+
+            transaction.Commit();
+            return true;
+        }
+
+        public async Task<IReadOnlyList<CurvasSiembraSucursalDto>> ListarSucursalesSiembraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CancellationToken cancellationToken = default)
+        {
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlCommand command = new(@"
+SELECT id, ISNULL(NULLIF(LTRIM(RTRIM(Nombre)), ''), 'Sucursal') AS Nombre
+FROM dbo.Sucursales
+WHERE idEmpresa = @IdEmpresa AND ISNULL(borrado, 0) = 0
+ORDER BY Nombre", connection);
+            command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
+            List<CurvasSiembraSucursalDto> result = new();
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Add(new CurvasSiembraSucursalDto
+                {
+                    Id = reader.GetGuid(reader.GetOrdinal("id")),
+                    Nombre = ReadString(reader, "Nombre")
+                });
+            }
+            return result;
+        }
+
+        public async Task<IReadOnlyList<CurvasSiembraCurvaDto>> ListarCurvasActivasSiembraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CancellationToken cancellationToken = default)
+        {
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlCommand command = new(@"
+SELECT c.id, c.Nombre, COUNT(d.id) AS Renglones, COALESCE(SUM(d.CantidadBaseObjetivo), 0) AS CantidadObjetivo
+FROM dbo.CurvasCatalogo c
+INNER JOIN dbo.CurvasDetalle d
+    ON d.idEmpresa = c.idEmpresa AND d.idCurva = c.id AND d.Activo = 1 AND d.FechaArchivado IS NULL
+WHERE c.idEmpresa = @IdEmpresa AND c.Activo = 1 AND c.Estado = 1 AND c.FechaArchivado IS NULL
+GROUP BY c.id, c.Nombre
+ORDER BY c.Nombre", connection);
+            command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
+            List<CurvasSiembraCurvaDto> result = new();
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Add(new CurvasSiembraCurvaDto
+                {
+                    Id = reader.GetGuid(reader.GetOrdinal("id")),
+                    Nombre = ReadString(reader, "Nombre"),
+                    Renglones = reader.GetInt32(reader.GetOrdinal("Renglones")),
+                    CantidadObjetivo = reader.GetDecimal(reader.GetOrdinal("CantidadObjetivo"))
+                });
+            }
+            return result;
+        }
+
+        public async Task<IReadOnlyList<CurvasSiembraVigenteDto>> ListarSiembrasVigentesAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid? idSucursal = null, CancellationToken cancellationToken = default)
+        {
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlCommand command = new(@"
+SELECT s.id AS IdSiembra, s.idSucursal, ISNULL(su.Nombre, '') AS Sucursal,
+       s.idCurva, c.Nombre AS Curva, s.idProductoServicio, ps.Nombre AS Producto,
+       s.idVariante, ISNULL(v.Nombre, 'Base') AS Variante,
+       ISNULL(u.Abreviatura, ISNULL(u.Nombre, 'unidad base')) AS UnidadBase,
+       d.CantidadBaseObjetivo, s.FechaVigenciaInicio
+FROM dbo.CurvasSiembra s
+INNER JOIN dbo.Sucursales su ON su.idEmpresa = s.idEmpresa AND su.id = s.idSucursal
+INNER JOIN dbo.CurvasCatalogo c ON c.idEmpresa = s.idEmpresa AND c.id = s.idCurva
+INNER JOIN dbo.ProductosServicios ps ON ps.idEmpresa = s.idEmpresa AND ps.id = s.idProductoServicio
+LEFT JOIN dbo.ProductosServiciosVariantes v ON v.idEmpresa = s.idEmpresa AND v.id = s.idVariante
+LEFT JOIN dbo.ProductosServiciosUnidadesMedida u ON u.idEmpresa = ps.idEmpresa AND u.id = ps.idUnidadMedida
+INNER JOIN dbo.CurvasDetalle d ON d.idEmpresa = s.idEmpresa AND d.idCurva = s.idCurva
+    AND d.idProductoServicio = s.idProductoServicio
+    AND ((d.idVariante IS NULL AND s.idVariante IS NULL) OR d.idVariante = s.idVariante)
+    AND d.Activo = 1 AND d.FechaArchivado IS NULL
+WHERE s.idEmpresa = @IdEmpresa AND s.Estado = 1 AND s.FechaVigenciaFin IS NULL
+  AND (@IdSucursal IS NULL OR s.idSucursal = @IdSucursal)
+ORDER BY su.Nombre, c.Nombre, ps.Nombre, ISNULL(v.Nombre, 'Base')", connection);
+            command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
+            command.Parameters.Add("@IdSucursal", SqlDbType.UniqueIdentifier).Value = (object?)idSucursal ?? DBNull.Value;
+            List<CurvasSiembraVigenteDto> result = new();
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Add(new CurvasSiembraVigenteDto
+                {
+                    IdSiembra = reader.GetGuid(reader.GetOrdinal("IdSiembra")),
+                    IdSucursal = reader.GetGuid(reader.GetOrdinal("idSucursal")),
+                    Sucursal = ReadString(reader, "Sucursal"),
+                    IdCurva = reader.GetGuid(reader.GetOrdinal("idCurva")),
+                    Curva = ReadString(reader, "Curva"),
+                    IdProductoServicio = reader.GetGuid(reader.GetOrdinal("idProductoServicio")),
+                    Producto = ReadString(reader, "Producto"),
+                    IdVariante = reader.IsDBNull(reader.GetOrdinal("idVariante")) ? null : reader.GetGuid(reader.GetOrdinal("idVariante")),
+                    Variante = ReadString(reader, "Variante"),
+                    UnidadBase = ReadString(reader, "UnidadBase"),
+                    CantidadBaseObjetivo = reader.GetDecimal(reader.GetOrdinal("CantidadBaseObjetivo")),
+                    FechaVigenciaInicio = reader.GetDateTime(reader.GetOrdinal("FechaVigenciaInicio"))
+                });
+            }
+            return result;
         }
 
         public async Task<CurvaOperacionResult> CrearOperacionAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaOperacionRequest request, CancellationToken cancellationToken = default)
@@ -722,9 +868,28 @@ WHERE idEmpresa=@IdEmpresa
 
         private static async Task EnsureSucursalAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idSucursal, CancellationToken cancellationToken)
         {
-            if (!await ExistsAsync(connection, transaction, "SELECT 1 FROM dbo.Sucursales WHERE idEmpresa=@IdEmpresa AND id=@Id", cancellationToken, ("@IdEmpresa", idEmpresa), ("@Id", idSucursal)))
+            if (!await ExistsAsync(connection, transaction, "SELECT 1 FROM dbo.Sucursales WHERE idEmpresa=@IdEmpresa AND id=@Id AND ISNULL(borrado,0)=0", cancellationToken, ("@IdEmpresa", idEmpresa), ("@Id", idSucursal)))
             {
                 throw new InvalidOperationException("CURVA_SUCURSAL_NO_DISPONIBLE");
+            }
+        }
+
+        private static async Task EnsureCurvaDetalleAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idCurva, Guid idProducto, Guid? idVariante, CancellationToken cancellationToken)
+        {
+            if (!await ExistsAsync(connection, transaction, @"SELECT 1
+FROM dbo.CurvasDetalle
+WHERE idEmpresa=@IdEmpresa
+  AND idCurva=@IdCurva
+  AND idProductoServicio=@IdProducto
+  AND ((idVariante IS NULL AND @IdVariante IS NULL) OR idVariante=@IdVariante)
+  AND Activo=1
+  AND FechaArchivado IS NULL", cancellationToken,
+                ("@IdEmpresa", idEmpresa),
+                ("@IdCurva", idCurva),
+                ("@IdProducto", idProducto),
+                ("@IdVariante", Db(idVariante))))
+            {
+                throw new InvalidOperationException("CURVA_DETALLE_NO_DISPONIBLE");
             }
         }
 

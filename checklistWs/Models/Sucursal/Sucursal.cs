@@ -15,7 +15,7 @@
         public Guid? IdRazonSocial { get; set; }
         public Guid? IdZona { get; set; }
         public Guid? IdSucursalTipo { get; set; }
-        public string Notas { get; set; }
+        public string? Notas { get; set; }
         public bool? borrado { get; set; }
         public DateTime? Fecha { get; set; }
         public string LinkImagen { get; set; }
