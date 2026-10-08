@@ -1,4 +1,7 @@
 using System.Security.Claims;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using checklistWs.Services.Tenant;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,24 +14,33 @@ namespace checklistWs.Controllers.Curvas
         private static readonly string[] EmpresaClaimKeys = { "idEmpresa", "empresaId", "tenantId", "companyId", "tenant", "idempresa" };
         private static readonly string[] EmpresaKeyClaimKeys = { "empresa", "empresaNombre", "tenantName", "companyName", "nombreEmpresa" };
         private static readonly string[] UsuarioClaimKeys = { ClaimTypes.NameIdentifier, "sub", "idUsuario", "userid", "uid" };
+        private static readonly TimeSpan ProxyHeaderTolerance = TimeSpan.FromMinutes(5);
+        private const string ProxyEmpresaIdHeader = "X-ProductosServicios-Proxy-EmpresaId";
+        private const string ProxyEmpresaKeyHeader = "X-ProductosServicios-Proxy-Empresa";
+        private const string ProxyUsuarioIdHeader = "X-ProductosServicios-Proxy-UsuarioId";
+        private const string ProxyTimestampHeader = "X-ProductosServicios-Proxy-Timestamp";
+        private const string ProxySignatureHeader = "X-ProductosServicios-Proxy-Signature";
 
         private readonly ITenantDatabaseResolver _tenantResolver;
         private readonly IProductosServiciosAuthorizationService _authorizationService;
         private readonly IProductosServiciosCompatibilityGate _compatibilityGate;
         private readonly ICurvasSugerenciasMotorService _motorService;
         private readonly ILogger<CurvasSugerenciasController> _logger;
+        private readonly IConfiguration _configuration;
 
         public CurvasSugerenciasController(
             ITenantDatabaseResolver tenantResolver,
             IProductosServiciosAuthorizationService authorizationService,
             IProductosServiciosCompatibilityGate compatibilityGate,
             ICurvasSugerenciasMotorService motorService,
+            IConfiguration configuration,
             ILogger<CurvasSugerenciasController> logger)
         {
             _tenantResolver = tenantResolver;
             _authorizationService = authorizationService;
             _compatibilityGate = compatibilityGate;
             _motorService = motorService;
+            _configuration = configuration;
             _logger = logger;
         }
 
@@ -66,6 +78,33 @@ namespace checklistWs.Controllers.Curvas
             catch (Exception ex)
             {
                 return HandleException(ex, "Preview");
+            }
+        }
+
+        [HttpGet("Aplicables")]
+        public async Task<IActionResult> Aplicables([FromQuery] Guid idEmpresa, [FromQuery] Guid idProductoServicio, [FromQuery] string empresaKey = "")
+        {
+            TenantDatabaseDescriptor? descriptor = await ResolveDescriptorAsync(idEmpresa, empresaKey);
+            if (descriptor == null)
+            {
+                return Unauthorized(new { mensaje = "No fue posible resolver la empresa activa." });
+            }
+
+            IActionResult? guard = await GuardAsync(
+                descriptor,
+                ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode,
+                ProductosServiciosPermissionRequirement.Read,
+                DatabaseScopes.Curvas,
+                DatabaseScopes.OrdenesCompra);
+            if (guard != null) return guard;
+
+            try
+            {
+                return Ok(await _motorService.ListarCurvasAplicablesAsync(descriptor, descriptor.IdEmpresa, idProductoServicio, HttpContext.RequestAborted));
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "Aplicables");
             }
         }
 
@@ -129,6 +168,11 @@ namespace checklistWs.Controllers.Curvas
 
         private Guid TryResolveEmpresaId()
         {
+            if (TryResolveSignedProxyContext(out SignedProxyContext? proxyContext))
+            {
+                return proxyContext!.IdEmpresa;
+            }
+
             foreach (string claimKey in EmpresaClaimKeys)
             {
                 if (Guid.TryParse(User.FindFirstValue(claimKey), out Guid parsed) && parsed != Guid.Empty)
@@ -142,6 +186,11 @@ namespace checklistWs.Controllers.Curvas
 
         private string TryResolveEmpresaKey(Guid empresaId)
         {
+            if (TryResolveSignedProxyContext(out SignedProxyContext? proxyContext))
+            {
+                return proxyContext!.EmpresaKey;
+            }
+
             foreach (string claimKey in EmpresaKeyClaimKeys)
             {
                 string? value = User.FindFirstValue(claimKey);
@@ -155,9 +204,62 @@ namespace checklistWs.Controllers.Curvas
         }
 
         private string TryResolveUsuarioId()
-            => UsuarioClaimKeys
+        {
+            if (TryResolveSignedProxyContext(out SignedProxyContext? proxyContext) &&
+                !string.IsNullOrWhiteSpace(proxyContext!.UsuarioId))
+            {
+                return proxyContext.UsuarioId;
+            }
+
+            return UsuarioClaimKeys
                 .Select(key => User.FindFirstValue(key))
                 .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+        }
+
+        private bool TryResolveSignedProxyContext(out SignedProxyContext? context)
+        {
+            context = null;
+            if (!Request.Headers.TryGetValue(ProxyEmpresaIdHeader, out var empresaIdHeader) ||
+                !Request.Headers.TryGetValue(ProxyEmpresaKeyHeader, out var empresaKeyHeader) ||
+                !Request.Headers.TryGetValue(ProxyTimestampHeader, out var timestampHeader) ||
+                !Request.Headers.TryGetValue(ProxySignatureHeader, out var signatureHeader))
+            {
+                return false;
+            }
+
+            string empresaIdRaw = empresaIdHeader.ToString().Trim();
+            string empresaKeyRaw = empresaKeyHeader.ToString().Trim();
+            string usuarioIdRaw = Request.Headers.TryGetValue(ProxyUsuarioIdHeader, out var usuarioIdHeader)
+                ? usuarioIdHeader.ToString().Trim()
+                : string.Empty;
+            string timestampRaw = timestampHeader.ToString().Trim();
+            string signatureRaw = signatureHeader.ToString().Trim();
+            string secret = _configuration["fireBdata:fireClave"] ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(secret) ||
+                !Guid.TryParse(empresaIdRaw, out Guid empresaId) || empresaId == Guid.Empty ||
+                string.IsNullOrWhiteSpace(empresaKeyRaw) ||
+                !DateTimeOffset.TryParseExact(timestampRaw, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset timestamp) ||
+                (DateTimeOffset.UtcNow - timestamp.ToUniversalTime()).Duration() > ProxyHeaderTolerance)
+            {
+                return false;
+            }
+
+            string payload = string.Join('\n', empresaIdRaw, empresaKeyRaw.ToUpperInvariant(), usuarioIdRaw, timestampRaw);
+            using HMACSHA256 hmac = new(Encoding.UTF8.GetBytes(secret));
+            string expected = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
+            byte[] expectedBytes = Encoding.UTF8.GetBytes(expected);
+            byte[] actualBytes = Encoding.UTF8.GetBytes(signatureRaw);
+            if (expectedBytes.Length != actualBytes.Length || !CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes))
+            {
+                return false;
+            }
+
+            context = new SignedProxyContext(empresaId, empresaKeyRaw.ToUpperInvariant(), usuarioIdRaw);
+            return true;
+        }
+
+        private sealed record SignedProxyContext(Guid IdEmpresa, string EmpresaKey, string UsuarioId);
 
         private IActionResult HandleException(Exception ex, string operation)
         {

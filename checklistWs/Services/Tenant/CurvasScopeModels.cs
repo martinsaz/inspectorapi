@@ -160,6 +160,7 @@ namespace checklistWs.Services.Tenant
         public Guid IdProductoServicio { get; set; }
         public Guid? IdVariante { get; set; }
         public Guid? IdPresentacionCompra { get; set; }
+        public Guid? IdCurvaTemporal { get; set; }
         public CurvasModoCaptura Modo { get; set; } = CurvasModoCaptura.RellenarCurva;
         public decimal? CantidadManualBase { get; set; }
         public string? ContextoJson { get; set; }
@@ -178,6 +179,7 @@ namespace checklistWs.Services.Tenant
         public Guid IdProductoServicio { get; set; }
         public Guid? IdVariante { get; set; }
         public Guid? IdCurva { get; set; }
+        public string CurvaNombre { get; set; } = string.Empty;
         public Guid? IdSiembra { get; set; }
         public CurvasModoCaptura Modo { get; set; }
         public CurvasSugerenciaEstado Estado { get; set; }
@@ -199,6 +201,14 @@ namespace checklistWs.Services.Tenant
         public bool NoPedir { get; set; }
         public bool PreviewReadOnly { get; set; } = true;
         public CurvaSnapshotPreviewPayload SnapshotPayload { get; set; } = new();
+    }
+
+    public sealed class CurvasAplicableDto
+    {
+        public Guid Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public string Codigo { get; set; } = string.Empty;
+        public int VariantesConfiguradas { get; set; }
     }
 
     public sealed class CurvaSnapshotPreviewPayload

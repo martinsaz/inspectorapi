@@ -192,7 +192,7 @@ namespace checklistWs.Services.Tenant
                     ManifestHash = migration.TargetManifestHash,
                     LastValidatedAtUtc = DateTime.UtcNow,
                     LastMigratedAtUtc = DateTime.UtcNow,
-                    LastResult = $"MIGRATED/PASS/{migration.MigrationId}",
+                    LastResult = $"MIGRATED/PASS/V{migration.ToVersion}",
                     CreatedAtUtc = started,
                     UpdatedAtUtc = DateTime.UtcNow
                 }, cancellationToken);

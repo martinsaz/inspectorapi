@@ -4,7 +4,16 @@ namespace checklistWs.Services.Tenant
     {
         public static SchemaContract GetContract(int version)
         {
-            if (version is not ProductosServiciosSchemaContractProvider.V1 and not ProductosServiciosSchemaContractProvider.V2)
+            if (version == ProductosServiciosSchemaContractProvider.V5)
+            {
+                return OrdenesCompraV5ContractProposal.CreateTargetContract(
+                    GetContract(ProductosServiciosSchemaContractProvider.V4));
+            }
+
+            if (version is not ProductosServiciosSchemaContractProvider.V1
+                and not ProductosServiciosSchemaContractProvider.V2
+                and not ProductosServiciosSchemaContractProvider.V3
+                and not ProductosServiciosSchemaContractProvider.V4)
             {
                 throw new InvalidOperationException("SCHEMA_CONTRACT_VERSION_NOT_SUPPORTED");
             }
@@ -17,7 +26,7 @@ namespace checklistWs.Services.Tenant
                 {
                     PresentacionesCompra(version),
                     Folios(),
-                    Cabecera(),
+                    Cabecera(version),
                     Detalle(),
                 },
                 new[]
@@ -114,10 +123,31 @@ namespace checklistWs.Services.Tenant
                 Ix("UX_OrdenesCompraFolios_Empresa", true, "idEmpresa"),
             });
 
-        private static SchemaTableContract Cabecera() => new(
+        private static SchemaTableContract Cabecera(int version) => new(
             "dbo",
             "OrdenesCompra",
+            BuildCabeceraColumns(version),
+            new SchemaPrimaryKeyContract("PK_OrdenesCompra", new[] { "id" }, true),
+            Array.Empty<SchemaForeignKeyContract>(),
             new[]
+            {
+                new SchemaUniqueContract("UX_OrdenesCompra_Empresa_Id", new[] { "idEmpresa", "id" }, null),
+                new SchemaUniqueContract("UX_OrdenesCompra_Empresa_Folio", new[] { "idEmpresa", "Folio" }, "Folio IS NOT NULL"),
+            },
+            BuildCabeceraChecks(version),
+            new[]
+            {
+                Ix("UX_OrdenesCompra_Empresa_Id", true, "idEmpresa", "id"),
+                new SchemaIndexContract("UX_OrdenesCompra_Empresa_Folio", true, false, Keys("idEmpresa", "Folio"), Array.Empty<string>(), "Folio IS NOT NULL"),
+                new SchemaIndexContract("IX_OrdenesCompra_Empresa_Estado_FechaOrden", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("Estado", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
+                new SchemaIndexContract("IX_OrdenesCompra_Empresa_Proveedor", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("idProveedor", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
+                new SchemaIndexContract("IX_OrdenesCompra_Empresa_Sucursal", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("idSucursal", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
+                new SchemaIndexContract("IX_OrdenesCompra_Empresa_RazonSocial", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("idRazonSocial", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
+            });
+
+        private static IReadOnlyCollection<SchemaColumnContract> BuildCabeceraColumns(int version)
+        {
+            List<SchemaColumnContract> columns = new()
             {
                 Col("id", "UNIQUEIDENTIFIER", false, def: "(NEWID())"),
                 Col("idEmpresa", "UNIQUEIDENTIFIER", false),
@@ -128,6 +158,21 @@ namespace checklistWs.Services.Tenant
                 Col("idProveedor", "UNIQUEIDENTIFIER", false),
                 Col("FechaOrden", "DATETIME2(0)", false, scale: 0),
                 Col("FechaLlegada", "DATETIME2(0)", true, scale: 0),
+            };
+
+            if (version >= ProductosServiciosSchemaContractProvider.V3)
+            {
+                columns.Add(Col("FechaMinima", "DATE", true));
+                columns.Add(Col("FechaMaxima", "DATE", true));
+            }
+
+            if (version >= ProductosServiciosSchemaContractProvider.V4)
+            {
+                columns.Add(Col("FolioReferencia", "NVARCHAR(100)", true, max: 100));
+            }
+
+            columns.AddRange(new[]
+            {
                 Col("Estado", "TINYINT", false, def: "((1))"),
                 Col("Subtotal", "DECIMAL(18,2)", false, precision: 18, scale: 2, def: "((0))"),
                 Col("Total", "DECIMAL(18,2)", false, precision: 18, scale: 2, def: "((0))"),
@@ -141,15 +186,14 @@ namespace checklistWs.Services.Tenant
                 Col("idUsuarioCreacion", "UNIQUEIDENTIFIER", true),
                 Col("idUsuarioActualizacion", "UNIQUEIDENTIFIER", true),
                 Col("idUsuarioCancelacion", "UNIQUEIDENTIFIER", true),
-            },
-            new SchemaPrimaryKeyContract("PK_OrdenesCompra", new[] { "id" }, true),
-            Array.Empty<SchemaForeignKeyContract>(),
-            new[]
-            {
-                new SchemaUniqueContract("UX_OrdenesCompra_Empresa_Id", new[] { "idEmpresa", "id" }, null),
-                new SchemaUniqueContract("UX_OrdenesCompra_Empresa_Folio", new[] { "idEmpresa", "Folio" }, "Folio IS NOT NULL"),
-            },
-            new[]
+            });
+
+            return columns;
+        }
+
+        private static IReadOnlyCollection<SchemaCheckContract> BuildCabeceraChecks(int version)
+        {
+            List<SchemaCheckContract> checks = new()
             {
                 new SchemaCheckContract("CK_OrdenesCompra_Estado", "CHECK (Estado IN (1, 2, 3, 4, 5))"),
                 new SchemaCheckContract("CK_OrdenesCompra_ImportesNoNegativos", "CHECK (Subtotal >= 0 AND Total >= 0)"),
@@ -159,16 +203,17 @@ namespace checklistWs.Services.Tenant
                 new SchemaCheckContract("CK_OrdenesCompra_Cancelacion", "CHECK ((Estado = 3 AND FechaCancelacion IS NOT NULL AND NULLIF(LTRIM(RTRIM(MotivoCancelacion)), N'') IS NOT NULL) OR ((Estado = 5 OR Estado = 4 OR Estado = 2 OR Estado = 1) AND FechaCancelacion IS NULL AND MotivoCancelacion IS NULL AND idUsuarioCancelacion IS NULL))"),
                 new SchemaCheckContract("CK_OrdenesCompra_FolioGenerada", "CHECK (((Estado = 5 OR Estado = 4 OR Estado = 2) AND NULLIF(LTRIM(RTRIM(Folio)), N'') IS NOT NULL) OR (Estado = 3 OR Estado = 1))"),
                 new SchemaCheckContract("CK_OrdenesCompra_Archivado", "CHECK ((Activo = 1 AND FechaArchivado IS NULL) OR (Activo = 0 AND FechaArchivado IS NOT NULL))"),
-            },
-            new[]
+            };
+
+            if (version >= ProductosServiciosSchemaContractProvider.V3)
             {
-                Ix("UX_OrdenesCompra_Empresa_Id", true, "idEmpresa", "id"),
-                new SchemaIndexContract("UX_OrdenesCompra_Empresa_Folio", true, false, Keys("idEmpresa", "Folio"), Array.Empty<string>(), "Folio IS NOT NULL"),
-                new SchemaIndexContract("IX_OrdenesCompra_Empresa_Estado_FechaOrden", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("Estado", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
-                new SchemaIndexContract("IX_OrdenesCompra_Empresa_Proveedor", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("idProveedor", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
-                new SchemaIndexContract("IX_OrdenesCompra_Empresa_Sucursal", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("idSucursal", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
-                new SchemaIndexContract("IX_OrdenesCompra_Empresa_RazonSocial", false, false, new[] { new SchemaIndexColumnContract("idEmpresa", false), new SchemaIndexColumnContract("idRazonSocial", false), new SchemaIndexColumnContract("FechaOrden", true) }, Array.Empty<string>(), null),
-            });
+                checks.Add(new SchemaCheckContract(
+                    "CK_OrdenesCompra_RangoFechas",
+                    "CHECK ((FechaMinima IS NULL OR FechaMinima >= CONVERT(date, FechaOrden)) AND (FechaMaxima IS NULL OR FechaMinima IS NULL OR FechaMaxima >= FechaMinima) AND (FechaLlegada IS NULL OR FechaMinima IS NULL OR CONVERT(date, FechaLlegada) >= FechaMinima) AND (FechaLlegada IS NULL OR FechaMaxima IS NULL OR CONVERT(date, FechaLlegada) <= FechaMaxima))"));
+            }
+
+            return checks;
+        }
 
         private static SchemaTableContract Detalle() => new(
             "dbo",

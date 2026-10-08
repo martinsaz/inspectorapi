@@ -101,6 +101,7 @@ namespace checklistWs.Tests.Services.Tenant
 
             Assert.Equal(SchemaMigrationExecutionStatus.NoProvision, second.Status);
             Assert.Single(harness.Repository.History.Where(item => item.EventType == "MIGRATED" && item.Result == "PASS"));
+            Assert.Equal("MIGRATED/PASS/V2", harness.Repository.State!.LastResult);
         }
 
         [Fact]
@@ -290,14 +291,14 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void RealProductosServiciosPackage_DeclaresApprovedV3Chain()
+        public void RealProductosServiciosPackage_DeclaresApprovedV4Chain()
         {
             var provider = new ProductosServiciosMigrationPackageProvider(new ProductosServiciosSchemaContractProvider(), new SchemaManifestProvider());
 
             SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(3, package.Release.LatestSchemaVersion);
-            Assert.Equal(2, package.Migrations.Count);
+            Assert.Equal(4, package.Release.LatestSchemaVersion);
+            Assert.Equal(3, package.Migrations.Count);
             SchemaMigrationDefinition migration = package.Migrations.Single(x => x.MigrationId == "PS-M20260916-V1-V2-DESCRIPCIONES-NVARCHAR-MAX");
             Assert.Equal(1, migration.FromVersion);
             Assert.Equal(2, migration.ToVersion);
@@ -313,6 +314,9 @@ namespace checklistWs.Tests.Services.Tenant
             SchemaMigrationDefinition v3 = package.Migrations.Single(x => x.MigrationId == ProductosServiciosComercialContractProposal.MigrationId);
             Assert.Equal(2, v3.FromVersion);
             Assert.Equal(3, v3.ToVersion);
+            SchemaMigrationDefinition v4 = package.Migrations.Single(x => x.MigrationId == ProveedorPrincipalContractProposal.ProductosServiciosMigrationId);
+            Assert.Equal(3, v4.FromVersion);
+            Assert.Equal(4, v4.ToVersion);
         }
 
         [Fact]
@@ -322,8 +326,8 @@ namespace checklistWs.Tests.Services.Tenant
 
             SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.OrdenesCompra);
 
-            Assert.Equal(2, package.Release.LatestSchemaVersion);
-            SchemaMigrationDefinition migration = Assert.Single(package.Migrations);
+            Assert.Equal(5, package.Release.LatestSchemaVersion);
+            SchemaMigrationDefinition migration = package.Migrations.Single(x => x.FromVersion == 1);
             Assert.Equal(1, migration.FromVersion);
             Assert.Equal(2, migration.ToVersion);
             Assert.Equal("OC-M20260923-V1-V2-PRESENTACIONCOMPRA-CANTIDAD-BASE", migration.MigrationId);
@@ -332,7 +336,22 @@ namespace checklistWs.Tests.Services.Tenant
             Assert.Contains("ADD PermiteCantidadBase bit NOT NULL", migration.UpSql, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("DEFAULT ((0))", migration.UpSql, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("PresentacionesVenta", migration.UpSql, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(migration.TargetManifestHash, package.Release.LatestManifestHash);
+            SchemaMigrationDefinition v3 = package.Migrations.Single(x => x.FromVersion == 2);
+            Assert.Equal("OC-M20261006-V2-V3-RANGO-FECHAS", v3.MigrationId);
+            Assert.Equal(3, v3.ToVersion);
+            Assert.Contains("ADD FechaMinima date NULL", v3.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("ADD FechaMaxima date NULL", v3.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("CK_OrdenesCompra_RangoFechas", v3.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("UPDATE dbo.OrdenesCompra", v3.UpSql, StringComparison.OrdinalIgnoreCase);
+            SchemaMigrationDefinition v4 = package.Migrations.Single(x => x.FromVersion == 3);
+            Assert.Equal("OC-M20261006-V3-V4-FOLIO-REFERENCIA", v4.MigrationId);
+            Assert.Equal(4, v4.ToVersion);
+            Assert.Contains("ADD FolioReferencia nvarchar(100) NULL", v4.UpSql, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("UPDATE dbo.OrdenesCompra", v4.UpSql, StringComparison.OrdinalIgnoreCase);
+            SchemaMigrationDefinition v5 = package.Migrations.Single(x => x.FromVersion == 4);
+            Assert.Equal(5, v5.ToVersion);
+            Assert.Equal(OrdenesCompraV5ContractProposal.MigrationId, v5.MigrationId);
+            Assert.Equal(v5.TargetManifestHash, package.Release.LatestManifestHash);
         }
 
         [Fact]

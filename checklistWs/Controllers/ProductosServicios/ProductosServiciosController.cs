@@ -210,6 +210,10 @@ SELECT
     COALESCE(NULLIF(tg.TagsDisplay, ''), ISNULL(ps.Tag, '')) AS Tag,
     ps.Nombre,
     ISNULL(ps.Descripcion, '') AS Descripcion,
+    ps.idProveedorPrincipal,
+    ISNULL(pr.Codigo, '') AS ProveedorPrincipalCodigo,
+    ISNULL(pr.Nombre, '') AS ProveedorPrincipalNombre,
+    pr.Activo AS ProveedorPrincipalActivo,
     ps.idCategoria,
     cat.Nombre AS Categoria,
     cat.AplicaA AS CategoriaAplicaA,
@@ -275,6 +279,8 @@ LEFT JOIN dbo.ProductosServiciosColecciones col
     ON col.idEmpresa = ps.idEmpresa AND col.id = ps.idColeccion
 LEFT JOIN dbo.ProductosServiciosPaquetes pa
     ON pa.idEmpresa = ps.idEmpresa AND pa.id = ps.idPaquete
+LEFT JOIN dbo.ActivosProveedores pr
+    ON pr.idEmpresa = ps.idEmpresa AND pr.id = ps.idProveedorPrincipal
 OUTER APPLY (
     SELECT SUM(s.CantidadBaseActual) AS ExistenciaActual
     FROM dbo.InventarioSaldos s
@@ -403,6 +409,10 @@ SELECT
     ISNULL(ps.Tag, '') AS Tag,
     ps.Nombre,
     ISNULL(ps.Descripcion, '') AS Descripcion,
+    ps.idProveedorPrincipal,
+    ISNULL(pr.Codigo, '') AS ProveedorPrincipalCodigo,
+    ISNULL(pr.Nombre, '') AS ProveedorPrincipalNombre,
+    pr.Activo AS ProveedorPrincipalActivo,
     ps.idCategoria,
     cat.Nombre AS Categoria,
     cat.AplicaA AS CategoriaAplicaA,
@@ -468,6 +478,8 @@ LEFT JOIN dbo.ProductosServiciosColecciones col
     ON col.idEmpresa = ps.idEmpresa AND col.id = ps.idColeccion
 LEFT JOIN dbo.ProductosServiciosPaquetes pa
     ON pa.idEmpresa = ps.idEmpresa AND pa.id = ps.idPaquete
+LEFT JOIN dbo.ActivosProveedores pr
+    ON pr.idEmpresa = ps.idEmpresa AND pr.id = ps.idProveedorPrincipal
 OUTER APPLY (
     SELECT SUM(s.CantidadBaseActual) AS ExistenciaActual
     FROM dbo.InventarioSaldos s
@@ -508,6 +520,10 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @IdProductoServicio", connection);
                             Tag = baseItem.Tag,
                             Nombre = baseItem.Nombre,
                             Descripcion = baseItem.Descripcion,
+                            IdProveedorPrincipal = baseItem.IdProveedorPrincipal,
+                            ProveedorPrincipalCodigo = baseItem.ProveedorPrincipalCodigo,
+                            ProveedorPrincipalNombre = baseItem.ProveedorPrincipalNombre,
+                            ProveedorPrincipalActivo = baseItem.ProveedorPrincipalActivo,
                             IdCategoria = baseItem.IdCategoria,
                             Categoria = baseItem.Categoria,
                             CategoriaAplicaA = baseItem.CategoriaAplicaA,
@@ -1326,9 +1342,9 @@ WHERE ps.idEmpresa = @IdEmpresa
                     {
                         using SqlCommand insert = new SqlCommand(@"
 INSERT INTO dbo.ProductosServicios
-    (id, idEmpresa, identityKey, Tipo, Codigo, Tag, Nombre, Descripcion, idCategoria, idMarca, idUnidadMedida, idColeccion, idPaquete, Costo, PrecioPublico, PrecioComparacion, PrecioUnitarioMonto, PrecioUnitarioCantidadTotal, PrecioUnitarioUnidadTotal, PrecioUnitarioBaseCantidad, PrecioUnitarioUnidad, PrecioUnitarioUnidadBase, ObjetoImpuesto, PorcentajeIVA, ClaveProductoSat, ClaveUnidadSat, EsProductoFisico, PesoKg, LargoCm, AnchoCm, AltoCm, UsaNumeroSerie, CausaInventario, PermiteVentaSinExistencia, ImagenUrl, ImagenNombre, Activo, FechaCreacion, FechaActualizacion, FechaArchivado)
+    (id, idEmpresa, identityKey, Tipo, Codigo, Tag, Nombre, Descripcion, idProveedorPrincipal, idCategoria, idMarca, idUnidadMedida, idColeccion, idPaquete, Costo, PrecioPublico, PrecioComparacion, PrecioUnitarioMonto, PrecioUnitarioCantidadTotal, PrecioUnitarioUnidadTotal, PrecioUnitarioBaseCantidad, PrecioUnitarioUnidad, PrecioUnitarioUnidadBase, ObjetoImpuesto, PorcentajeIVA, ClaveProductoSat, ClaveUnidadSat, EsProductoFisico, PesoKg, LargoCm, AnchoCm, AltoCm, UsaNumeroSerie, CausaInventario, PermiteVentaSinExistencia, ImagenUrl, ImagenNombre, Activo, FechaCreacion, FechaActualizacion, FechaArchivado)
 VALUES
-    (@Id, @IdEmpresa, @IdentityKey, @Tipo, @Codigo, @Tag, @Nombre, @Descripcion, @IdCategoria, @IdMarca, @IdUnidadMedida, @IdColeccion, @IdPaquete, @Costo, @PrecioPublico, @PrecioComparacion, @PrecioUnitarioMonto, @PrecioUnitarioCantidadTotal, @PrecioUnitarioUnidadTotal, @PrecioUnitarioBaseCantidad, @PrecioUnitarioUnidad, @PrecioUnitarioUnidadBase, @ObjetoImpuesto, @PorcentajeIVA, @ClaveProductoSat, @ClaveUnidadSat, @EsProductoFisico, @PesoKg, @LargoCm, @AnchoCm, @AltoCm, @UsaNumeroSerie, @CausaInventario, @PermiteVentaSinExistencia, @ImagenUrl, @ImagenNombre, @Activo, @FechaCreacion, @FechaActualizacion, NULL)", connection, transaction);
+    (@Id, @IdEmpresa, @IdentityKey, @Tipo, @Codigo, @Tag, @Nombre, @Descripcion, @IdProveedorPrincipal, @IdCategoria, @IdMarca, @IdUnidadMedida, @IdColeccion, @IdPaquete, @Costo, @PrecioPublico, @PrecioComparacion, @PrecioUnitarioMonto, @PrecioUnitarioCantidadTotal, @PrecioUnitarioUnidadTotal, @PrecioUnitarioBaseCantidad, @PrecioUnitarioUnidad, @PrecioUnitarioUnidadBase, @ObjetoImpuesto, @PorcentajeIVA, @ClaveProductoSat, @ClaveUnidadSat, @EsProductoFisico, @PesoKg, @LargoCm, @AnchoCm, @AltoCm, @UsaNumeroSerie, @CausaInventario, @PermiteVentaSinExistencia, @ImagenUrl, @ImagenNombre, @Activo, @FechaCreacion, @FechaActualizacion, NULL)", connection, transaction);
 
                         AddProductoServicioParameters(insert, productoId, context.IdEmpresa, normalized, imageMutation, ahora, true);
                         await insert.ExecuteNonQueryAsync();
@@ -1343,6 +1359,7 @@ SET
     Tag = @Tag,
     Nombre = @Nombre,
     Descripcion = @Descripcion,
+    idProveedorPrincipal = CASE WHEN @ProveedorPrincipalFueEnviado = 1 THEN @IdProveedorPrincipal ELSE idProveedorPrincipal END,
     idCategoria = @IdCategoria,
     idMarca = @IdMarca,
     idUnidadMedida = @IdUnidadMedida,
@@ -1595,6 +1612,7 @@ WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
                     Paquetes = await ObtenerPaquetesComboAsync(context, context.IdEmpresa),
                     Atributos = await ObtenerAtributosComboAsync(context, context.IdEmpresa),
                     Tags = await ObtenerTagsCatalogoAsync(context, context.IdEmpresa),
+                    Proveedores = await ObtenerProveedoresComboAsync(context, context.IdEmpresa),
                     Tipos = new List<ProductoServicioOpcionDto>
                     {
                         new ProductoServicioOpcionDto { Clave = TipoProducto.ToString(), Nombre = "Producto" },
@@ -3402,6 +3420,33 @@ WHERE idEmpresa = @IdEmpresa AND Activo = 1");
             return items;
         }
 
+        private async Task<List<ProductoServicioProveedorComboDto>> ObtenerProveedoresComboAsync(RequestContext context, Guid idEmpresa)
+        {
+            using SqlConnection connection = CreateConnection(context);
+            await connection.OpenAsync();
+            using SqlCommand command = new SqlCommand(@"
+SELECT id, Codigo, Nombre, Activo
+FROM dbo.ActivosProveedores
+WHERE idEmpresa = @IdEmpresa AND Activo = 1
+ORDER BY Nombre, Codigo", connection);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+
+            List<ProductoServicioProveedorComboDto> items = new List<ProductoServicioProveedorComboDto>();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(new ProductoServicioProveedorComboDto
+                {
+                    Id = ReadGuid(reader, "id"),
+                    Codigo = ReadString(reader, "Codigo"),
+                    Nombre = ReadString(reader, "Nombre"),
+                    Activo = ReadBool(reader, "Activo")
+                });
+            }
+
+            return items;
+        }
+
         private async Task<List<ProductoServicioTagDto>> ObtenerTagsCatalogoAsync(RequestContext context, Guid idEmpresa, string busqueda = "")
         {
             using SqlConnection connection = CreateConnection(context);
@@ -3592,6 +3637,7 @@ SELECT
     ps.idEmpresa,
     ps.Tipo,
     ps.Codigo,
+    ps.idProveedorPrincipal,
     ps.idCategoria,
     ps.idMarca,
     ps.idUnidadMedida,
@@ -3622,6 +3668,7 @@ WHERE ps.idEmpresa = @IdEmpresa AND ps.id = @Id", connection, transaction);
                 IdEmpresa = ReadGuid(reader, "idEmpresa"),
                 Tipo = ReadByte(reader, "Tipo"),
                 Codigo = ReadString(reader, "Codigo"),
+                IdProveedorPrincipal = ReadNullableGuid(reader, "idProveedorPrincipal"),
                 IdCategoria = ReadGuid(reader, "idCategoria"),
                 IdMarca = ReadNullableGuid(reader, "idMarca"),
                 IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
@@ -3908,6 +3955,27 @@ ORDER BY
             if (request.Tipo == TipoServicio && request.IdMarca.HasValue)
             {
                 return "Los servicios no pueden asociarse a una marca.";
+            }
+
+            if (request.ProveedorPrincipalFueEnviado && request.IdProveedorPrincipal.HasValue)
+            {
+                using SqlCommand proveedor = new SqlCommand(@"
+SELECT Activo
+FROM dbo.ActivosProveedores
+WHERE idEmpresa = @IdEmpresa AND id = @Id", connection, transaction);
+                proveedor.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                proveedor.Parameters.AddWithValue("@Id", request.IdProveedorPrincipal.Value);
+                object? activo = await proveedor.ExecuteScalarAsync();
+                if (activo == null || activo == DBNull.Value)
+                {
+                    return "Selecciona un proveedor principal válido de la empresa activa.";
+                }
+
+                bool conservaAsignacionInactiva = !esNuevo && existente?.IdProveedorPrincipal == request.IdProveedorPrincipal;
+                if (!Convert.ToBoolean(activo) && !conservaAsignacionInactiva)
+                {
+                    return "El proveedor principal seleccionado está inactivo.";
+                }
             }
 
             if (!esNuevo && existente != null && existente.IdEmpresa != idEmpresa)
@@ -4666,6 +4734,8 @@ WHERE idEmpresa = @IdEmpresa
                 Tag = ResolveLegacyTagShadow(normalizedTags, request.Tag),
                 Nombre = request.Nombre.Trim(),
                 Descripcion = SanitizeRichTextHtml(request.Descripcion),
+                IdProveedorPrincipal = request.IdProveedorPrincipal.HasValue && request.IdProveedorPrincipal.Value != Guid.Empty ? request.IdProveedorPrincipal : null,
+                ProveedorPrincipalFueEnviado = request.ProveedorPrincipalFueEnviado,
                 IdCategoria = request.IdCategoria,
                 IdMarca = request.IdMarca.HasValue && request.IdMarca.Value != Guid.Empty ? request.IdMarca : null,
                 IdUnidadMedida = request.IdUnidadMedida,
@@ -4777,6 +4847,8 @@ WHERE idEmpresa = @IdEmpresa
             command.Parameters.AddWithValue("@Tag", string.IsNullOrWhiteSpace(request.Tag) ? DBNull.Value : request.Tag);
             command.Parameters.AddWithValue("@Nombre", request.Nombre);
             command.Parameters.AddWithValue("@Descripcion", string.IsNullOrWhiteSpace(request.Descripcion) ? DBNull.Value : request.Descripcion);
+            command.Parameters.AddWithValue("@IdProveedorPrincipal", request.IdProveedorPrincipal.HasValue ? request.IdProveedorPrincipal.Value : DBNull.Value);
+            command.Parameters.AddWithValue("@ProveedorPrincipalFueEnviado", request.ProveedorPrincipalFueEnviado);
             command.Parameters.AddWithValue("@IdCategoria", request.IdCategoria);
             command.Parameters.AddWithValue("@IdMarca", request.IdMarca.HasValue ? request.IdMarca.Value : DBNull.Value);
             command.Parameters.AddWithValue("@IdUnidadMedida", request.IdUnidadMedida);
@@ -7461,6 +7533,12 @@ WHERE ov.idEmpresa = @IdEmpresa
                 Tag = ReadString(reader, "Tag"),
                 Nombre = ReadString(reader, "Nombre"),
                 Descripcion = ReadString(reader, "Descripcion"),
+                IdProveedorPrincipal = ReadNullableGuid(reader, "idProveedorPrincipal"),
+                ProveedorPrincipalCodigo = ReadString(reader, "ProveedorPrincipalCodigo"),
+                ProveedorPrincipalNombre = ReadString(reader, "ProveedorPrincipalNombre"),
+                ProveedorPrincipalActivo = HasColumn(reader, "ProveedorPrincipalActivo") && !reader.IsDBNull(reader.GetOrdinal("ProveedorPrincipalActivo"))
+                    ? ReadBool(reader, "ProveedorPrincipalActivo")
+                    : null,
                 IdCategoria = ReadGuid(reader, "idCategoria"),
                 Categoria = ReadString(reader, "Categoria"),
                 CategoriaAplicaA = ReadByte(reader, "CategoriaAplicaA"),
@@ -8581,6 +8659,8 @@ WHERE ov.idEmpresa = @IdEmpresa
             public string Tag { get; set; } = string.Empty;
             public string Nombre { get; set; } = string.Empty;
             public string Descripcion { get; set; } = string.Empty;
+            public Guid? IdProveedorPrincipal { get; set; }
+            public bool ProveedorPrincipalFueEnviado { get; set; }
             public Guid IdCategoria { get; set; }
             public Guid? IdMarca { get; set; }
             public Guid IdUnidadMedida { get; set; }
@@ -8626,6 +8706,7 @@ WHERE ov.idEmpresa = @IdEmpresa
             public Guid IdEmpresa { get; set; }
             public byte Tipo { get; set; }
             public string Codigo { get; set; } = string.Empty;
+            public Guid? IdProveedorPrincipal { get; set; }
             public Guid IdCategoria { get; set; }
             public Guid? IdMarca { get; set; }
             public Guid IdUnidadMedida { get; set; }

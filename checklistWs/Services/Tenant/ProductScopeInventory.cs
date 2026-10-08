@@ -45,7 +45,8 @@ namespace checklistWs.Services.Tenant
             "dbo.OrdenesCompra",
             "dbo.OrdenesCompraDetalle",
             "dbo.OrdenesCompraFolios",
-            "dbo.OrdenesCompraPresentacionesCompra"
+            "dbo.OrdenesCompraPresentacionesCompra",
+            "dbo.OrdenesCompraSucursales"
         };
 
         private static readonly IReadOnlyCollection<string> InventarioTables = new[]

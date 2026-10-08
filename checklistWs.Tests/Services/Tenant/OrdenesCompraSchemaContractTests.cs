@@ -16,7 +16,10 @@ namespace checklistWs.Tests.Services.Tenant
             Assert.Equal(ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion, known.GetKnownCurrentVersion(DatabaseScopes.OrdenesCompra));
             Assert.Equal(1, _provider.GetContract(DatabaseScopes.OrdenesCompra, 1).ContractVersion);
             Assert.Equal(2, _provider.GetContract(DatabaseScopes.OrdenesCompra, 2).ContractVersion);
-            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.OrdenesCompra, 3));
+            Assert.Equal(3, _provider.GetContract(DatabaseScopes.OrdenesCompra, 3).ContractVersion);
+            Assert.Equal(4, _provider.GetContract(DatabaseScopes.OrdenesCompra, 4).ContractVersion);
+            Assert.Equal(5, _provider.GetContract(DatabaseScopes.OrdenesCompra, 5).ContractVersion);
+            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.OrdenesCompra, 6));
         }
 
         [Fact]
@@ -30,7 +33,8 @@ namespace checklistWs.Tests.Services.Tenant
                 "dbo.OrdenesCompra",
                 "dbo.OrdenesCompraDetalle",
                 "dbo.OrdenesCompraFolios",
-                "dbo.OrdenesCompraPresentacionesCompra"
+                "dbo.OrdenesCompraPresentacionesCompra",
+                "dbo.OrdenesCompraSucursales"
             }.OrderBy(x => x), expected.OrderBy(x => x));
             Assert.Equal(expected.OrderBy(x => x), contract.Tables.Select(t => t.FullName).OrderBy(x => x));
         }
@@ -92,11 +96,33 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void ManifestHash_IsStableForOc02Contract()
+        public void CabeceraV3_AddsNullableDeliveryRangeWithoutBackfill()
+        {
+            SchemaTableContract v2 = _provider.GetContract(DatabaseScopes.OrdenesCompra, 2).Tables.Single(t => t.Name == "OrdenesCompra");
+            SchemaTableContract v3 = _provider.GetContract(DatabaseScopes.OrdenesCompra, 3).Tables.Single(t => t.Name == "OrdenesCompra");
+
+            Assert.DoesNotContain(v2.Columns, c => c.Name == "FechaMinima" || c.Name == "FechaMaxima");
+            Assert.Contains(v3.Columns, c => c.Name == "FechaMinima" && c.SqlType == "DATE" && c.IsNullable && c.DefaultDefinition == null);
+            Assert.Contains(v3.Columns, c => c.Name == "FechaMaxima" && c.SqlType == "DATE" && c.IsNullable && c.DefaultDefinition == null);
+            Assert.Contains(v3.CheckConstraints, c => c.Name == "CK_OrdenesCompra_RangoFechas");
+        }
+
+        [Fact]
+        public void CabeceraV4_AddsOptionalReferenceFolioWithoutChangingAutomaticFolio()
+        {
+            SchemaTableContract v3 = _provider.GetContract(DatabaseScopes.OrdenesCompra, 3).Tables.Single(t => t.Name == "OrdenesCompra");
+            SchemaTableContract v4 = _provider.GetContract(DatabaseScopes.OrdenesCompra, 4).Tables.Single(t => t.Name == "OrdenesCompra");
+
+            Assert.DoesNotContain(v3.Columns, c => c.Name == "FolioReferencia");
+            Assert.Contains(v4.Columns, c => c.Name == "FolioReferencia" && c.SqlType == "NVARCHAR(100)" && c.IsNullable);
+            Assert.Contains(v4.Columns, c => c.Name == "Folio" && c.SqlType == "NVARCHAR(30)");
+        }
+
+        [Fact]
+        public void ManifestHash_IsStableForOcQa05Contract()
         {
             SchemaContract contract = Contract();
-
-            Assert.Equal("0977353cc806ec35d21c95c4149e16cdf41b3480d52b929b13ec82185957e802", _manifestProvider.CreateManifest(contract).ManifestHash);
+            Assert.Equal("843193ced8cccf043953c4b81eec7991a1cce65a666d58321385c637075b9b8d", _manifestProvider.CreateManifest(contract).ManifestHash);
         }
 
         private SchemaContract Contract()

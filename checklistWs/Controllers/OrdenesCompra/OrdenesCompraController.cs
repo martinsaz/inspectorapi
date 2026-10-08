@@ -22,6 +22,8 @@ namespace checklistWs.Controllers.OrdenesCompra
         private const byte EstadoBorrador = 1;
         private const byte EstadoGenerada = 2;
         private const byte EstadoCancelada = 3;
+        private const byte EstadoParcialmenteRecibida = 4;
+        private const byte EstadoRecibida = 5;
         private const byte TipoProducto = 1;
         private const byte TipoServicio = 2;
         private const int FolioPadding = 6;
@@ -88,16 +90,22 @@ namespace checklistWs.Controllers.OrdenesCompra
                 StringBuilder query = new StringBuilder(@"
 SELECT
     oc.id,
-    oc.Folio,
+	    oc.Folio,
+	    ISNULL(oc.FolioReferencia, '') AS FolioReferencia,
     oc.FechaOrden,
     oc.FechaLlegada,
+    oc.FechaMinima,
+    oc.FechaMaxima,
     oc.idRazonSocial,
     ISNULL(rs.Nombre, '') AS RazonSocial,
     oc.idSucursal,
-    ISNULL(su.Nombre, '') AS Sucursal,
+    ISNULL(dest.Sucursales, ISNULL(su.Nombre, '')) AS Sucursal,
     oc.idProveedor,
     ISNULL(pr.Nombre, '') AS Proveedor,
     oc.Estado,
+    ISNULL(tr.CantidadOrdenada, 0) AS CantidadOrdenada,
+    ISNULL(tr.CantidadRecibida, 0) AS CantidadRecibida,
+    ISNULL(tr.CantidadPendiente, 0) AS CantidadPendiente,
     oc.Total,
     oc.FechaCreacion
 FROM dbo.OrdenesCompra oc
@@ -105,8 +113,25 @@ LEFT JOIN dbo.RazonesSociales rs
     ON rs.id = oc.idRazonSocial AND rs.idEmpresa = oc.idEmpresa
 LEFT JOIN dbo.Sucursales su
     ON su.id = oc.idSucursal AND su.idEmpresa = oc.idEmpresa
+OUTER APPLY (
+    SELECT STRING_AGG(CONVERT(nvarchar(max), s2.Nombre), ', ') WITHIN GROUP (ORDER BY s2.Nombre) AS Sucursales
+    FROM dbo.OrdenesCompraSucursales os
+    INNER JOIN dbo.Sucursales s2 ON s2.idEmpresa=os.idEmpresa AND s2.id=os.idSucursal
+    WHERE os.idEmpresa=oc.idEmpresa AND os.idOrdenCompra=oc.id AND os.Activo=1 AND os.FechaArchivado IS NULL
+) dest
 LEFT JOIN dbo.ActivosProveedores pr
     ON pr.id = oc.idProveedor AND pr.idEmpresa = oc.idEmpresa
+OUTER APPLY (
+    SELECT
+        SUM(d.CantidadBaseOrdenada) AS CantidadOrdenada,
+        SUM(d.CantidadBaseRecibidaAcumulada) AS CantidadRecibida,
+        SUM(d.CantidadBasePendiente) AS CantidadPendiente
+    FROM dbo.OrdenesCompraDetalle d
+    WHERE d.idEmpresa = oc.idEmpresa
+      AND d.idOrdenCompra = oc.id
+      AND d.Activo = 1
+      AND d.FechaArchivado IS NULL
+) tr
 WHERE oc.idEmpresa = @IdEmpresa
   AND oc.Activo = 1
   AND oc.FechaArchivado IS NULL");
@@ -119,9 +144,10 @@ WHERE oc.idEmpresa = @IdEmpresa
                 {
                     query.Append(@"
   AND (
-        ISNULL(oc.Folio, '') LIKE @Busqueda
+	        ISNULL(oc.Folio, '') LIKE @Busqueda
+	        OR ISNULL(oc.FolioReferencia, '') LIKE @Busqueda
         OR ISNULL(rs.Nombre, '') LIKE @Busqueda
-        OR ISNULL(su.Nombre, '') LIKE @Busqueda
+        OR ISNULL(dest.Sucursales, ISNULL(su.Nombre, '')) LIKE @Busqueda
         OR ISNULL(pr.Nombre, '') LIKE @Busqueda
         OR ISNULL(oc.Observaciones, '') LIKE @Busqueda
       )");
@@ -131,7 +157,11 @@ WHERE oc.idEmpresa = @IdEmpresa
                 AppendTinyIntFilter(query, command, "oc.Estado", "@Estado", estado);
                 AppendGuidFilter(query, command, "oc.idProveedor", "@IdProveedor", idProveedor);
                 AppendGuidFilter(query, command, "oc.idRazonSocial", "@IdRazonSocial", idRazonSocial);
-                AppendGuidFilter(query, command, "oc.idSucursal", "@IdSucursal", idSucursal);
+                if (idSucursal.HasValue && idSucursal.Value != Guid.Empty)
+                {
+                    query.Append(" AND EXISTS (SELECT 1 FROM dbo.OrdenesCompraSucursales osf WHERE osf.idEmpresa=oc.idEmpresa AND osf.idOrdenCompra=oc.id AND osf.idSucursal=@IdSucursal AND osf.Activo=1 AND osf.FechaArchivado IS NULL)");
+                    command.Parameters.AddWithValue("@IdSucursal", idSucursal.Value);
+                }
                 AppendFechaDesdeFilter(query, command, "oc.FechaOrden", "@FechaDesde", fechaDesde);
                 AppendFechaHastaFilter(query, command, "oc.FechaOrden", "@FechaHasta", fechaHasta);
 
@@ -147,16 +177,22 @@ WHERE oc.idEmpresa = @IdEmpresa
                     {
                         Id = ReadGuid(reader, "id"),
                         Folio = ReadString(reader, "Folio"),
+                        FolioReferencia = ReadString(reader, "FolioReferencia"),
                         FechaOrden = ReadDateTime(reader, "FechaOrden"),
                         FechaLlegada = ReadNullableDateTime(reader, "FechaLlegada"),
+                        FechaMinima = ReadNullableDateTime(reader, "FechaMinima"),
+                        FechaMaxima = ReadNullableDateTime(reader, "FechaMaxima"),
                         IdRazonSocial = ReadGuid(reader, "idRazonSocial"),
                         RazonSocial = ReadString(reader, "RazonSocial"),
-                        IdSucursal = ReadGuid(reader, "idSucursal"),
+                        IdSucursal = ReadNullableGuid(reader, "idSucursal"),
                         Sucursal = ReadString(reader, "Sucursal"),
                         IdProveedor = ReadGuid(reader, "idProveedor"),
                         Proveedor = ReadString(reader, "Proveedor"),
                         Estado = estadoActual,
                         EstadoNombre = GetEstadoNombre(estadoActual),
+                        CantidadOrdenada = ReadDecimal(reader, "CantidadOrdenada"),
+                        CantidadRecibida = ReadDecimal(reader, "CantidadRecibida"),
+                        CantidadPendiente = ReadDecimal(reader, "CantidadPendiente"),
                         Total = ReadDecimal(reader, "Total"),
                         FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
                         PuedeEditar = estadoActual == EstadoBorrador,
@@ -200,7 +236,8 @@ SELECT
     oc.id,
     oc.idEmpresa,
     oc.identityKey,
-    ISNULL(oc.Folio, '') AS Folio,
+	    ISNULL(oc.Folio, '') AS Folio,
+	    ISNULL(oc.FolioReferencia, '') AS FolioReferencia,
     oc.idRazonSocial,
     ISNULL(rs.Nombre, '') AS RazonSocial,
     oc.idSucursal,
@@ -209,6 +246,8 @@ SELECT
     ISNULL(pr.Nombre, '') AS Proveedor,
     oc.FechaOrden,
     oc.FechaLlegada,
+    oc.FechaMinima,
+    oc.FechaMaxima,
     oc.Estado,
     ISNULL(oc.Observaciones, '') AS Observaciones,
     oc.Subtotal,
@@ -250,14 +289,17 @@ WHERE oc.idEmpresa = @IdEmpresa
                         IdEmpresa = ReadGuid(reader, "idEmpresa"),
                         IdentityKey = ReadGuid(reader, "identityKey"),
                         Folio = ReadString(reader, "Folio"),
+                        FolioReferencia = ReadString(reader, "FolioReferencia"),
                         IdRazonSocial = ReadGuid(reader, "idRazonSocial"),
                         RazonSocial = ReadString(reader, "RazonSocial"),
-                        IdSucursal = ReadGuid(reader, "idSucursal"),
+                        IdSucursal = ReadNullableGuid(reader, "idSucursal"),
                         Sucursal = ReadString(reader, "Sucursal"),
                         IdProveedor = ReadGuid(reader, "idProveedor"),
                         Proveedor = ReadString(reader, "Proveedor"),
                         FechaOrden = ReadDateTime(reader, "FechaOrden"),
                         FechaLlegada = ReadNullableDateTime(reader, "FechaLlegada"),
+                        FechaMinima = ReadNullableDateTime(reader, "FechaMinima"),
+                        FechaMaxima = ReadNullableDateTime(reader, "FechaMaxima"),
                         Estado = estadoActual,
                         EstadoNombre = GetEstadoNombre(estadoActual),
                         Observaciones = ReadString(reader, "Observaciones"),
@@ -273,6 +315,8 @@ WHERE oc.idEmpresa = @IdEmpresa
                     };
                 }
 
+                detalle.Sucursales = await ObtenerSucursalesAsync(connection, context.IdEmpresa, idOrdenCompra);
+                detalle.Sucursal = string.Join(", ", detalle.Sucursales.Select(s => s.Nombre));
                 detalle.Partidas = await ObtenerPartidasAsync(connection, context.IdEmpresa, idOrdenCompra);
                 return Ok(detalle);
             }
@@ -316,13 +360,15 @@ WHERE oc.idEmpresa = @IdEmpresa
 
                 try
                 {
-                    await ValidateEncabezadoCatalogosAsync(connection, transaction, context.IdEmpresa, request.IdRazonSocial, request.IdSucursal, request.IdProveedor);
+                    List<OrdenCompraSucursalDto> sucursales = await ValidateEncabezadoCatalogosAsync(connection, transaction, context.IdEmpresa, request.IdSucursales, request.IdProveedor);
+                    request.IdRazonSocial = sucursales[0].IdRazonSocial;
 
                     List<OrdenCompraPartidaPersistencia> partidas = await BuildValidatedPartidasAsync(
                         connection,
                         transaction,
                         context.IdEmpresa,
-                        request.Partidas);
+                        request.Partidas,
+                        request.IdSucursales);
 
                     TotalesOrdenCompra totales = CalculateTotals(partidas);
 
@@ -341,11 +387,14 @@ INSERT INTO dbo.OrdenesCompra
     idEmpresa,
     identityKey,
     Folio,
+    FolioReferencia,
     idRazonSocial,
     idSucursal,
     idProveedor,
     FechaOrden,
     FechaLlegada,
+    FechaMinima,
+    FechaMaxima,
     Estado,
     Subtotal,
     Total,
@@ -362,11 +411,14 @@ VALUES
     @IdEmpresa,
     @IdentityKey,
     @Folio,
+    @FolioReferencia,
     @IdRazonSocial,
     @IdSucursal,
     @IdProveedor,
     @FechaOrden,
     @FechaLlegada,
+    @FechaMinima,
+    @FechaMaxima,
     @Estado,
     @Subtotal,
     @Total,
@@ -382,11 +434,14 @@ VALUES
                         insertCommand.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
                         insertCommand.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
                         insertCommand.Parameters.AddWithValue("@Folio", folio);
+                        insertCommand.Parameters.AddWithValue("@FolioReferencia", (object?)NormalizeNullableText(request.FolioReferencia, 100) ?? DBNull.Value);
                         insertCommand.Parameters.AddWithValue("@IdRazonSocial", request.IdRazonSocial);
-                        insertCommand.Parameters.AddWithValue("@IdSucursal", request.IdSucursal);
+                        insertCommand.Parameters.AddWithValue("@IdSucursal", DBNull.Value);
                         insertCommand.Parameters.AddWithValue("@IdProveedor", request.IdProveedor);
                         insertCommand.Parameters.AddWithValue("@FechaOrden", request.FechaOrden);
                         insertCommand.Parameters.AddWithValue("@FechaLlegada", (object?)request.FechaLlegada ?? DBNull.Value);
+                        insertCommand.Parameters.AddWithValue("@FechaMinima", (object?)request.FechaMinima?.Date ?? DBNull.Value);
+                        insertCommand.Parameters.AddWithValue("@FechaMaxima", (object?)request.FechaMaxima?.Date ?? DBNull.Value);
                         insertCommand.Parameters.AddWithValue("@Estado", EstadoBorrador);
                         insertCommand.Parameters.AddWithValue("@Subtotal", totales.Subtotal);
                         insertCommand.Parameters.AddWithValue("@Total", totales.Total);
@@ -440,10 +495,13 @@ WHERE idEmpresa = @IdEmpresa
                         using SqlCommand updateCommand = new SqlCommand(@"
 UPDATE dbo.OrdenesCompra
 SET idRazonSocial = @IdRazonSocial,
+    FolioReferencia = @FolioReferencia,
     idSucursal = @IdSucursal,
     idProveedor = @IdProveedor,
     FechaOrden = @FechaOrden,
     FechaLlegada = @FechaLlegada,
+    FechaMinima = @FechaMinima,
+    FechaMaxima = @FechaMaxima,
     Observaciones = @Observaciones,
     Subtotal = @Subtotal,
     Total = @Total,
@@ -453,10 +511,13 @@ WHERE idEmpresa = @IdEmpresa
   AND id = @IdOrdenCompra", connection, transaction);
 
                         updateCommand.Parameters.AddWithValue("@IdRazonSocial", request.IdRazonSocial);
-                        updateCommand.Parameters.AddWithValue("@IdSucursal", request.IdSucursal);
+                        updateCommand.Parameters.AddWithValue("@FolioReferencia", (object?)NormalizeNullableText(request.FolioReferencia, 100) ?? DBNull.Value);
+                        updateCommand.Parameters.AddWithValue("@IdSucursal", DBNull.Value);
                         updateCommand.Parameters.AddWithValue("@IdProveedor", request.IdProveedor);
                         updateCommand.Parameters.AddWithValue("@FechaOrden", request.FechaOrden);
                         updateCommand.Parameters.AddWithValue("@FechaLlegada", (object?)request.FechaLlegada ?? DBNull.Value);
+                        updateCommand.Parameters.AddWithValue("@FechaMinima", (object?)request.FechaMinima?.Date ?? DBNull.Value);
+                        updateCommand.Parameters.AddWithValue("@FechaMaxima", (object?)request.FechaMaxima?.Date ?? DBNull.Value);
                         updateCommand.Parameters.AddWithValue("@Observaciones", (object?)NormalizeNullableText(request.Observaciones, ObservacionesLength) ?? DBNull.Value);
                         updateCommand.Parameters.AddWithValue("@Subtotal", totales.Subtotal);
                         updateCommand.Parameters.AddWithValue("@Total", totales.Total);
@@ -470,6 +531,7 @@ WHERE idEmpresa = @IdEmpresa
                         ordenActual.Total = totales.Total;
                     }
 
+                    await UpsertSucursalesAsync(connection, transaction, context.IdEmpresa, ordenActual.Id, request.IdSucursales, usuarioId, utcNow);
                     await InsertPartidasAsync(connection, transaction, context.IdEmpresa, ordenActual.Id, partidas, utcNow);
 
                     transaction.Commit();
@@ -828,7 +890,9 @@ WHERE idEmpresa = @IdEmpresa
                     {
                         new OrdenCompraEstadoOpcionDto { Id = EstadoBorrador, Nombre = GetEstadoNombre(EstadoBorrador) },
                         new OrdenCompraEstadoOpcionDto { Id = EstadoGenerada, Nombre = GetEstadoNombre(EstadoGenerada) },
-                        new OrdenCompraEstadoOpcionDto { Id = EstadoCancelada, Nombre = GetEstadoNombre(EstadoCancelada) }
+                        new OrdenCompraEstadoOpcionDto { Id = EstadoCancelada, Nombre = GetEstadoNombre(EstadoCancelada) },
+                        new OrdenCompraEstadoOpcionDto { Id = EstadoParcialmenteRecibida, Nombre = GetEstadoNombre(EstadoParcialmenteRecibida) },
+                        new OrdenCompraEstadoOpcionDto { Id = EstadoRecibida, Nombre = GetEstadoNombre(EstadoRecibida) }
                     }
                 };
 
@@ -841,7 +905,7 @@ WHERE idEmpresa = @IdEmpresa
         }
 
         [HttpGet("BuscarProductosServiciosOrdenCompra")]
-        public async Task<IActionResult> BuscarProductosServiciosOrdenCompra(Guid idEmpresa, string texto = "", byte? tipo = null, int limite = 25)
+        public async Task<IActionResult> BuscarProductosServiciosOrdenCompra(Guid idEmpresa, string texto = "", byte? tipo = null, Guid? idProveedor = null, int limite = 25)
         {
             if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
             {
@@ -880,6 +944,8 @@ SELECT TOP (@Limite)
     ps.Codigo,
     ps.Nombre,
     ISNULL(ps.Descripcion, '') AS Descripcion,
+    ISNULL(cat.Nombre, '') AS Categoria,
+    ISNULL(m.Nombre, '') AS Marca,
     ps.idUnidadMedida,
     um.Nombre AS Unidad,
     um.Abreviatura,
@@ -890,6 +956,10 @@ INNER JOIN dbo.ProductosServiciosUnidadesMedida um
     ON um.idEmpresa = ps.idEmpresa
    AND um.id = ps.idUnidadMedida
    AND um.Activo = 1
+LEFT JOIN dbo.ProductosServiciosCategorias cat
+    ON cat.idEmpresa = ps.idEmpresa AND cat.id = ps.idCategoria AND cat.Activo = 1
+LEFT JOIN dbo.ProductosServiciosMarcas m
+    ON m.idEmpresa = ps.idEmpresa AND m.id = ps.idMarca AND m.Activo = 1
 WHERE ps.idEmpresa = @IdEmpresa
   AND ps.Activo = 1");
 
@@ -919,6 +989,11 @@ WHERE ps.idEmpresa = @IdEmpresa
                 }
 
                 AppendTinyIntFilter(query, command, "ps.Tipo", "@Tipo", tipo);
+                if (idProveedor.HasValue && idProveedor.Value != Guid.Empty)
+                {
+                    query.Append(" AND ps.idProveedorPrincipal = @IdProveedor");
+                    command.Parameters.AddWithValue("@IdProveedor", idProveedor.Value);
+                }
                 query.Append(@"
  ORDER BY
     CASE
@@ -951,6 +1026,8 @@ WHERE ps.idEmpresa = @IdEmpresa
                             Codigo = ReadString(reader, "Codigo"),
                             Nombre = ReadString(reader, "Nombre"),
                             Descripcion = ReadString(reader, "Descripcion"),
+                            Categoria = ReadString(reader, "Categoria"),
+                            Marca = ReadString(reader, "Marca"),
                             IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
                             Unidad = ReadString(reader, "Unidad"),
                             Abreviatura = ReadString(reader, "Abreviatura"),
@@ -1044,6 +1121,9 @@ WHERE ps.idEmpresa = @IdEmpresa
                     Sucursal = item.Sucursal,
                     Proveedor = item.Proveedor,
                     Estado = GetEstadoNombreUsuario(item.Estado),
+                    CantidadOrdenada = item.CantidadOrdenada,
+                    CantidadRecibida = item.CantidadRecibida,
+                    CantidadPendiente = item.CantidadPendiente,
                     Total = item.Total,
                     FechaCreacion = item.FechaCreacion
                 })
@@ -1147,7 +1227,7 @@ SELECT TOP (1)
     oc.FechaOrden,
     oc.FechaLlegada,
     ISNULL(rs.Nombre, '') AS RazonSocial,
-    ISNULL(su.Nombre, '') AS Sucursal,
+    ISNULL(dest.Sucursales, ISNULL(su.Nombre, '')) AS Sucursal,
     ISNULL(pr.Nombre, '') AS Proveedor,
     ISNULL(oc.Observaciones, '') AS Observaciones,
     oc.Subtotal,
@@ -1158,6 +1238,12 @@ LEFT JOIN dbo.RazonesSociales rs
     ON rs.id = oc.idRazonSocial AND rs.idEmpresa = oc.idEmpresa
 LEFT JOIN dbo.Sucursales su
     ON su.id = oc.idSucursal AND su.idEmpresa = oc.idEmpresa
+OUTER APPLY (
+    SELECT STRING_AGG(CONVERT(nvarchar(max), s2.Nombre), ', ') WITHIN GROUP (ORDER BY s2.Nombre) AS Sucursales
+    FROM dbo.OrdenesCompraSucursales os
+    INNER JOIN dbo.Sucursales s2 ON s2.idEmpresa=os.idEmpresa AND s2.id=os.idSucursal
+    WHERE os.idEmpresa=oc.idEmpresa AND os.idOrdenCompra=oc.id AND os.Activo=1 AND os.FechaArchivado IS NULL
+) dest
 LEFT JOIN dbo.ActivosProveedores pr
     ON pr.id = oc.idProveedor AND pr.idEmpresa = oc.idEmpresa
 WHERE oc.idEmpresa = @IdEmpresa
@@ -1194,14 +1280,23 @@ WHERE oc.idEmpresa = @IdEmpresa
                 .Select(partida => new OrdenCompraDocumentoPartidaDto
                 {
                     NumeroPartida = partida.NumeroPartida,
+                    Sucursal = partida.Sucursal,
                     Tipo = partida.TipoProductoServicioNombre,
                     Codigo = partida.Codigo,
                     Nombre = partida.Nombre,
                     Descripcion = partida.Descripcion,
+                    Categoria = partida.Categoria,
+                    Marca = partida.Marca,
+                    Variante = partida.VarianteSnapshot,
+                    PresentacionCompra = partida.PresentacionCompraSnapshot,
                     Unidad = string.IsNullOrWhiteSpace(partida.UnidadAbreviatura)
                         ? partida.UnidadMedida
                         : $"{partida.UnidadMedida} ({partida.UnidadAbreviatura})",
                     Cantidad = partida.Cantidad,
+                    CantidadOrdenada = partida.CantidadBaseOrdenada,
+                    CantidadRecibida = partida.CantidadBaseRecibidaAcumulada,
+                    CantidadPendiente = partida.CantidadBasePendiente,
+                    EstadoPartida = partida.EstadoPartidaNombre,
                     CostoUnitario = partida.CostoUnitario,
                     Subtotal = partida.Subtotal
                 })
@@ -1367,7 +1462,12 @@ WHERE idEmpresa = @IdEmpresa
                         BuildColumn(6, 6, 18D),
                         BuildColumn(7, 7, 14D),
                         BuildColumn(8, 8, 14D),
-                        BuildColumn(9, 9, 14D)),
+                        BuildColumn(9, 9, 18D),
+                        BuildColumn(10, 10, 18D),
+                        BuildColumn(11, 11, 22D),
+                        BuildColumn(12, 15, 16D),
+                        BuildColumn(16, 17, 14D),
+                        BuildColumn(18, 18, 22D)),
                     sheetData);
 
                 Sheets sheets = spreadsheet.WorkbookPart!.Workbook.AppendChild(new Sheets());
@@ -1398,10 +1498,19 @@ WHERE idEmpresa = @IdEmpresa
                     BuildTextCell("C", rowIndex, "Código", 1U),
                     BuildTextCell("D", rowIndex, "Nombre", 1U),
                     BuildTextCell("E", rowIndex, "Descripción", 1U),
-                    BuildTextCell("F", rowIndex, "Unidad", 1U),
-                    BuildTextCell("G", rowIndex, "Cantidad", 1U),
-                    BuildTextCell("H", rowIndex, "Costo", 1U),
-                    BuildTextCell("I", rowIndex, "Subtotal", 1U)));
+                    BuildTextCell("F", rowIndex, "Categoría", 1U),
+                    BuildTextCell("G", rowIndex, "Marca", 1U),
+                    BuildTextCell("H", rowIndex, "Variante", 1U),
+                    BuildTextCell("I", rowIndex, "Presentación compra", 1U),
+                    BuildTextCell("J", rowIndex, "Unidad", 1U),
+                    BuildTextCell("K", rowIndex, "Ordenado", 1U),
+                    BuildTextCell("L", rowIndex, "Recibido", 1U),
+                    BuildTextCell("M", rowIndex, "Pendiente", 1U),
+                    BuildTextCell("N", rowIndex, "Estado partida", 1U),
+                    BuildTextCell("O", rowIndex, "Cantidad compra", 1U),
+                    BuildTextCell("P", rowIndex, "Costo", 1U),
+                    BuildTextCell("Q", rowIndex, "Subtotal", 1U),
+                    BuildTextCell("R", rowIndex, "Sucursal", 1U)));
                 rowIndex++;
 
                 foreach (OrdenCompraDocumentoPartidaDto partida in documento.Partidas)
@@ -1412,21 +1521,30 @@ WHERE idEmpresa = @IdEmpresa
                         BuildTextCell("C", rowIndex, partida.Codigo, 0U),
                         BuildTextCell("D", rowIndex, partida.Nombre, 0U),
                         BuildTextCell("E", rowIndex, partida.Descripcion, 0U),
-                        BuildTextCell("F", rowIndex, partida.Unidad, 0U),
-                        BuildNumberCell("G", rowIndex, partida.Cantidad, 2U),
-                        BuildNumberCell("H", rowIndex, partida.CostoUnitario, 2U),
-                        BuildNumberCell("I", rowIndex, partida.Subtotal, 2U)));
+                        BuildTextCell("F", rowIndex, partida.Categoria, 0U),
+                        BuildTextCell("G", rowIndex, partida.Marca, 0U),
+                        BuildTextCell("H", rowIndex, partida.Variante, 0U),
+                        BuildTextCell("I", rowIndex, partida.PresentacionCompra, 0U),
+                        BuildTextCell("J", rowIndex, partida.Unidad, 0U),
+                        BuildNumberCell("K", rowIndex, partida.CantidadOrdenada, 2U),
+                        BuildNumberCell("L", rowIndex, partida.CantidadRecibida, 2U),
+                        BuildNumberCell("M", rowIndex, partida.CantidadPendiente, 2U),
+                        BuildTextCell("N", rowIndex, partida.EstadoPartida, 0U),
+                        BuildNumberCell("O", rowIndex, partida.Cantidad, 2U),
+                        BuildNumberCell("P", rowIndex, partida.CostoUnitario, 2U),
+                        BuildNumberCell("Q", rowIndex, partida.Subtotal, 2U),
+                        BuildTextCell("R", rowIndex, partida.Sucursal, 0U)));
                     rowIndex++;
                 }
 
                 sheetData.Append(
                     new Row { RowIndex = rowIndex++ },
                     new Row(
-                        BuildTextCell("G", rowIndex, "Subtotal", 1U),
-                        BuildNumberCell("I", rowIndex, documento.Subtotal, 2U)),
+                        BuildTextCell("O", rowIndex, "Subtotal", 1U),
+                        BuildNumberCell("Q", rowIndex, documento.Subtotal, 2U)),
                     new Row(
-                        BuildTextCell("G", ++rowIndex, "Total", 1U),
-                        BuildNumberCell("I", rowIndex, documento.Total, 2U)));
+                        BuildTextCell("O", ++rowIndex, "Total", 1U),
+                        BuildNumberCell("Q", rowIndex, documento.Total, 2U)));
 
                 workbookPart.Workbook.Save();
             }
@@ -1460,7 +1578,7 @@ WHERE idEmpresa = @IdEmpresa
                         BuildColumn(6, 6, 26D),
                         BuildColumn(7, 7, 18D),
                         BuildColumn(8, 8, 16D),
-                        BuildColumn(9, 9, 20D)),
+                        BuildColumn(9, 12, 18D)),
                     sheetData);
 
                 Sheets sheets = spreadsheet.WorkbookPart!.Workbook.AppendChild(new Sheets());
@@ -1486,8 +1604,11 @@ WHERE idEmpresa = @IdEmpresa
                     BuildTextCell("E", rowIndex, "Sucursal", 1U),
                     BuildTextCell("F", rowIndex, "Proveedor", 1U),
                     BuildTextCell("G", rowIndex, "Estado", 1U),
-                    BuildTextCell("H", rowIndex, "Total", 1U),
-                    BuildTextCell("I", rowIndex, "Fecha de creación", 1U)));
+                    BuildTextCell("H", rowIndex, "Ordenado", 1U),
+                    BuildTextCell("I", rowIndex, "Recibido", 1U),
+                    BuildTextCell("J", rowIndex, "Pendiente", 1U),
+                    BuildTextCell("K", rowIndex, "Total", 1U),
+                    BuildTextCell("L", rowIndex, "Fecha de creación", 1U)));
                 rowIndex++;
 
                 foreach (OrdenCompraExportacionDto item in items)
@@ -1500,8 +1621,11 @@ WHERE idEmpresa = @IdEmpresa
                         BuildTextCell("E", rowIndex, item.Sucursal, 0U),
                         BuildTextCell("F", rowIndex, item.Proveedor, 0U),
                         BuildTextCell("G", rowIndex, item.Estado, 0U),
-                        BuildNumberCell("H", rowIndex, item.Total, 2U),
-                        BuildTextCell("I", rowIndex, item.FechaCreacion.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture), 0U)));
+                        BuildNumberCell("H", rowIndex, item.CantidadOrdenada, 2U),
+                        BuildNumberCell("I", rowIndex, item.CantidadRecibida, 2U),
+                        BuildNumberCell("J", rowIndex, item.CantidadPendiente, 2U),
+                        BuildNumberCell("K", rowIndex, item.Total, 2U),
+                        BuildTextCell("L", rowIndex, item.FechaCreacion.ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture), 0U)));
                     rowIndex++;
                 }
 
@@ -1649,7 +1773,7 @@ WHERE idEmpresa = @IdEmpresa
                 $"Observaciones: {TextOrDash(documento.Observaciones)}",
                 string.Empty,
                 "PARTIDAS",
-                "No | Tipo | Codigo | Producto o servicio | Unidad | Cantidad | Costo | Subtotal"
+                "No | Sucursal | Tipo | Codigo | Producto o servicio | Categoria | Marca | Variante | Presentacion compra | Ordenado | Recibido | Pendiente | Estado | Costo | Subtotal"
             };
 
             foreach (OrdenCompraDocumentoPartidaDto partida in documento.Partidas)
@@ -1660,11 +1784,18 @@ WHERE idEmpresa = @IdEmpresa
                 lines.Add(string.Join(" | ", new[]
                 {
                     partida.NumeroPartida.ToString(CultureInfo.InvariantCulture),
+                    ShortenPdfText(partida.Sucursal, 18),
                     ShortenPdfText(partida.Tipo, 10),
                     ShortenPdfText(partida.Codigo, 18),
                     ShortenPdfText(descripcion, 45),
-                    ShortenPdfText(partida.Unidad, 16),
-                    partida.Cantidad.ToString("N4", CultureInfo.InvariantCulture),
+                    ShortenPdfText(partida.Categoria, 16),
+                    ShortenPdfText(partida.Marca, 16),
+                    ShortenPdfText(partida.Variante, 18),
+                    ShortenPdfText(partida.PresentacionCompra, 18),
+                    partida.CantidadOrdenada.ToString("N4", CultureInfo.InvariantCulture),
+                    partida.CantidadRecibida.ToString("N4", CultureInfo.InvariantCulture),
+                    partida.CantidadPendiente.ToString("N4", CultureInfo.InvariantCulture),
+                    ShortenPdfText(partida.EstadoPartida, 20),
                     partida.CostoUnitario.ToString("N2", CultureInfo.InvariantCulture),
                     partida.Subtotal.ToString("N2", CultureInfo.InvariantCulture)
                 }));
@@ -1736,20 +1867,24 @@ WHERE idEmpresa = @IdEmpresa
         private static string TextOrDash(string? value)
             => string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
 
-        private async Task ValidateEncabezadoCatalogosAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idRazonSocial, Guid idSucursal, Guid idProveedor)
+        private async Task<List<OrdenCompraSucursalDto>> ValidateEncabezadoCatalogosAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, List<Guid> idSucursales, Guid idProveedor)
         {
-            if (!await ExistsAsync(connection, transaction,
-                "SELECT COUNT(1) FROM dbo.RazonesSociales WHERE idEmpresa = @IdEmpresa AND id = @Id AND ISNULL(borrado, 0) = 0",
-                idEmpresa, idRazonSocial))
-            {
-                throw new CatalogoValidationException("La razón social no está disponible.");
-            }
+            List<Guid> ids = (idSucursales ?? new List<Guid>()).Where(id => id != Guid.Empty).Distinct().ToList();
+            if (ids.Count == 0) throw new CatalogoValidationException("Selecciona al menos una sucursal destino.");
 
-            if (!await ExistsAsync(connection, transaction,
-                "SELECT COUNT(1) FROM dbo.Sucursales WHERE idEmpresa = @IdEmpresa AND id = @Id AND ISNULL(borrado, 0) = 0",
-                idEmpresa, idSucursal))
+            List<OrdenCompraSucursalDto> sucursales = new List<OrdenCompraSucursalDto>();
+            foreach (Guid idSucursal in ids)
             {
-                throw new CatalogoValidationException("La sucursal no está disponible.");
+                using SqlCommand branchCommand = new SqlCommand(@"
+SELECT TOP (1) s.id, s.idRazonSocial, CAST('' AS nvarchar(50)) AS Codigo, ISNULL(s.Nombre, '') AS Nombre
+FROM dbo.Sucursales s
+INNER JOIN dbo.RazonesSociales rs ON rs.idEmpresa=s.idEmpresa AND rs.id=s.idRazonSocial AND ISNULL(rs.borrado,0)=0
+WHERE s.idEmpresa=@IdEmpresa AND s.id=@IdSucursal AND ISNULL(s.borrado,0)=0", connection, transaction);
+                branchCommand.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                branchCommand.Parameters.AddWithValue("@IdSucursal", idSucursal);
+                using SqlDataReader reader = await branchCommand.ExecuteReaderAsync();
+                if (!await reader.ReadAsync()) throw new CatalogoValidationException("Una sucursal destino no está disponible.");
+                sucursales.Add(new OrdenCompraSucursalDto { Id=ReadGuid(reader,"id"), IdRazonSocial=ReadGuid(reader,"idRazonSocial"), Codigo=ReadString(reader,"Codigo"), Nombre=ReadString(reader,"Nombre") });
             }
 
             if (!await ExistsAsync(connection, transaction,
@@ -1758,13 +1893,15 @@ WHERE idEmpresa = @IdEmpresa
             {
                 throw new CatalogoValidationException("El proveedor no está disponible.");
             }
+            return sucursales;
         }
 
         private async Task<List<OrdenCompraPartidaPersistencia>> BuildValidatedPartidasAsync(
             SqlConnection connection,
             SqlTransaction transaction,
             Guid idEmpresa,
-            List<OrdenCompraPartidaGuardarRequest> requestPartidas)
+            List<OrdenCompraPartidaGuardarRequest> requestPartidas,
+            List<Guid> idSucursales)
         {
             if (requestPartidas == null || requestPartidas.Count == 0)
             {
@@ -1772,12 +1909,17 @@ WHERE idEmpresa = @IdEmpresa
             }
 
             ValidateRequestPartidas(requestPartidas);
+            HashSet<Guid> sucursales = (idSucursales ?? new List<Guid>()).ToHashSet();
 
             List<OrdenCompraPartidaPersistencia> result = new List<OrdenCompraPartidaPersistencia>();
             int numeroPartida = 1;
 
             foreach (OrdenCompraPartidaGuardarRequest partidaRequest in requestPartidas)
             {
+                if (!sucursales.Contains(partidaRequest.IdSucursal))
+                {
+                    throw new CatalogoValidationException("La sucursal de una partida no pertenece a los destinos seleccionados.");
+                }
                 ProductoServicioSnapshot snapshot = await ObtenerProductoServicioSnapshotAsync(connection, transaction, idEmpresa, partidaRequest.IdProductoServicio);
                 if (snapshot.Id == Guid.Empty)
                 {
@@ -1795,6 +1937,7 @@ WHERE idEmpresa = @IdEmpresa
                 result.Add(new OrdenCompraPartidaPersistencia
                 {
                     Id = Guid.NewGuid(),
+                    IdSucursal = partidaRequest.IdSucursal,
                     IdProductoServicio = snapshot.Id,
                     TipoProductoServicio = snapshot.Tipo,
                     IdVariante = variante.Id,
@@ -1824,6 +1967,42 @@ WHERE idEmpresa = @IdEmpresa
             }
 
             return result;
+        }
+
+        private async Task UpsertSucursalesAsync(
+            SqlConnection connection,
+            SqlTransaction transaction,
+            Guid idEmpresa,
+            Guid idOrdenCompra,
+            IEnumerable<Guid> idSucursales,
+            Guid? usuarioId,
+            DateTime utcNow)
+        {
+            foreach (Guid idSucursal in idSucursales.Where(id => id != Guid.Empty).Distinct())
+            {
+                using SqlCommand command = new SqlCommand(@"
+IF EXISTS (
+    SELECT 1 FROM dbo.OrdenesCompraSucursales WITH (UPDLOCK, HOLDLOCK)
+    WHERE idEmpresa=@IdEmpresa AND idOrdenCompra=@IdOrdenCompra AND idSucursal=@IdSucursal)
+BEGIN
+    UPDATE dbo.OrdenesCompraSucursales
+    SET Activo=1, FechaArchivado=NULL, FechaActualizacion=@FechaActualizacion, idUsuarioActualizacion=@IdUsuario
+    WHERE idEmpresa=@IdEmpresa AND idOrdenCompra=@IdOrdenCompra AND idSucursal=@IdSucursal;
+END
+ELSE
+BEGIN
+    INSERT INTO dbo.OrdenesCompraSucursales
+        (id,idEmpresa,identityKey,idOrdenCompra,idSucursal,Activo,FechaCreacion,FechaActualizacion,FechaArchivado,idUsuarioCreacion,idUsuarioActualizacion,CorrelationId)
+    VALUES
+        (NEWID(),@IdEmpresa,NEWID(),@IdOrdenCompra,@IdSucursal,1,@FechaActualizacion,@FechaActualizacion,NULL,@IdUsuario,@IdUsuario,NULL);
+END", connection, transaction);
+                command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                command.Parameters.AddWithValue("@IdOrdenCompra", idOrdenCompra);
+                command.Parameters.AddWithValue("@IdSucursal", idSucursal);
+                command.Parameters.AddWithValue("@FechaActualizacion", utcNow);
+                command.Parameters.AddWithValue("@IdUsuario", (object?)usuarioId ?? DBNull.Value);
+                await command.ExecuteNonQueryAsync();
+            }
         }
 
         private async Task<ProductoServicioSnapshot> ObtenerProductoServicioSnapshotAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProductoServicio)
@@ -2013,6 +2192,7 @@ INSERT INTO dbo.OrdenesCompraDetalle
     idEmpresa,
     identityKey,
     idOrdenCompra,
+    idSucursal,
     NumeroPartida,
     idProductoServicio,
     TipoProductoServicio,
@@ -2048,6 +2228,7 @@ VALUES
     @IdEmpresa,
     @IdentityKey,
     @IdOrdenCompra,
+    @IdSucursal,
     @NumeroPartida,
     @IdProductoServicio,
     @TipoProductoServicio,
@@ -2082,6 +2263,7 @@ VALUES
                 command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
                 command.Parameters.AddWithValue("@IdentityKey", Guid.NewGuid());
                 command.Parameters.AddWithValue("@IdOrdenCompra", idOrdenCompra);
+                command.Parameters.AddWithValue("@IdSucursal", partida.IdSucursal);
                 command.Parameters.AddWithValue("@NumeroPartida", partida.NumeroPartida);
                 command.Parameters.AddWithValue("@IdProductoServicio", partida.IdProductoServicio);
                 command.Parameters.AddWithValue("@TipoProductoServicio", partida.TipoProductoServicio);
@@ -2117,38 +2299,50 @@ VALUES
         {
             using SqlCommand command = new SqlCommand(@"
 SELECT
-    id,
-    NumeroPartida,
-    idProductoServicio,
-    TipoProductoServicio,
-    idVariante,
-    idPresentacionCompra,
-    Codigo,
-    Nombre,
-    ISNULL(Descripcion, '') AS Descripcion,
-    ISNULL(VarianteSnapshot, '') AS VarianteSnapshot,
-    ISNULL(PresentacionCompraSnapshot, '') AS PresentacionCompraSnapshot,
-    idUnidadMedida,
-    UnidadMedida,
-    UnidadAbreviatura,
-    ISNULL(UnidadCompraSnapshot, '') AS UnidadCompraSnapshot,
-    ISNULL(UnidadCompraAbreviaturaSnapshot, '') AS UnidadCompraAbreviaturaSnapshot,
-    Cantidad,
-    CantidadCompra,
-    FactorConversionSnapshot,
-    CantidadBaseOrdenada,
-    CantidadBaseRecibidaAcumulada,
-    CantidadBasePendiente,
-    EstadoPartida,
-    CostoUnitario,
-    Subtotal,
-    Total
-FROM dbo.OrdenesCompraDetalle
-WHERE idEmpresa = @IdEmpresa
-  AND idOrdenCompra = @IdOrdenCompra
-  AND Activo = 1
-  AND FechaArchivado IS NULL
-ORDER BY NumeroPartida", connection);
+    d.id,
+    d.NumeroPartida,
+    d.idSucursal,
+    ISNULL(su.Nombre, '') AS Sucursal,
+    d.idProductoServicio,
+    d.TipoProductoServicio,
+    d.idVariante,
+    d.idPresentacionCompra,
+    d.Codigo,
+    d.Nombre,
+    ISNULL(d.Descripcion, '') AS Descripcion,
+    ISNULL(cat.Nombre, '') AS Categoria,
+    ISNULL(m.Nombre, '') AS Marca,
+    ISNULL(d.VarianteSnapshot, '') AS VarianteSnapshot,
+    ISNULL(d.PresentacionCompraSnapshot, '') AS PresentacionCompraSnapshot,
+    d.idUnidadMedida,
+    d.UnidadMedida,
+    d.UnidadAbreviatura,
+    ISNULL(d.UnidadCompraSnapshot, '') AS UnidadCompraSnapshot,
+    ISNULL(d.UnidadCompraAbreviaturaSnapshot, '') AS UnidadCompraAbreviaturaSnapshot,
+    d.Cantidad,
+    d.CantidadCompra,
+    d.FactorConversionSnapshot,
+    d.CantidadBaseOrdenada,
+    d.CantidadBaseRecibidaAcumulada,
+    d.CantidadBasePendiente,
+    d.EstadoPartida,
+    d.CostoUnitario,
+    d.Subtotal,
+    d.Total
+FROM dbo.OrdenesCompraDetalle d
+LEFT JOIN dbo.ProductosServicios ps
+    ON ps.idEmpresa = d.idEmpresa AND ps.id = d.idProductoServicio
+LEFT JOIN dbo.ProductosServiciosCategorias cat
+    ON cat.idEmpresa = ps.idEmpresa AND cat.id = ps.idCategoria
+LEFT JOIN dbo.ProductosServiciosMarcas m
+    ON m.idEmpresa = ps.idEmpresa AND m.id = ps.idMarca
+INNER JOIN dbo.Sucursales su
+    ON su.idEmpresa=d.idEmpresa AND su.id=d.idSucursal
+WHERE d.idEmpresa = @IdEmpresa
+  AND d.idOrdenCompra = @IdOrdenCompra
+  AND d.Activo = 1
+  AND d.FechaArchivado IS NULL
+ORDER BY d.NumeroPartida", connection);
 
             command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
             command.Parameters.AddWithValue("@IdOrdenCompra", idOrdenCompra);
@@ -2162,6 +2356,8 @@ ORDER BY NumeroPartida", connection);
                 {
                     Id = ReadGuid(reader, "id"),
                     NumeroPartida = ReadInt(reader, "NumeroPartida"),
+                    IdSucursal = ReadGuid(reader, "idSucursal"),
+                    Sucursal = ReadString(reader, "Sucursal"),
                     IdProductoServicio = ReadGuid(reader, "idProductoServicio"),
                     TipoProductoServicio = tipo,
                     TipoProductoServicioNombre = GetTipoNombre(tipo),
@@ -2170,6 +2366,8 @@ ORDER BY NumeroPartida", connection);
                     Codigo = ReadString(reader, "Codigo"),
                     Nombre = ReadString(reader, "Nombre"),
                     Descripcion = ReadString(reader, "Descripcion"),
+                    Categoria = ReadString(reader, "Categoria"),
+                    Marca = ReadString(reader, "Marca"),
                     VarianteSnapshot = ReadString(reader, "VarianteSnapshot"),
                     PresentacionCompraSnapshot = ReadString(reader, "PresentacionCompraSnapshot"),
                     IdUnidadMedida = ReadGuid(reader, "idUnidadMedida"),
@@ -2184,6 +2382,7 @@ ORDER BY NumeroPartida", connection);
                     CantidadBaseRecibidaAcumulada = ReadDecimal(reader, "CantidadBaseRecibidaAcumulada"),
                     CantidadBasePendiente = ReadDecimal(reader, "CantidadBasePendiente"),
                     EstadoPartida = ReadByte(reader, "EstadoPartida"),
+                    EstadoPartidaNombre = GetEstadoPartidaNombre(ReadByte(reader, "EstadoPartida")),
                     CostoUnitario = ReadDecimal(reader, "CostoUnitario"),
                     Subtotal = ReadDecimal(reader, "Subtotal"),
                     Total = ReadDecimal(reader, "Total")
@@ -2191,6 +2390,25 @@ ORDER BY NumeroPartida", connection);
             }
 
             return partidas;
+        }
+
+        private async Task<List<OrdenCompraSucursalDto>> ObtenerSucursalesAsync(SqlConnection connection, Guid idEmpresa, Guid idOrdenCompra)
+        {
+            using SqlCommand command = new SqlCommand(@"
+SELECT s.id, s.idRazonSocial, CAST('' AS nvarchar(50)) AS Codigo, ISNULL(s.Nombre,'') AS Nombre
+FROM dbo.OrdenesCompraSucursales os
+INNER JOIN dbo.Sucursales s ON s.idEmpresa=os.idEmpresa AND s.id=os.idSucursal
+WHERE os.idEmpresa=@IdEmpresa AND os.idOrdenCompra=@IdOrdenCompra AND os.Activo=1 AND os.FechaArchivado IS NULL
+ORDER BY s.Nombre, s.id", connection);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@IdOrdenCompra", idOrdenCompra);
+            List<OrdenCompraSucursalDto> result = new List<OrdenCompraSucursalDto>();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new OrdenCompraSucursalDto { Id=ReadGuid(reader,"id"), IdRazonSocial=ReadGuid(reader,"idRazonSocial"), Codigo=ReadString(reader,"Codigo"), Nombre=ReadString(reader,"Nombre") });
+            }
+            return result;
         }
 
         private async Task<OrdenCompraCabeceraPersistida> GetOrdenCompraForUpdateAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idOrdenCompra)
@@ -2306,7 +2524,7 @@ ORDER BY Nombre", connection);
         private async Task<List<OrdenCompraComboDto>> ObtenerSucursalesAsync(SqlConnection connection, Guid idEmpresa)
         {
             using SqlCommand command = new SqlCommand(@"
-SELECT id, Nombre, ISNULL(Direccion, '') AS Descripcion
+SELECT id, idRazonSocial, Nombre, ISNULL(Direccion, '') AS Descripcion
 FROM dbo.Sucursales
 WHERE idEmpresa = @IdEmpresa
   AND ISNULL(borrado, 0) = 0
@@ -2338,6 +2556,7 @@ ORDER BY Nombre", connection);
                 items.Add(new OrdenCompraComboDto
                 {
                     Id = ReadGuid(reader, "id"),
+                    IdRazonSocial = HasColumn(reader, "idRazonSocial") ? ReadNullableGuid(reader, "idRazonSocial") : null,
                     Codigo = hasCodigo ? ReadString(reader, "Codigo") : string.Empty,
                     Nombre = ReadString(reader, "Nombre"),
                     Descripcion = ReadString(reader, "Descripcion"),
@@ -2534,14 +2753,9 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
                 return "La empresa solicitada no coincide con la sesión activa.";
             }
 
-            if (request.IdRazonSocial == Guid.Empty)
+            if (request.IdSucursales == null || request.IdSucursales.Count == 0 || request.IdSucursales.Any(id => id == Guid.Empty))
             {
-                return "La razón social no está disponible.";
-            }
-
-            if (request.IdSucursal == Guid.Empty)
-            {
-                return "La sucursal no está disponible.";
+                return "Selecciona al menos una sucursal destino.";
             }
 
             if (request.IdProveedor == Guid.Empty)
@@ -2559,9 +2773,37 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
                 return "La fecha de llegada no puede ser anterior a la fecha de la orden.";
             }
 
+            if (request.FechaMinima.HasValue && request.FechaMinima.Value.Date < request.FechaOrden.Date)
+            {
+                return "La fecha mínima no puede ser anterior a la fecha de la orden.";
+            }
+
+            if (request.FechaMinima.HasValue && request.FechaMaxima.HasValue
+                && request.FechaMinima.Value.Date > request.FechaMaxima.Value.Date)
+            {
+                return "La fecha mínima no puede ser posterior a la fecha máxima.";
+            }
+
+            if (request.FechaLlegada.HasValue && request.FechaMinima.HasValue
+                && request.FechaLlegada.Value.Date < request.FechaMinima.Value.Date)
+            {
+                return "La fecha de llegada no puede ser anterior a la fecha mínima.";
+            }
+
+            if (request.FechaLlegada.HasValue && request.FechaMaxima.HasValue
+                && request.FechaLlegada.Value.Date > request.FechaMaxima.Value.Date)
+            {
+                return "La fecha de llegada no puede ser posterior a la fecha máxima.";
+            }
+
             if (!string.IsNullOrWhiteSpace(request.Observaciones) && request.Observaciones.Trim().Length > ObservacionesLength)
             {
                 return "Las observaciones exceden la longitud permitida.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.FolioReferencia) && request.FolioReferencia.Trim().Length > 100)
+            {
+                return "El folio opcional excede la longitud permitida.";
             }
 
             if (request.Partidas == null || request.Partidas.Count == 0)
@@ -2583,15 +2825,19 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
                     throw new CatalogoValidationException("El producto o servicio no está disponible.");
                 }
 
+                if (partida.IdSucursal == Guid.Empty)
+                {
+                    throw new CatalogoValidationException("Cada partida debe tener una sucursal destino.");
+                }
                 string variantKey = partida.IdVariante.HasValue && partida.IdVariante.Value != Guid.Empty
                     ? partida.IdVariante.Value.ToString("D")
                     : "NULL";
                 string presentationKey = partida.IdPresentacionCompra.HasValue && partida.IdPresentacionCompra.Value != Guid.Empty
                     ? partida.IdPresentacionCompra.Value.ToString("D")
                     : "BASE";
-                if (!ids.Add($"{partida.IdProductoServicio:D}:{variantKey}:{presentationKey}"))
+                if (!ids.Add($"{partida.IdSucursal:D}:{partida.IdProductoServicio:D}:{variantKey}:{presentationKey}"))
                 {
-                    throw new CatalogoValidationException("No se permiten partidas duplicadas para el mismo producto, variante y presentación.");
+                    throw new CatalogoValidationException("No se permiten partidas duplicadas para la misma sucursal, producto, variante y presentación.");
                 }
 
                 decimal cantidadCompra = partida.CantidadCompra ?? partida.Cantidad;
@@ -3006,6 +3252,8 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
                 EstadoBorrador => "Borrador",
                 EstadoGenerada => "Generada",
                 EstadoCancelada => "Cancelada",
+                EstadoParcialmenteRecibida => "Parcialmente recibida",
+                EstadoRecibida => "Recibida",
                 _ => "Desconocido"
             };
         }
@@ -3014,9 +3262,23 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
         {
             return estado switch
             {
-                EstadoBorrador => "En captura",
-                EstadoGenerada => "Confirmada",
-                EstadoCancelada => "Detenida",
+                EstadoBorrador => "Borrador",
+                EstadoGenerada => "Generada",
+                EstadoCancelada => "Cancelada",
+                EstadoParcialmenteRecibida => "Parcialmente recibida",
+                EstadoRecibida => "Recibida",
+                _ => "Desconocido"
+            };
+        }
+
+        private static string GetEstadoPartidaNombre(byte estado)
+        {
+            return estado switch
+            {
+                1 => "Pendiente",
+                2 => "Parcialmente recibida",
+                3 => "Recibida",
+                4 => "Cancelada",
                 _ => "Desconocido"
             };
         }
@@ -3154,6 +3416,7 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
         private sealed class OrdenCompraPartidaPersistencia
         {
             public Guid Id { get; set; }
+            public Guid IdSucursal { get; set; }
             public int NumeroPartida { get; set; }
             public Guid IdProductoServicio { get; set; }
             public byte TipoProductoServicio { get; set; }

@@ -4,14 +4,20 @@ namespace checklistWs.Services.Tenant
     {
         public static SchemaContract GetContract(int version)
         {
-            if (version != ProductosServiciosSchemaContractProvider.RecepcionLatestVersion)
+            if (version == ProductosServiciosSchemaContractProvider.V2)
+            {
+                return RecepcionV2ContractProposal.CreateTargetContract(
+                    GetContract(ProductosServiciosSchemaContractProvider.V1));
+            }
+
+            if (version != ProductosServiciosSchemaContractProvider.V1)
             {
                 throw new InvalidOperationException("SCHEMA_CONTRACT_VERSION_NOT_SUPPORTED");
             }
 
             return new SchemaContract(
                 DatabaseScopes.Recepcion,
-                ProductosServiciosSchemaContractProvider.RecepcionLatestVersion,
+                ProductosServiciosSchemaContractProvider.V1,
                 "Recepcion de OC",
                 new[] { Folios(), Cabecera(), Partidas(), Series() },
                 new[]

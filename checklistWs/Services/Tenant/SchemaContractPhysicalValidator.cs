@@ -84,6 +84,7 @@ namespace checklistWs.Services.Tenant
                 }
 
                 ValidatePrimaryKey(table, primaryKeys, discrepancies);
+                ValidateUniqueConstraints(table, indexes, discrepancies);
                 ValidateIndexes(table, indexes, discrepancies);
                 ValidateForeignKeys(table, fks, discrepancies);
                 ValidateChecks(table, checks, discrepancies);
@@ -133,12 +134,14 @@ namespace checklistWs.Services.Tenant
 
         private static void ValidateIndexes(SchemaTableContract table, DataTable indexes, List<string> discrepancies)
         {
+            HashSet<string> uniqueConstraintNames = table.UniqueConstraints.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, DataRow> dbIndexes = indexes.AsEnumerable()
-                .Where(row => string.Equals((string)row["SchemaName"], table.Schema, StringComparison.OrdinalIgnoreCase) && string.Equals((string)row["TableName"], table.Name, StringComparison.OrdinalIgnoreCase))
+                .Where(row => string.Equals((string)row["SchemaName"], table.Schema, StringComparison.OrdinalIgnoreCase) && string.Equals((string)row["TableName"], table.Name, StringComparison.OrdinalIgnoreCase) && !(bool)row["IsUniqueConstraint"] && !uniqueConstraintNames.Contains((string)row["IndexName"]))
                 .GroupBy(row => (string)row["IndexName"], StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-            foreach (SchemaIndexContract index in table.Indexes)
+            SchemaIndexContract[] expectedIndexes = table.Indexes.Where(index => !uniqueConstraintNames.Contains(index.Name)).ToArray();
+            foreach (SchemaIndexContract index in expectedIndexes)
             {
                 if (!dbIndexes.TryGetValue(index.Name, out DataRow? row))
                 {
@@ -162,9 +165,41 @@ namespace checklistWs.Services.Tenant
                 }
             }
 
-            foreach (string extra in dbIndexes.Keys.Except(table.Indexes.Select(index => index.Name), StringComparer.OrdinalIgnoreCase))
+            foreach (string extra in dbIndexes.Keys.Except(expectedIndexes.Select(index => index.Name), StringComparer.OrdinalIgnoreCase))
             {
                 discrepancies.Add($"INDEX_EXTRA {table.FullName}.{extra}");
+            }
+        }
+
+        private static void ValidateUniqueConstraints(SchemaTableContract table, DataTable indexes, List<string> discrepancies)
+        {
+            HashSet<string> expectedNames = table.UniqueConstraints.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, DataRow> actual = indexes.AsEnumerable()
+                .Where(row => string.Equals((string)row["SchemaName"], table.Schema, StringComparison.OrdinalIgnoreCase) && string.Equals((string)row["TableName"], table.Name, StringComparison.OrdinalIgnoreCase) && ((bool)row["IsUniqueConstraint"] || expectedNames.Contains((string)row["IndexName"])))
+                .GroupBy(row => (string)row["IndexName"], StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+            foreach (SchemaUniqueContract expected in table.UniqueConstraints)
+            {
+                if (!actual.TryGetValue(expected.Name, out DataRow? row))
+                {
+                    discrepancies.Add($"UNIQUE_MISSING {table.FullName}.{expected.Name}");
+                    continue;
+                }
+
+                if (!string.Equals((string)row["KeyColumns"], string.Join(',', expected.Columns), StringComparison.OrdinalIgnoreCase))
+                {
+                    discrepancies.Add($"UNIQUE_KEYS {table.FullName}.{expected.Name}");
+                }
+                if (!(bool)row["IsUnique"])
+                {
+                    discrepancies.Add($"UNIQUE_NOT_UNIQUE {table.FullName}.{expected.Name}");
+                }
+            }
+
+            foreach (string extra in actual.Keys.Except(table.UniqueConstraints.Select(item => item.Name), StringComparer.OrdinalIgnoreCase))
+            {
+                discrepancies.Add($"UNIQUE_EXTRA {table.FullName}.{extra}");
             }
         }
 
@@ -265,7 +300,7 @@ INNER JOIN sys.indexes i ON i.object_id = kc.parent_object_id AND i.index_id = k
 WHERE kc.type = 'PK' AND s.name = N'dbo' AND t.name IN ({InClause(contract)});";
 
         private static string BuildIndexesSql(SchemaContract contract) => $@"
-SELECT s.name AS SchemaName, t.name AS TableName, i.name AS IndexName, i.is_unique AS IsUnique, i.type_desc AS TypeDescription, i.filter_definition AS FilterDefinition,
+SELECT s.name AS SchemaName, t.name AS TableName, i.name AS IndexName, i.is_unique AS IsUnique, i.is_unique_constraint AS IsUniqueConstraint, i.type_desc AS TypeDescription, i.filter_definition AS FilterDefinition,
        STUFF((SELECT ',' + c2.name FROM sys.index_columns ic2 INNER JOIN sys.columns c2 ON c2.object_id = ic2.object_id AND c2.column_id = ic2.column_id WHERE ic2.object_id = i.object_id AND ic2.index_id = i.index_id AND ic2.is_included_column = 0 ORDER BY ic2.key_ordinal FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 1, '') AS KeyColumns
 FROM sys.indexes i
 INNER JOIN sys.tables t ON t.object_id = i.object_id

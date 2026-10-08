@@ -16,13 +16,13 @@ public sealed class ProductosServiciosLpQa05S1MigrationTests
     private readonly SchemaManifestProvider _manifests = new();
 
     [Fact]
-    public void ActiveRuntimePackageAndGateVersionAreV3()
+    public void ActiveRuntimePackageAndGateVersionAreV4()
     {
         ProductosServiciosMigrationPackageProvider provider = Packages();
 
-        Assert.Equal(3, ProductosServiciosSchemaContractProvider.LatestVersion);
-        Assert.Equal(3, _contracts.GetContract(DatabaseScopes.ProductosServicios).ContractVersion);
-        Assert.Equal(3, provider.GetPackage(DatabaseScopes.ProductosServicios).Release.LatestSchemaVersion);
+        Assert.Equal(4, ProductosServiciosSchemaContractProvider.LatestVersion);
+        Assert.Equal(4, _contracts.GetContract(DatabaseScopes.ProductosServicios).ContractVersion);
+        Assert.Equal(4, provider.GetPackage(DatabaseScopes.ProductosServicios).Release.LatestSchemaVersion);
     }
 
     [Fact]

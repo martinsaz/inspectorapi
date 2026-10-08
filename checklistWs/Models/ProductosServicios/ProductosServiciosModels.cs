@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace checklistWs.Models.ProductosServicios
 {
     public class ProductoServicioListadoDto
@@ -11,6 +13,10 @@ namespace checklistWs.Models.ProductosServicios
         public string Tag { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
+        public Guid? IdProveedorPrincipal { get; set; }
+        public string ProveedorPrincipalCodigo { get; set; } = string.Empty;
+        public string ProveedorPrincipalNombre { get; set; } = string.Empty;
+        public bool? ProveedorPrincipalActivo { get; set; }
         public Guid IdCategoria { get; set; }
         public string Categoria { get; set; } = string.Empty;
         public byte CategoriaAplicaA { get; set; }
@@ -204,6 +210,8 @@ namespace checklistWs.Models.ProductosServicios
 
     public class ProductoServicioGuardarRequest
     {
+        private Guid? _idProveedorPrincipal;
+
         public Guid? Id { get; set; }
         public Guid IdEmpresa { get; set; }
         public byte Tipo { get; set; }
@@ -211,6 +219,18 @@ namespace checklistWs.Models.ProductosServicios
         public string Tag { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
+        public Guid? IdProveedorPrincipal
+        {
+            get => _idProveedorPrincipal;
+            set
+            {
+                _idProveedorPrincipal = value;
+                ProveedorPrincipalFueEnviado = true;
+            }
+        }
+
+        [JsonIgnore]
+        public bool ProveedorPrincipalFueEnviado { get; private set; }
         public Guid IdCategoria { get; set; }
         public Guid? IdMarca { get; set; }
         public Guid IdUnidadMedida { get; set; }
@@ -482,11 +502,21 @@ namespace checklistWs.Models.ProductosServicios
         public List<ProductoServicioCatalogoComboDto> Paquetes { get; set; } = new List<ProductoServicioCatalogoComboDto>();
         public List<ProductoServicioCatalogoComboDto> Atributos { get; set; } = new List<ProductoServicioCatalogoComboDto>();
         public List<ProductoServicioTagDto> Tags { get; set; } = new List<ProductoServicioTagDto>();
+        public List<ProductoServicioProveedorComboDto> Proveedores { get; set; } = new List<ProductoServicioProveedorComboDto>();
         public List<ProductoServicioOpcionDto> Tipos { get; set; } = new List<ProductoServicioOpcionDto>();
         public List<ProductoServicioOpcionDto> Estatus { get; set; } = new List<ProductoServicioOpcionDto>();
         public List<ProductoServicioOpcionDto> ObjetosImpuesto { get; set; } = new List<ProductoServicioOpcionDto>();
         public List<ProductoServicioOpcionDto> TiposPaquete { get; set; } = new List<ProductoServicioOpcionDto>();
         public List<ProductoServicioOpcionDto> UnidadesPrecioUnitario { get; set; } = new List<ProductoServicioOpcionDto>();
+    }
+
+    public class ProductoServicioProveedorComboDto
+    {
+        public Guid Id { get; set; }
+        public string Codigo { get; set; } = string.Empty;
+        public string Nombre { get; set; } = string.Empty;
+        public bool Activo { get; set; }
+        public string DisplayName => string.IsNullOrWhiteSpace(Codigo) ? Nombre : $"{Codigo} · {Nombre}";
     }
 
     public class ProductoServicioOpcionDto

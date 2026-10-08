@@ -79,6 +79,7 @@ namespace checklistWs.Services.Tenant
 
                 CompareColumns(table, snapshot, identity, scope, version, hash, items);
                 ComparePrimaryKey(table, snapshot, identity, scope, version, hash, items);
+                CompareUniqueConstraints(table, snapshot, identity, scope, version, hash, items);
                 CompareIndexes(table, snapshot, identity, scope, version, hash, items);
                 CompareForeignKeys(table, snapshot, identity, scope, version, hash, items);
                 CompareChecks(table, snapshot, identity, scope, version, hash, items);
@@ -126,8 +127,10 @@ namespace checklistWs.Services.Tenant
 
         private static void CompareIndexes(SchemaTableContract table, SchemaPhysicalSnapshot snapshot, DatabaseIdentity identity, string scope, int version, string hash, List<SchemaDriftItem> items)
         {
-            SchemaIndexSnapshot[] actual = snapshot.Indexes.Where(x => Eq(x.Schema, table.Schema) && Eq(x.Table, table.Name) && !x.IsUniqueConstraint).ToArray();
-            foreach (SchemaIndexContract expected in table.Indexes)
+            HashSet<string> uniqueConstraintNames = table.UniqueConstraints.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            SchemaIndexSnapshot[] actual = snapshot.Indexes.Where(x => Eq(x.Schema, table.Schema) && Eq(x.Table, table.Name) && !x.IsUniqueConstraint && !uniqueConstraintNames.Contains(x.Name)).ToArray();
+            SchemaIndexContract[] expectedIndexes = table.Indexes.Where(index => !uniqueConstraintNames.Contains(index.Name)).ToArray();
+            foreach (SchemaIndexContract expected in expectedIndexes)
             {
                 SchemaIndexSnapshot? found = actual.SingleOrDefault(x => Eq(x.Name, expected.Name));
                 string obj = $"{table.FullName}.{expected.Name}";
@@ -146,7 +149,23 @@ namespace checklistWs.Services.Tenant
                 if (!SchemaDefinitionNormalizer.Same(found.FilterDefinition, expected.FilterDefinition)) Add(items, identity, scope, version, hash, "INDEX", obj, "INDEX_FILTER_MISMATCH", expected.FilterDefinition, found.FilterDefinition, IndexSeverity(expected, table), "UNKNOWN");
                 if (found.IsDisabled) Add(items, identity, scope, version, hash, "INDEX", obj, "INDEX_STATE_MISMATCH", "enabled", "disabled", SchemaDriftSeverity.Error, "UNKNOWN");
             }
-            foreach (SchemaIndexSnapshot extra in actual.Where(a => table.Indexes.All(e => !Eq(e.Name, a.Name)))) Add(items, identity, scope, version, hash, "INDEX", $"{table.FullName}.{extra.Name}", "INDEX_UNEXPECTED", null, extra.Name, SchemaDriftSeverity.Info, "UNKNOWN");
+            foreach (SchemaIndexSnapshot extra in actual.Where(a => expectedIndexes.All(e => !Eq(e.Name, a.Name)))) Add(items, identity, scope, version, hash, "INDEX", $"{table.FullName}.{extra.Name}", "INDEX_UNEXPECTED", null, extra.Name, SchemaDriftSeverity.Info, "UNKNOWN");
+        }
+
+        private static void CompareUniqueConstraints(SchemaTableContract table, SchemaPhysicalSnapshot snapshot, DatabaseIdentity identity, string scope, int version, string hash, List<SchemaDriftItem> items)
+        {
+            HashSet<string> expectedNames = table.UniqueConstraints.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            SchemaIndexSnapshot[] actual = snapshot.Indexes.Where(x => Eq(x.Schema, table.Schema) && Eq(x.Table, table.Name) && (x.IsUniqueConstraint || expectedNames.Contains(x.Name))).ToArray();
+            foreach (SchemaUniqueContract expected in table.UniqueConstraints)
+            {
+                SchemaIndexSnapshot? found = actual.SingleOrDefault(x => Eq(x.Name, expected.Name));
+                string obj = $"{table.FullName}.{expected.Name}";
+                if (found == null) { Add(items, identity, scope, version, hash, "UNIQUE", obj, "UNIQUE_MISSING", expected.Name, null, SchemaDriftSeverity.Error, "YES"); continue; }
+                if (!found.IsUnique) Add(items, identity, scope, version, hash, "UNIQUE", obj, "UNIQUE_NOT_UNIQUE", "true", "false", SchemaDriftSeverity.Critical, "UNKNOWN");
+                if (!Seq(found.KeyColumns.Select(column => column.Name), expected.Columns)) Add(items, identity, scope, version, hash, "UNIQUE", obj, "UNIQUE_KEYS_MISMATCH", string.Join(',', expected.Columns), string.Join(',', found.KeyColumns.Select(column => column.Name)), SchemaDriftSeverity.Error, "UNKNOWN");
+                if (found.IsDisabled) Add(items, identity, scope, version, hash, "UNIQUE", obj, "UNIQUE_STATE_MISMATCH", "enabled", "disabled", SchemaDriftSeverity.Error, "UNKNOWN");
+            }
+            foreach (SchemaIndexSnapshot extra in actual.Where(a => table.UniqueConstraints.All(e => !Eq(e.Name, a.Name)))) Add(items, identity, scope, version, hash, "UNIQUE", $"{table.FullName}.{extra.Name}", "UNIQUE_UNEXPECTED", null, extra.Name, SchemaDriftSeverity.Info, "UNKNOWN");
         }
 
         private static void CompareForeignKeys(SchemaTableContract table, SchemaPhysicalSnapshot snapshot, DatabaseIdentity identity, string scope, int version, string hash, List<SchemaDriftItem> items)

@@ -23,15 +23,15 @@ public sealed class ListaPreciosLpQa05SContractTests
     }
 
     [Fact]
-    public void OfficialProviderAndReleasePackage_AreActivatedAtV3()
+    public void OfficialProviderAndReleasePackage_PreserveV3InsideActiveV4Chain()
     {
-        Assert.Equal(3, ProductosServiciosSchemaContractProvider.LatestVersion);
-        Assert.Equal(3, _provider.GetContract(DatabaseScopes.ProductosServicios).ContractVersion);
+        Assert.Equal(4, ProductosServiciosSchemaContractProvider.LatestVersion);
+        Assert.Equal(4, _provider.GetContract(DatabaseScopes.ProductosServicios).ContractVersion);
 
         SchemaMigrationPackage package = new ProductosServiciosMigrationPackageProvider(_provider, _manifestProvider)
             .GetPackage(DatabaseScopes.ProductosServicios);
 
-        Assert.Equal(3, package.Release.LatestSchemaVersion);
+        Assert.Equal(4, package.Release.LatestSchemaVersion);
         Assert.Contains(ProductosServiciosComercialContractProposal.MigrationId, package.Release.ApprovedMigrationIds);
         Assert.Contains(package.Migrations, migration => migration.MigrationId == ProductosServiciosComercialContractProposal.MigrationId);
     }

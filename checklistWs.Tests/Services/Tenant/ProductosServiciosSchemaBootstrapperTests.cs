@@ -44,27 +44,27 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesTwoHundredNinetyFourColumns()
+        public async Task EmptyScope_CreatesTwoHundredNinetyFiveColumns()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(294, result.ColumnsCreated);
+            Assert.Equal(295, result.ColumnsCreated);
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesSixtyTwoIndexes()
+        public async Task EmptyScope_CreatesSixtyThreeIndexes()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(62, result.IndexesCreated);
+            Assert.Equal(63, result.IndexesCreated);
         }
 
         [Fact]
-        public async Task EmptyScope_CreatesThirtyForeignKeys()
+        public async Task EmptyScope_CreatesThirtyOneForeignKeys()
         {
             SchemaProvisionResult result = await new Harness().Bootstrapper.ProvisionScopeAsync(DescriptorA, IdentityA, DatabaseScopes.ProductosServicios);
 
-            Assert.Equal(30, result.ForeignKeysCreated);
+            Assert.Equal(31, result.ForeignKeysCreated);
         }
 
         [Fact]

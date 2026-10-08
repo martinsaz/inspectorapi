@@ -33,14 +33,15 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void ContractVersion_DefaultIsActiveV3()
+        public void ContractVersion_DefaultIsActiveV4()
         {
             SchemaContract contract = Contract();
 
             Assert.Equal(ProductosServiciosSchemaContractProvider.LatestVersion, contract.ContractVersion);
             Assert.Equal(1, _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 1).ContractVersion);
             Assert.Equal(3, _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 3).ContractVersion);
-            Assert.Throws<InvalidOperationException>(() => _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 4));
+            Assert.Equal(4, _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 4).ContractVersion);
+            Assert.Throws<InvalidOperationException>(() => _contractProvider.GetContract(DatabaseScopes.ProductosServicios, 5));
         }
 
         [Fact]

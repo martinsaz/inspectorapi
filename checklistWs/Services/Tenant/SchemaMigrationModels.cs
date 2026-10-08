@@ -310,17 +310,16 @@ namespace checklistWs.Services.Tenant
 
             if (string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase))
             {
-                SchemaContract recepcion = _contractProvider.GetContract(DatabaseScopes.Recepcion, ProductosServiciosSchemaContractProvider.RecepcionLatestVersion);
-                SchemaManifest manifest = _manifestProvider.CreateManifest(recepcion);
+                string ocV5Manifest = _manifestProvider.CreateManifest(
+                    _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V5)).ManifestHash;
+                SchemaMigrationPackage local = RecepcionV2ContractProposal.CreateLocalPackage(
+                    _contractProvider,
+                    _manifestProvider,
+                    ocV5Manifest);
+                SchemaMigrationDefinition migration = local.Migrations.Single() with { AutoApplicable = true };
                 return new SchemaMigrationPackage(
-                    new SchemaReleaseManifest(
-                        DatabaseScopes.Recepcion,
-                        "REC-B20260921",
-                        ProductosServiciosSchemaContractProvider.RecepcionLatestVersion,
-                        ProductosServiciosSchemaContractProvider.RecepcionLatestVersion,
-                        manifest.ManifestHash,
-                        Array.Empty<string>()),
-                    Array.Empty<SchemaMigrationDefinition>());
+                    local.Release with { ApprovedMigrationIds = new[] { migration.MigrationId } },
+                    new[] { migration });
             }
 
             if (string.Equals(scope, DatabaseScopes.Inventario, StringComparison.OrdinalIgnoreCase))
@@ -341,8 +340,14 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.OrdenesCompra, StringComparison.OrdinalIgnoreCase))
             {
                 SchemaContract ordenesCompraV1 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V1);
-                SchemaContract ordenesCompraV2 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
-                SchemaManifest manifest = _manifestProvider.CreateManifest(ordenesCompraV2);
+                SchemaContract ordenesCompraV2 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V2);
+                SchemaContract ordenesCompraV3 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V3);
+                SchemaContract ordenesCompraV4 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V4);
+                SchemaContract ordenesCompraV5 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V5);
+                SchemaManifest manifestV2 = _manifestProvider.CreateManifest(ordenesCompraV2);
+                SchemaManifest manifestV3 = _manifestProvider.CreateManifest(ordenesCompraV3);
+                SchemaManifest manifestV4 = _manifestProvider.CreateManifest(ordenesCompraV4);
+                SchemaManifest manifestV5 = _manifestProvider.CreateManifest(ordenesCompraV5);
                 string ordenesCompraMigrationSql = BuildOrdenesCompraV1ToV2Sql();
                 SchemaMigrationDefinition ocV1ToV2 = new(
                     "OC-M20260923-V1-V2-PRESENTACIONCOMPRA-CANTIDAD-BASE",
@@ -354,9 +359,9 @@ namespace checklistWs.Services.Tenant
                     new[] { "dbo.OrdenesCompraPresentacionesCompra.PermiteCantidadBase" },
                     new[]
                     {
-                        "TABLE_EXISTS:dbo.OrdenesCompraPresentacionesCompra",
-                        "COLUMN_MISSING_OR_COMPATIBLE:PermiteCantidadBase",
-                        "NO_DML_BUSINESS_ROWS"
+                        TableExistsPrecondition("OrdenesCompraPresentacionesCompra"),
+                        ColumnMissingOrCompatiblePrecondition("OrdenesCompraPresentacionesCompra", "PermiteCantidadBase"),
+                        "SELECT 1;"
                     },
                     new[]
                     {
@@ -365,7 +370,7 @@ namespace checklistWs.Services.Tenant
                         "NO_PRESENTACIONESVENTA"
                     },
                     SchemaMigrationHash.Sha256(ordenesCompraMigrationSql),
-                    manifest.ManifestHash,
+                    manifestV2.ManifestHash,
                     "SingleTransaction",
                     "Low",
                     true,
@@ -374,6 +379,71 @@ namespace checklistWs.Services.Tenant
                     "ReconcileAfterUncertainCommit",
                     ordenesCompraMigrationSql,
                     ordenesCompraV2);
+                string ordenesCompraV3MigrationSql = BuildOrdenesCompraV2ToV3Sql();
+                SchemaMigrationDefinition ocV2ToV3 = new(
+                    "OC-M20261006-V2-V3-RANGO-FECHAS",
+                    "OC-B20260921",
+                    DatabaseScopes.OrdenesCompra,
+                    ordenesCompraV2.ContractVersion,
+                    ordenesCompraV3.ContractVersion,
+                    2,
+                    new[] { "dbo.OrdenesCompra.FechaMinima", "dbo.OrdenesCompra.FechaMaxima", "dbo.OrdenesCompra.CK_OrdenesCompra_RangoFechas" },
+                    new[]
+                    {
+                        TableExistsPrecondition("OrdenesCompra"),
+                        ColumnMissingOrCompatiblePrecondition("OrdenesCompra", "FechaMinima"),
+                        ColumnMissingOrCompatiblePrecondition("OrdenesCompra", "FechaMaxima"),
+                        "SELECT 1;"
+                    },
+                    new[]
+                    {
+                        "ADD_DATE_NULL_FECHA_MINIMA",
+                        "ADD_DATE_NULL_FECHA_MAXIMA",
+                        "ADD_RANGE_CHECK",
+                        "NO_BACKFILL"
+                    },
+                    SchemaMigrationHash.Sha256(ordenesCompraV3MigrationSql),
+                    manifestV3.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    Array.Empty<string>(),
+                    "ReconcileAfterUncertainCommit",
+                    ordenesCompraV3MigrationSql,
+                    ordenesCompraV3);
+                string ordenesCompraV4MigrationSql = BuildOrdenesCompraV3ToV4Sql();
+                SchemaMigrationDefinition ocV3ToV4 = new(
+                    "OC-M20261006-V3-V4-FOLIO-REFERENCIA",
+                    "OC-B20260921",
+                    DatabaseScopes.OrdenesCompra,
+                    ordenesCompraV3.ContractVersion,
+                    ordenesCompraV4.ContractVersion,
+                    3,
+                    new[] { "dbo.OrdenesCompra.FolioReferencia" },
+                    new[]
+                    {
+                        TableExistsPrecondition("OrdenesCompra"),
+                        ColumnMissingOrCompatiblePrecondition("OrdenesCompra", "FolioReferencia"),
+                        "SELECT 1;"
+                    },
+                    new[] { "ADD_NVARCHAR_100_NULL_FOLIO_REFERENCIA", "NO_BACKFILL" },
+                    SchemaMigrationHash.Sha256(ordenesCompraV4MigrationSql),
+                    manifestV4.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    Array.Empty<string>(),
+                    "ReconcileAfterUncertainCommit",
+                    ordenesCompraV4MigrationSql,
+                    ordenesCompraV4);
+
+                SchemaMigrationPackage localV5 = OrdenesCompraV5ContractProposal.CreateLocalPackage(_contractProvider, _manifestProvider);
+                SchemaMigrationDefinition ocV4ToV5 = localV5.Migrations
+                    .Single(item => item.MigrationId == OrdenesCompraV5ContractProposal.MigrationId) with { AutoApplicable = true };
+                SchemaMigrationDefinition ocV5Reconciliation = localV5.Migrations
+                    .Single(item => item.MigrationId == OrdenesCompraV5ContractProposal.ReconciliationMigrationId) with { AutoApplicable = true };
 
                 return new SchemaMigrationPackage(
                     new SchemaReleaseManifest(
@@ -381,24 +451,52 @@ namespace checklistWs.Services.Tenant
                         "OC-B20260921",
                         ordenesCompraV1.ContractVersion,
                         ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion,
-                        manifest.ManifestHash,
-                        new[] { ocV1ToV2.MigrationId }),
-                    new[] { ocV1ToV2 });
+                        manifestV5.ManifestHash,
+                        new[] { ocV1ToV2.MigrationId, ocV2ToV3.MigrationId, ocV3ToV4.MigrationId, ocV4ToV5.MigrationId, ocV5Reconciliation.MigrationId }),
+                    new[] { ocV1ToV2, ocV2ToV3, ocV3ToV4, ocV4ToV5, ocV5Reconciliation });
             }
 
             if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))
             {
-                SchemaContract proveedores = _contractProvider.GetContract(DatabaseScopes.Proveedores, ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion);
-                SchemaManifest manifest = _manifestProvider.CreateManifest(proveedores);
+                SchemaContract source = _contractProvider.GetContract(DatabaseScopes.Proveedores, ProveedorPrincipalContractProposal.ProveedoresSourceVersion);
+                SchemaContract target = _contractProvider.GetContract(DatabaseScopes.Proveedores, ProveedorPrincipalContractProposal.ProveedoresTargetVersion);
+                SchemaManifest sourceManifest = _manifestProvider.CreateManifest(source);
+                SchemaManifest targetManifest = _manifestProvider.CreateManifest(target);
+                string sql = ProveedorPrincipalContractProposal.BuildProveedoresV1ToV2Sql();
+                SchemaMigrationDefinition migration = new(
+                    ProveedorPrincipalContractProposal.ProveedoresMigrationId,
+                    "PROVEEDORES-B20260917",
+                    DatabaseScopes.Proveedores,
+                    source.ContractVersion,
+                    target.ContractVersion,
+                    1,
+                    new[] { "dbo.ActivosProveedores.UX_ActivosProveedores_Empresa_Id" },
+                    new[]
+                    {
+                        "SELECT CASE WHEN OBJECT_ID(N'dbo.ActivosProveedores', N'U') IS NOT NULL THEN 1 ELSE 0 END;",
+                        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.ActivosProveedores') AND name = N'UX_ActivosProveedores_Empresa_Id') THEN 1 ELSE 0 END;"
+                    },
+                    new[] { "NO_DML_BUSINESS_ROWS", "TENANT_SAFE_CANDIDATE_KEY" },
+                    SchemaMigrationHash.Sha256(sql),
+                    targetManifest.ManifestHash,
+                    "SingleTransaction",
+                    "Low",
+                    true,
+                    TimeSpan.FromMinutes(2),
+                    new[] { sourceManifest.ManifestHash },
+                    "ReconcileAfterUncertainCommit",
+                    sql,
+                    target,
+                    source);
                 return new SchemaMigrationPackage(
                     new SchemaReleaseManifest(
                         DatabaseScopes.Proveedores,
                         "PROVEEDORES-B20260917",
-                        ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion,
-                        ProductosServiciosSchemaContractProvider.ProveedoresLatestVersion,
-                        manifest.ManifestHash,
-                        Array.Empty<string>()),
-	                    Array.Empty<SchemaMigrationDefinition>());
+                        source.ContractVersion,
+                        target.ContractVersion,
+                        targetManifest.ManifestHash,
+                        new[] { migration.MigrationId }),
+                    new[] { migration });
             }
 
             if (string.Equals(scope, DatabaseScopes.Sucursales, StringComparison.OrdinalIgnoreCase))
@@ -455,9 +553,11 @@ namespace checklistWs.Services.Tenant
                 throw new ArgumentOutOfRangeException(nameof(scope), scope, null);
             }
 
-            return ProductosServiciosSchemaContractProvider.LatestVersion == ProductosServiciosSchemaContractProvider.V3
-                ? GetPreparedProductosServiciosV3Package()
-                : BuildProductosServiciosV2Package();
+            return ProductosServiciosSchemaContractProvider.LatestVersion == ProductosServiciosSchemaContractProvider.V4
+                ? GetPreparedProductosServiciosV4Package()
+                : ProductosServiciosSchemaContractProvider.LatestVersion == ProductosServiciosSchemaContractProvider.V3
+                    ? GetPreparedProductosServiciosV3Package()
+                    : BuildProductosServiciosV2Package();
         }
 
         private SchemaMigrationPackage BuildProductosServiciosV2Package()
@@ -563,6 +663,57 @@ namespace checklistWs.Services.Tenant
                 activeV2Package.Migrations.Concat(new[] { v2ToV3 }).ToArray());
         }
 
+        public SchemaMigrationPackage GetPreparedProductosServiciosV4Package()
+        {
+            SchemaMigrationPackage activeV3Package = GetPreparedProductosServiciosV3Package();
+            SchemaContract source = _contractProvider.GetContract(DatabaseScopes.ProductosServicios, ProveedorPrincipalContractProposal.ProductosServiciosSourceVersion);
+            SchemaContract target = _contractProvider.GetContract(DatabaseScopes.ProductosServicios, ProveedorPrincipalContractProposal.ProductosServiciosTargetVersion);
+            SchemaManifest sourceManifest = _manifestProvider.CreateManifest(source);
+            SchemaManifest targetManifest = _manifestProvider.CreateManifest(target);
+            string sql = ProveedorPrincipalContractProposal.BuildProductosServiciosV3ToV4Sql();
+            SchemaMigrationDefinition migration = new(
+                ProveedorPrincipalContractProposal.ProductosServiciosMigrationId,
+                activeV3Package.Release.BaselineId,
+                DatabaseScopes.ProductosServicios,
+                source.ContractVersion,
+                target.ContractVersion,
+                3,
+                new[]
+                {
+                    "dbo.ProductosServicios.idProveedorPrincipal",
+                    "dbo.ProductosServicios.FK_ProductosServicios_ProveedorPrincipal_EmpresaId",
+                    "dbo.ProductosServicios.IX_ProductosServicios_Empresa_ProveedorPrincipal_Activo_Tipo"
+                },
+                new[]
+                {
+                    "SELECT CASE WHEN COL_LENGTH('dbo.ProductosServicios', 'idProveedorPrincipal') IS NULL THEN 1 ELSE 0 END;",
+                    "SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.ActivosProveedores') AND name = N'UX_ActivosProveedores_Empresa_Id') THEN 1 ELSE 0 END;",
+                    "SELECT CASE WHEN OBJECT_ID(N'dbo.FK_ProductosServicios_ProveedorPrincipal_EmpresaId', N'F') IS NULL THEN 1 ELSE 0 END;"
+                },
+                new[] { "NO_BACKFILL", "EXISTING_ROWS_REMAIN_NULL", "TENANT_SAFE_FOREIGN_KEY", "ON_DELETE_NO_ACTION" },
+                SchemaMigrationHash.Sha256(sql),
+                targetManifest.ManifestHash,
+                "SingleTransaction",
+                "Low",
+                true,
+                TimeSpan.FromMinutes(2),
+                new[] { sourceManifest.ManifestHash },
+                "ReconcileAfterUncertainCommit",
+                sql,
+                target,
+                source);
+
+            return new SchemaMigrationPackage(
+                new SchemaReleaseManifest(
+                    DatabaseScopes.ProductosServicios,
+                    activeV3Package.Release.BaselineId,
+                    activeV3Package.Release.BaselineVersion,
+                    target.ContractVersion,
+                    targetManifest.ManifestHash,
+                    activeV3Package.Release.ApprovedMigrationIds.Concat(new[] { migration.MigrationId }).ToArray()),
+                activeV3Package.Migrations.Concat(new[] { migration }).ToArray());
+        }
+
         private static IReadOnlyCollection<string> BuildProductosServiciosV2ToV3ExecutablePreconditions(string sourceManifestHash) => new[]
         {
             $@"SELECT CASE WHEN EXISTS (
@@ -589,6 +740,33 @@ BEGIN
     ALTER TABLE dbo.OrdenesCompraPresentacionesCompra
         ADD PermiteCantidadBase bit NOT NULL
             CONSTRAINT DF_OrdenesCompraPresentacionesCompra_PermiteCantidadBase DEFAULT ((0));
+END";
+
+        private static string BuildOrdenesCompraV2ToV3Sql() => @"
+IF COL_LENGTH('dbo.OrdenesCompra', 'FechaMinima') IS NULL
+BEGIN
+    ALTER TABLE dbo.OrdenesCompra ADD FechaMinima date NULL;
+END;
+
+IF COL_LENGTH('dbo.OrdenesCompra', 'FechaMaxima') IS NULL
+BEGIN
+    ALTER TABLE dbo.OrdenesCompra ADD FechaMaxima date NULL;
+END;
+
+IF OBJECT_ID(N'dbo.CK_OrdenesCompra_RangoFechas', N'C') IS NULL
+BEGIN
+    EXEC(N'ALTER TABLE dbo.OrdenesCompra WITH CHECK ADD CONSTRAINT CK_OrdenesCompra_RangoFechas
+        CHECK ((FechaMinima IS NULL OR FechaMinima >= CONVERT(date, FechaOrden))
+          AND (FechaMaxima IS NULL OR FechaMinima IS NULL OR FechaMaxima >= FechaMinima)
+          AND (FechaLlegada IS NULL OR FechaMinima IS NULL OR CONVERT(date, FechaLlegada) >= FechaMinima)
+          AND (FechaLlegada IS NULL OR FechaMaxima IS NULL OR CONVERT(date, FechaLlegada) <= FechaMaxima));');
+    ALTER TABLE dbo.OrdenesCompra CHECK CONSTRAINT CK_OrdenesCompra_RangoFechas;
+END";
+
+        private static string BuildOrdenesCompraV3ToV4Sql() => @"
+IF COL_LENGTH('dbo.OrdenesCompra', 'FolioReferencia') IS NULL
+BEGIN
+    ALTER TABLE dbo.OrdenesCompra ADD FolioReferencia nvarchar(100) NULL;
 END";
 
         private static IReadOnlyCollection<string> BuildListaPreciosV1ToV2Preconditions()

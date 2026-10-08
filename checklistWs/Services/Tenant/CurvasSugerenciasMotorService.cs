@@ -9,6 +9,11 @@ namespace checklistWs.Services.Tenant
             Guid idEmpresa,
             IReadOnlyList<CurvasSugerenciaItemRequest> items,
             CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<CurvasAplicableDto>> ListarCurvasAplicablesAsync(
+            TenantDatabaseDescriptor descriptor,
+            Guid idEmpresa,
+            Guid idProductoServicio,
+            CancellationToken cancellationToken = default);
     }
 
     public sealed class CurvasSugerenciasMotorService : ICurvasSugerenciasMotorService
@@ -56,7 +61,9 @@ namespace checklistWs.Services.Tenant
                     await EnsureVarianteAsync(connection, idEmpresa, item.IdProductoServicio, item.IdVariante.Value, cancellationToken);
                 }
 
-                CurvaSiembraSnapshot? siembra = await LoadSiembraAsync(connection, idEmpresa, item, cancellationToken);
+                CurvaSiembraSnapshot? siembra = item.IdCurvaTemporal.HasValue
+                    ? await LoadCurvaTemporalAsync(connection, idEmpresa, item, cancellationToken)
+                    : await LoadSiembraAsync(connection, idEmpresa, item, cancellationToken);
                 decimal existencia = await LoadExistenciaAsync(connection, idEmpresa, item, cancellationToken);
                 decimal transito = await LoadTransitoAsync(connection, idEmpresa, item, cancellationToken);
                 PresentacionCompraSnapshot? presentacion = item.IdPresentacionCompra.HasValue
@@ -78,6 +85,53 @@ namespace checklistWs.Services.Tenant
                 Mensaje = "Preview de sugerencias calculado sin persistir snapshots.",
                 Items = results
             };
+        }
+
+        public async Task<IReadOnlyList<CurvasAplicableDto>> ListarCurvasAplicablesAsync(
+            TenantDatabaseDescriptor descriptor,
+            Guid idEmpresa,
+            Guid idProductoServicio,
+            CancellationToken cancellationToken = default)
+        {
+            if (idEmpresa == Guid.Empty || descriptor.IdEmpresa != idEmpresa || idProductoServicio == Guid.Empty)
+            {
+                throw new InvalidOperationException("CURVA_TENANT_INVALIDO");
+            }
+
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            await EnsureProductoAsync(connection, idEmpresa, idProductoServicio, cancellationToken);
+
+            using SqlCommand command = Command(connection, @"
+SELECT c.id, c.Nombre, COALESCE(c.Codigo, '') AS Codigo,
+       COUNT(DISTINCT d.idVariante) AS VariantesConfiguradas
+FROM dbo.CurvasCatalogo c
+INNER JOIN dbo.CurvasDetalle d
+    ON d.idEmpresa = c.idEmpresa
+   AND d.idCurva = c.id
+   AND d.idProductoServicio = @IdProductoServicio
+   AND d.Activo = 1
+   AND d.FechaArchivado IS NULL
+WHERE c.idEmpresa = @IdEmpresa
+  AND c.Estado = 1
+  AND c.Activo = 1
+  AND c.FechaArchivado IS NULL
+GROUP BY c.id, c.Nombre, c.Codigo
+ORDER BY c.Nombre, c.Codigo", ("@IdEmpresa", idEmpresa), ("@IdProductoServicio", idProductoServicio));
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            List<CurvasAplicableDto> result = new();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Add(new CurvasAplicableDto
+                {
+                    Id = reader.GetGuid(reader.GetOrdinal("id")),
+                    Nombre = reader.GetString(reader.GetOrdinal("Nombre")),
+                    Codigo = reader.GetString(reader.GetOrdinal("Codigo")),
+                    VariantesConfiguradas = reader.GetInt32(reader.GetOrdinal("VariantesConfiguradas"))
+                });
+            }
+
+            return result;
         }
 
         private static void ValidateItem(CurvasSugerenciaItemRequest item)
@@ -131,7 +185,7 @@ namespace checklistWs.Services.Tenant
         private static async Task<CurvaSiembraSnapshot?> LoadSiembraAsync(SqlConnection connection, Guid idEmpresa, CurvasSugerenciaItemRequest item, CancellationToken cancellationToken)
         {
             using SqlCommand command = Command(connection, @"
-SELECT s.id AS IdSiembra, s.idCurva, d.CantidadBaseObjetivo
+SELECT s.id AS IdSiembra, s.idCurva, c.Nombre AS CurvaNombre, d.CantidadBaseObjetivo
 FROM dbo.CurvasSiembra s
 INNER JOIN dbo.CurvasCatalogo c
     ON c.idEmpresa = s.idEmpresa
@@ -165,10 +219,42 @@ WHERE s.idEmpresa = @IdEmpresa
                 result = new CurvaSiembraSnapshot(
                     reader.GetGuid(reader.GetOrdinal("idCurva")),
                     reader.GetGuid(reader.GetOrdinal("IdSiembra")),
-                    reader.GetDecimal(reader.GetOrdinal("CantidadBaseObjetivo")));
+                    reader.GetDecimal(reader.GetOrdinal("CantidadBaseObjetivo")),
+                    reader.GetString(reader.GetOrdinal("CurvaNombre")));
             }
 
             return result;
+        }
+
+        private static async Task<CurvaSiembraSnapshot?> LoadCurvaTemporalAsync(SqlConnection connection, Guid idEmpresa, CurvasSugerenciaItemRequest item, CancellationToken cancellationToken)
+        {
+            using SqlCommand command = Command(connection, @"
+SELECT TOP (1) c.id AS idCurva, c.Nombre AS CurvaNombre, d.CantidadBaseObjetivo
+FROM dbo.CurvasCatalogo c
+INNER JOIN dbo.CurvasDetalle d
+    ON d.idEmpresa = c.idEmpresa
+   AND d.idCurva = c.id
+   AND d.idProductoServicio = @IdProductoServicio
+   AND (d.idVariante = @IdVariante OR d.idVariante IS NULL)
+   AND d.Activo = 1
+   AND d.FechaArchivado IS NULL
+WHERE c.idEmpresa = @IdEmpresa
+  AND c.id = @IdCurva
+  AND c.Estado = 1
+  AND c.Activo = 1
+  AND c.FechaArchivado IS NULL
+ORDER BY CASE WHEN d.idVariante = @IdVariante THEN 0 ELSE 1 END", ("@IdEmpresa", idEmpresa), ("@IdCurva", item.IdCurvaTemporal), ("@IdProductoServicio", item.IdProductoServicio), ("@IdVariante", Db(item.IdVariante)));
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return null;
+            }
+
+            return new CurvaSiembraSnapshot(
+                reader.GetGuid(reader.GetOrdinal("idCurva")),
+                null,
+                reader.GetDecimal(reader.GetOrdinal("CantidadBaseObjetivo")),
+                reader.GetString(reader.GetOrdinal("CurvaNombre")));
         }
 
         private static async Task<decimal> LoadExistenciaAsync(SqlConnection connection, Guid idEmpresa, CurvasSugerenciaItemRequest item, CancellationToken cancellationToken)
@@ -192,7 +278,7 @@ INNER JOIN dbo.OrdenesCompra oc
     ON oc.idEmpresa = d.idEmpresa
    AND oc.id = d.idOrdenCompra
 WHERE d.idEmpresa = @IdEmpresa
-  AND oc.idSucursal = @IdSucursal
+  AND d.idSucursal = @IdSucursal
   AND oc.Estado IN (@EstadoGenerada, @EstadoParcial)
   AND oc.Activo = 1
   AND oc.FechaArchivado IS NULL
@@ -317,6 +403,7 @@ WHERE idEmpresa = @IdEmpresa
                 IdProductoServicio = item.IdProductoServicio,
                 IdVariante = item.IdVariante,
                 IdCurva = siembra?.IdCurva,
+                CurvaNombre = siembra?.CurvaNombre ?? string.Empty,
                 IdSiembra = siembra?.IdSiembra,
                 Modo = item.Modo,
                 Estado = estado,
@@ -388,7 +475,7 @@ WHERE idEmpresa = @IdEmpresa
         }
     }
 
-    public sealed record CurvaSiembraSnapshot(Guid IdCurva, Guid IdSiembra, decimal CurvaObjetivoBase);
+    public sealed record CurvaSiembraSnapshot(Guid IdCurva, Guid? IdSiembra, decimal CurvaObjetivoBase, string CurvaNombre = "");
     public sealed record PresentacionCompraSnapshot(Guid Id, decimal FactorConversionBase, bool PermiteCantidadBase);
     public sealed record PresentationConversion(decimal CantidadCompraSugerida, decimal CantidadBaseConvertida, decimal ExcedenteRedondeoBase);
 }

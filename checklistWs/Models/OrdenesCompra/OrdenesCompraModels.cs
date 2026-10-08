@@ -5,16 +5,20 @@ namespace checklistWs.Models.OrdenesCompra
         public Guid? Id { get; set; }
         public Guid IdEmpresa { get; set; }
         public Guid IdRazonSocial { get; set; }
-        public Guid IdSucursal { get; set; }
+        public List<Guid> IdSucursales { get; set; } = new List<Guid>();
         public Guid IdProveedor { get; set; }
+        public string FolioReferencia { get; set; } = string.Empty;
         public DateTime FechaOrden { get; set; }
         public DateTime? FechaLlegada { get; set; }
+        public DateTime? FechaMinima { get; set; }
+        public DateTime? FechaMaxima { get; set; }
         public string Observaciones { get; set; } = string.Empty;
         public List<OrdenCompraPartidaGuardarRequest> Partidas { get; set; } = new List<OrdenCompraPartidaGuardarRequest>();
     }
 
     public class OrdenCompraPartidaGuardarRequest
     {
+        public Guid IdSucursal { get; set; }
         public Guid IdProductoServicio { get; set; }
         public Guid? IdVariante { get; set; }
         public Guid? IdPresentacionCompra { get; set; }
@@ -49,6 +53,7 @@ namespace checklistWs.Models.OrdenesCompra
         public string Mensaje { get; set; } = string.Empty;
         public Guid? IdOrdenCompra { get; set; }
         public string Folio { get; set; } = string.Empty;
+        public string FolioReferencia { get; set; } = string.Empty;
         public byte Estado { get; set; }
         public string EstadoNombre { get; set; } = string.Empty;
         public decimal Subtotal { get; set; }
@@ -79,16 +84,22 @@ namespace checklistWs.Models.OrdenesCompra
     {
         public Guid Id { get; set; }
         public string Folio { get; set; } = string.Empty;
+        public string FolioReferencia { get; set; } = string.Empty;
         public DateTime FechaOrden { get; set; }
         public DateTime? FechaLlegada { get; set; }
+        public DateTime? FechaMinima { get; set; }
+        public DateTime? FechaMaxima { get; set; }
         public Guid IdRazonSocial { get; set; }
         public string RazonSocial { get; set; } = string.Empty;
-        public Guid IdSucursal { get; set; }
+        public Guid? IdSucursal { get; set; }
         public string Sucursal { get; set; } = string.Empty;
         public Guid IdProveedor { get; set; }
         public string Proveedor { get; set; } = string.Empty;
         public byte Estado { get; set; }
         public string EstadoNombre { get; set; } = string.Empty;
+        public decimal CantidadOrdenada { get; set; }
+        public decimal CantidadRecibida { get; set; }
+        public decimal CantidadPendiente { get; set; }
         public decimal Total { get; set; }
         public DateTime FechaCreacion { get; set; }
         public bool PuedeEditar { get; set; }
@@ -102,14 +113,18 @@ namespace checklistWs.Models.OrdenesCompra
         public Guid IdEmpresa { get; set; }
         public Guid IdentityKey { get; set; }
         public string Folio { get; set; } = string.Empty;
+        public string FolioReferencia { get; set; } = string.Empty;
         public Guid IdRazonSocial { get; set; }
         public string RazonSocial { get; set; } = string.Empty;
-        public Guid IdSucursal { get; set; }
+        public Guid? IdSucursal { get; set; }
         public string Sucursal { get; set; } = string.Empty;
+        public List<OrdenCompraSucursalDto> Sucursales { get; set; } = new List<OrdenCompraSucursalDto>();
         public Guid IdProveedor { get; set; }
         public string Proveedor { get; set; } = string.Empty;
         public DateTime FechaOrden { get; set; }
         public DateTime? FechaLlegada { get; set; }
+        public DateTime? FechaMinima { get; set; }
+        public DateTime? FechaMaxima { get; set; }
         public byte Estado { get; set; }
         public string EstadoNombre { get; set; } = string.Empty;
         public string Observaciones { get; set; } = string.Empty;
@@ -129,6 +144,8 @@ namespace checklistWs.Models.OrdenesCompra
     {
         public Guid Id { get; set; }
         public int NumeroPartida { get; set; }
+        public Guid IdSucursal { get; set; }
+        public string Sucursal { get; set; } = string.Empty;
         public Guid IdProductoServicio { get; set; }
         public byte TipoProductoServicio { get; set; }
         public string TipoProductoServicioNombre { get; set; } = string.Empty;
@@ -137,6 +154,8 @@ namespace checklistWs.Models.OrdenesCompra
         public string Codigo { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
+        public string Categoria { get; set; } = string.Empty;
+        public string Marca { get; set; } = string.Empty;
         public string VarianteSnapshot { get; set; } = string.Empty;
         public string PresentacionCompraSnapshot { get; set; } = string.Empty;
         public Guid IdUnidadMedida { get; set; }
@@ -151,9 +170,18 @@ namespace checklistWs.Models.OrdenesCompra
         public decimal CantidadBaseRecibidaAcumulada { get; set; }
         public decimal CantidadBasePendiente { get; set; }
         public byte EstadoPartida { get; set; }
+        public string EstadoPartidaNombre { get; set; } = string.Empty;
         public decimal CostoUnitario { get; set; }
         public decimal Subtotal { get; set; }
         public decimal Total { get; set; }
+    }
+
+    public class OrdenCompraSucursalDto
+    {
+        public Guid Id { get; set; }
+        public Guid IdRazonSocial { get; set; }
+        public string Codigo { get; set; } = string.Empty;
+        public string Nombre { get; set; } = string.Empty;
     }
 
     public class OrdenCompraResumenDto
@@ -167,6 +195,7 @@ namespace checklistWs.Models.OrdenesCompra
     public class OrdenCompraComboDto
     {
         public Guid Id { get; set; }
+        public Guid? IdRazonSocial { get; set; }
         public string Codigo { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
@@ -195,6 +224,8 @@ namespace checklistWs.Models.OrdenesCompra
         public string Codigo { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
+        public string Categoria { get; set; } = string.Empty;
+        public string Marca { get; set; } = string.Empty;
         public Guid IdUnidadMedida { get; set; }
         public string Unidad { get; set; } = string.Empty;
         public string Abreviatura { get; set; } = string.Empty;
@@ -237,6 +268,9 @@ namespace checklistWs.Models.OrdenesCompra
         public string Sucursal { get; set; } = string.Empty;
         public string Proveedor { get; set; } = string.Empty;
         public string Estado { get; set; } = string.Empty;
+        public decimal CantidadOrdenada { get; set; }
+        public decimal CantidadRecibida { get; set; }
+        public decimal CantidadPendiente { get; set; }
         public decimal Total { get; set; }
         public DateTime FechaCreacion { get; set; }
     }
@@ -260,12 +294,21 @@ namespace checklistWs.Models.OrdenesCompra
     public class OrdenCompraDocumentoPartidaDto
     {
         public int NumeroPartida { get; set; }
+        public string Sucursal { get; set; } = string.Empty;
         public string Tipo { get; set; } = string.Empty;
         public string Codigo { get; set; } = string.Empty;
         public string Nombre { get; set; } = string.Empty;
         public string Descripcion { get; set; } = string.Empty;
+        public string Categoria { get; set; } = string.Empty;
+        public string Marca { get; set; } = string.Empty;
+        public string Variante { get; set; } = string.Empty;
+        public string PresentacionCompra { get; set; } = string.Empty;
         public string Unidad { get; set; } = string.Empty;
         public decimal Cantidad { get; set; }
+        public decimal CantidadOrdenada { get; set; }
+        public decimal CantidadRecibida { get; set; }
+        public decimal CantidadPendiente { get; set; }
+        public string EstadoPartida { get; set; } = string.Empty;
         public decimal CostoUnitario { get; set; }
         public decimal Subtotal { get; set; }
     }

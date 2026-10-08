@@ -15,7 +15,8 @@ namespace checklistWs.Tests.Services.Tenant
 
             Assert.Equal(ProductosServiciosSchemaContractProvider.RecepcionLatestVersion, known.GetKnownCurrentVersion(DatabaseScopes.Recepcion));
             Assert.Equal(1, _provider.GetContract(DatabaseScopes.Recepcion, 1).ContractVersion);
-            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.Recepcion, 2));
+            Assert.Equal(2, _provider.GetContract(DatabaseScopes.Recepcion, 2).ContractVersion);
+            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.Recepcion, 3));
         }
 
         [Fact]
@@ -92,9 +93,9 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
-        public void ManifestHash_IsStableForRec01Contract()
+        public void ManifestHash_IsStableForOcQa05Contract()
         {
-            Assert.Equal("c26551d2eb625dda1138a2b5aad2ad83a3b074ea026082feb7714c97c229fd5f", _manifestProvider.CreateManifest(Contract()).ManifestHash);
+            Assert.Equal("24f73a6f4512b26e8f41f02e1aa9faabe36a624fda475ee8df630ae835663803", _manifestProvider.CreateManifest(Contract()).ManifestHash);
         }
 
         private SchemaContract Contract()
