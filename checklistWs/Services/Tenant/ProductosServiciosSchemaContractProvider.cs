@@ -7,10 +7,11 @@ namespace checklistWs.Services.Tenant
         public const int V3 = 3;
         public const int V4 = 4;
         public const int V5 = 5;
+        public const int V6 = 6;
         public const int LatestVersion = V4;
         public const int SucursalesLatestVersion = V2;
         public const int ProveedoresLatestVersion = V2;
-        public const int OrdenesCompraLatestVersion = V5;
+        public const int OrdenesCompraLatestVersion = V6;
         public const int InventarioLatestVersion = V1;
         public const int RecepcionLatestVersion = V2;
         public const int CurvasLatestVersion = V1;

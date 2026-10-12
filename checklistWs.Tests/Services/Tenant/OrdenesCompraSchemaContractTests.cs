@@ -19,7 +19,8 @@ namespace checklistWs.Tests.Services.Tenant
             Assert.Equal(3, _provider.GetContract(DatabaseScopes.OrdenesCompra, 3).ContractVersion);
             Assert.Equal(4, _provider.GetContract(DatabaseScopes.OrdenesCompra, 4).ContractVersion);
             Assert.Equal(5, _provider.GetContract(DatabaseScopes.OrdenesCompra, 5).ContractVersion);
-            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.OrdenesCompra, 6));
+            Assert.Equal(6, _provider.GetContract(DatabaseScopes.OrdenesCompra, 6).ContractVersion);
+            Assert.Throws<InvalidOperationException>(() => _provider.GetContract(DatabaseScopes.OrdenesCompra, 7));
         }
 
         [Fact]
@@ -33,7 +34,9 @@ namespace checklistWs.Tests.Services.Tenant
                 "dbo.OrdenesCompra",
                 "dbo.OrdenesCompraDetalle",
                 "dbo.OrdenesCompraFolios",
+                "dbo.OrdenesCompraOperacionesCierre",
                 "dbo.OrdenesCompraPresentacionesCompra",
+                "dbo.OrdenesCompraReemplazos",
                 "dbo.OrdenesCompraSucursales"
             }.OrderBy(x => x), expected.OrderBy(x => x));
             Assert.Equal(expected.OrderBy(x => x), contract.Tables.Select(t => t.FullName).OrderBy(x => x));
@@ -121,7 +124,7 @@ namespace checklistWs.Tests.Services.Tenant
         [Fact]
         public void ManifestHash_IsStableForOcQa05Contract()
         {
-            SchemaContract contract = Contract();
+            SchemaContract contract = _provider.GetContract(DatabaseScopes.OrdenesCompra, 5);
             Assert.Equal("843193ced8cccf043953c4b81eec7991a1cce65a666d58321385c637075b9b8d", _manifestProvider.CreateManifest(contract).ManifestHash);
         }
 

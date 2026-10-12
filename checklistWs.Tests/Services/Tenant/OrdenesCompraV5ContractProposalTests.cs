@@ -28,17 +28,18 @@ public sealed class OrdenesCompraV5ContractProposalTests
     }
 
     [Fact]
-    public void ActiveProviderGateAndPackageExposeV5AndOfficialMigrations()
+    public void ActiveProviderGateAndPackagePreserveV5AndExposeLatestOfficialMigrations()
     {
         SchemaMigrationPackage active = new ProductosServiciosMigrationPackageProvider(_contracts, _manifests)
             .GetPackage(DatabaseScopes.OrdenesCompra);
 
-        Assert.Equal(5, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
-        Assert.Equal(5, _contracts.GetContract(DatabaseScopes.OrdenesCompra).ContractVersion);
+        Assert.Equal(OrdenesCompraV6ContractProposal.TargetVersion, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
+        Assert.Equal(OrdenesCompraV6ContractProposal.TargetVersion, _contracts.GetContract(DatabaseScopes.OrdenesCompra).ContractVersion);
         Assert.Equal(5, _contracts.GetContract(DatabaseScopes.OrdenesCompra, 5).ContractVersion);
-        Assert.Equal(5, active.Release.LatestSchemaVersion);
+        Assert.Equal(OrdenesCompraV6ContractProposal.TargetVersion, active.Release.LatestSchemaVersion);
         Assert.Contains(active.Migrations, migration => migration.MigrationId == OrdenesCompraV5ContractProposal.MigrationId && migration.AutoApplicable);
         Assert.Contains(active.Migrations, migration => migration.MigrationId == OrdenesCompraV5ContractProposal.ReconciliationMigrationId && migration.AutoApplicable);
+        Assert.Contains(active.Migrations, migration => migration.MigrationId == OrdenesCompraV6ContractProposal.MigrationId && migration.AutoApplicable);
     }
 
     [Fact]

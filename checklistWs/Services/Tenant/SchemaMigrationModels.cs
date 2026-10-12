@@ -344,10 +344,12 @@ namespace checklistWs.Services.Tenant
                 SchemaContract ordenesCompraV3 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V3);
                 SchemaContract ordenesCompraV4 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V4);
                 SchemaContract ordenesCompraV5 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V5);
+                SchemaContract ordenesCompraV6 = _contractProvider.GetContract(DatabaseScopes.OrdenesCompra, ProductosServiciosSchemaContractProvider.V6);
                 SchemaManifest manifestV2 = _manifestProvider.CreateManifest(ordenesCompraV2);
                 SchemaManifest manifestV3 = _manifestProvider.CreateManifest(ordenesCompraV3);
                 SchemaManifest manifestV4 = _manifestProvider.CreateManifest(ordenesCompraV4);
                 SchemaManifest manifestV5 = _manifestProvider.CreateManifest(ordenesCompraV5);
+                SchemaManifest manifestV6 = _manifestProvider.CreateManifest(ordenesCompraV6);
                 string ordenesCompraMigrationSql = BuildOrdenesCompraV1ToV2Sql();
                 SchemaMigrationDefinition ocV1ToV2 = new(
                     "OC-M20260923-V1-V2-PRESENTACIONCOMPRA-CANTIDAD-BASE",
@@ -444,6 +446,7 @@ namespace checklistWs.Services.Tenant
                     .Single(item => item.MigrationId == OrdenesCompraV5ContractProposal.MigrationId) with { AutoApplicable = true };
                 SchemaMigrationDefinition ocV5Reconciliation = localV5.Migrations
                     .Single(item => item.MigrationId == OrdenesCompraV5ContractProposal.ReconciliationMigrationId) with { AutoApplicable = true };
+                SchemaMigrationDefinition ocV5ToV6 = OrdenesCompraV6ContractProposal.CreateMigration(_contractProvider, _manifestProvider);
 
                 return new SchemaMigrationPackage(
                     new SchemaReleaseManifest(
@@ -451,9 +454,9 @@ namespace checklistWs.Services.Tenant
                         "OC-B20260921",
                         ordenesCompraV1.ContractVersion,
                         ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion,
-                        manifestV5.ManifestHash,
-                        new[] { ocV1ToV2.MigrationId, ocV2ToV3.MigrationId, ocV3ToV4.MigrationId, ocV4ToV5.MigrationId, ocV5Reconciliation.MigrationId }),
-                    new[] { ocV1ToV2, ocV2ToV3, ocV3ToV4, ocV4ToV5, ocV5Reconciliation });
+                        manifestV6.ManifestHash,
+                        new[] { ocV1ToV2.MigrationId, ocV2ToV3.MigrationId, ocV3ToV4.MigrationId, ocV4ToV5.MigrationId, ocV5Reconciliation.MigrationId, ocV5ToV6.MigrationId }),
+                    new[] { ocV1ToV2, ocV2ToV3, ocV3ToV4, ocV4ToV5, ocV5Reconciliation, ocV5ToV6 });
             }
 
             if (string.Equals(scope, DatabaseScopes.Proveedores, StringComparison.OrdinalIgnoreCase))

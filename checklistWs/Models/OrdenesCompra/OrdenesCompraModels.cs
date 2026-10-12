@@ -34,6 +34,71 @@ namespace checklistWs.Models.OrdenesCompra
         public Guid IdOrdenCompra { get; set; }
     }
 
+    public class OrdenCompraPrepararCierreRequest : OrdenCompraGuardarRequest
+    {
+        public string IdempotencyKey { get; set; } = string.Empty;
+    }
+
+    public class OrdenCompraEjecutarCierreRequest
+    {
+        public Guid IdEmpresa { get; set; }
+        public Guid Token { get; set; }
+        public string IdempotencyKey { get; set; } = string.Empty;
+        public string Decision { get; set; } = string.Empty;
+    }
+
+    public class OrdenCompraPrepararCierreResponse
+    {
+        public bool Exito { get; set; }
+        public bool Completada { get; set; }
+        public Guid Token { get; set; }
+        public DateTime FechaExpiracion { get; set; }
+        public bool TieneConflictos { get; set; }
+        public bool PuedeConsolidar { get; set; }
+        public string Mensaje { get; set; } = string.Empty;
+        public OrdenCompraCierreResultadoDto? Resultado { get; set; }
+        public List<OrdenCompraConflictoDto> Conflictos { get; set; } = new();
+        public List<OrdenCompraCierreVistaPreviaDto> VistaPrevia { get; set; } = new();
+    }
+
+    public class OrdenCompraCierreVistaPreviaDto
+    {
+        public string Accion { get; set; } = string.Empty;
+        public string Sucursal { get; set; } = string.Empty;
+        public string Concepto { get; set; } = string.Empty;
+        public string Variante { get; set; } = string.Empty;
+        public string PresentacionCompra { get; set; } = string.Empty;
+        public decimal CantidadAnterior { get; set; }
+        public decimal CantidadNueva { get; set; }
+    }
+
+    public class OrdenCompraConflictoDto
+    {
+        public Guid IdOrdenCompra { get; set; }
+        public string Folio { get; set; } = string.Empty;
+        public byte Estado { get; set; }
+        public bool Consolidable { get; set; }
+        public string Sucursal { get; set; } = string.Empty;
+        public string Concepto { get; set; } = string.Empty;
+        public string Variante { get; set; } = string.Empty;
+        public string PresentacionCompra { get; set; } = string.Empty;
+        public decimal CantidadAnterior { get; set; }
+        public decimal CantidadPropuesta { get; set; }
+    }
+
+    public class OrdenCompraCierreResultadoDto
+    {
+        public Guid IdOrdenCompra { get; set; }
+        public string Folio { get; set; } = string.Empty;
+        public byte Estado { get; set; }
+        public string EstadoNombre { get; set; } = string.Empty;
+        public int Renglones { get; set; }
+        public decimal Piezas { get; set; }
+        public decimal Total { get; set; }
+        public bool Consolidada { get; set; }
+        public int OrdenesReemplazadas { get; set; }
+    }
+
     public class OrdenCompraPendientesRequest
     {
         public Guid IdEmpresa { get; set; }
@@ -133,6 +198,8 @@ namespace checklistWs.Models.OrdenesCompra
         public string MotivoCancelacion { get; set; } = string.Empty;
         public DateTime? FechaCancelacion { get; set; }
         public Guid? IdUsuarioCreacion { get; set; }
+        public string UsuarioCreacionNombre { get; set; } = string.Empty;
+        public string UsuarioCreacionPuesto { get; set; } = string.Empty;
         public Guid? IdUsuarioActualizacion { get; set; }
         public Guid? IdUsuarioCancelacion { get; set; }
         public DateTime FechaCreacion { get; set; }

@@ -5,6 +5,7 @@ using System.IO;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using checklistWs.Models.OrdenesCompra;
 using checklistWs.Services.Tenant;
 using checklistWs.Utiles;
@@ -31,6 +32,8 @@ namespace checklistWs.Controllers.OrdenesCompra
         private const int MotivoCancelacionLength = 500;
         private const int BusquedaLength = 200;
         private const int ExportacionLimit = 5000;
+        private static readonly TimeSpan CierreTokenLifetime = TimeSpan.FromMinutes(20);
+        private static readonly JsonSerializerOptions CierreJsonOptions = new(JsonSerializerDefaults.Web);
         private static readonly TimeSpan ProxyHeaderTolerance = TimeSpan.FromMinutes(5);
         private static readonly string[] EmpresaClaimKeys = new[] { "idEmpresa", "empresaId", "tenantId", "companyId", "tenant", "idempresa" };
         private static readonly string[] EmpresaNombreClaimKeys = new[] { "empresa", "empresaNombre", "tenantName", "companyName", "nombreEmpresa" };
@@ -255,6 +258,12 @@ SELECT
     ISNULL(oc.MotivoCancelacion, '') AS MotivoCancelacion,
     oc.FechaCancelacion,
     oc.idUsuarioCreacion,
+    LTRIM(RTRIM(CONCAT(
+        ISNULL(uc.Nombre, ''),
+        CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(uc.ApellidoPaterno, ''))), '') IS NULL THEN '' ELSE ' ' + LTRIM(RTRIM(uc.ApellidoPaterno)) END,
+        CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(uc.ApellidoMaterno, ''))), '') IS NULL THEN '' ELSE ' ' + LTRIM(RTRIM(uc.ApellidoMaterno)) END
+    ))) AS UsuarioCreacionNombre,
+    ISNULL(up.Nombre, '') AS UsuarioCreacionPuesto,
     oc.idUsuarioActualizacion,
     oc.idUsuarioCancelacion,
     oc.FechaCreacion,
@@ -266,6 +275,10 @@ LEFT JOIN dbo.Sucursales su
     ON su.id = oc.idSucursal AND su.idEmpresa = oc.idEmpresa
 LEFT JOIN dbo.ActivosProveedores pr
     ON pr.id = oc.idProveedor AND pr.idEmpresa = oc.idEmpresa
+LEFT JOIN dbo.Usuarios uc
+    ON uc.id = oc.idUsuarioCreacion AND uc.idEmpresa = oc.idEmpresa
+LEFT JOIN dbo.UsuariosPuestos up
+    ON up.id = uc.idPuesto AND up.idEmpresa = oc.idEmpresa
 WHERE oc.idEmpresa = @IdEmpresa
   AND oc.id = @IdOrdenCompra
   AND oc.Activo = 1
@@ -308,6 +321,8 @@ WHERE oc.idEmpresa = @IdEmpresa
                         MotivoCancelacion = ReadString(reader, "MotivoCancelacion"),
                         FechaCancelacion = ReadNullableDateTime(reader, "FechaCancelacion"),
                         IdUsuarioCreacion = ReadNullableGuid(reader, "idUsuarioCreacion"),
+                        UsuarioCreacionNombre = ReadString(reader, "UsuarioCreacionNombre"),
+                        UsuarioCreacionPuesto = ReadString(reader, "UsuarioCreacionPuesto"),
                         IdUsuarioActualizacion = ReadNullableGuid(reader, "idUsuarioActualizacion"),
                         IdUsuarioCancelacion = ReadNullableGuid(reader, "idUsuarioCancelacion"),
                         FechaCreacion = ReadDateTime(reader, "FechaCreacion"),
@@ -568,6 +583,220 @@ WHERE idEmpresa = @IdEmpresa
             {
                 return HandleException(ex, "GuardarBorradorOrdenCompra", "Ocurrió un error al procesar la solicitud.");
             }
+        }
+
+        [HttpPost("PrepararCierreOrdenCompra")]
+        public async Task<IActionResult> PrepararCierreOrdenCompra([FromBody] OrdenCompraPrepararCierreRequest request, Guid idEmpresa)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(context, ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null) return auth;
+
+            string validation = ValidateGuardarRequest(request, context.IdEmpresa);
+            if (!string.IsNullOrWhiteSpace(validation)) return BadRequest(new OrdenCompraOperacionResponse { Mensaje = validation });
+            string idempotencyKey = NormalizeNullableText(request.IdempotencyKey, 120) ?? string.Empty;
+            if (idempotencyKey.Length < 16) return BadRequest(new OrdenCompraOperacionResponse { Mensaje = "La clave idempotente del cierre no es válida." });
+
+            try
+            {
+                string proposalJson = JsonSerializer.Serialize((OrdenCompraGuardarRequest)request, CierreJsonOptions);
+                string payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(proposalJson))).ToLowerInvariant();
+                Guid? usuarioId = TryResolveUsuarioId();
+                DateTime now = DateTime.UtcNow;
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+                using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+                try
+                {
+                    Guid existingOperationId = Guid.Empty;
+                    byte existingState = 0;
+                    DateTime existingExpiration = DateTime.MinValue;
+                    string existingHash = string.Empty;
+                    string existingJson = string.Empty;
+                    using (SqlCommand existing = new(@"
+SELECT TOP (1) id,Token,PayloadHash,ValidacionJson,ResultadoJson,Estado,FechaExpiracion
+FROM dbo.OrdenesCompraOperacionesCierre WITH (UPDLOCK,HOLDLOCK)
+WHERE idEmpresa=@IdEmpresa AND IdempotencyKey=@IdempotencyKey", connection, transaction))
+                    {
+                        existing.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                        existing.Parameters.AddWithValue("@IdempotencyKey", idempotencyKey);
+                        using SqlDataReader reader = await existing.ExecuteReaderAsync();
+                        if (await reader.ReadAsync())
+                        {
+                            existingOperationId = ReadGuid(reader, "id");
+                            existingState = ReadByte(reader, "Estado");
+                            existingExpiration = ReadDateTime(reader, "FechaExpiracion");
+                            existingHash = ReadString(reader, "PayloadHash");
+                            existingJson = existingState == 2 ? ReadString(reader, "ResultadoJson") : ReadString(reader, "ValidacionJson");
+                        }
+                    }
+
+                    if (existingOperationId != Guid.Empty)
+                    {
+                        if (!string.Equals(existingHash, payloadHash, StringComparison.Ordinal))
+                        {
+                            transaction.Rollback();
+                            return Conflict(new OrdenCompraOperacionResponse { Mensaje = "La clave idempotente ya pertenece a otra captura." });
+                        }
+                        if (existingState == 2 || (existingState == 1 && existingExpiration > now))
+                        {
+                            transaction.Commit();
+                            return Content(existingJson, "application/json");
+                        }
+                        if (existingState == 1)
+                        {
+                            using SqlCommand expire = new(@"
+UPDATE dbo.OrdenesCompraOperacionesCierre
+SET Estado=3,FechaConsumo=@Now,FechaActualizacion=@Now,
+    IdempotencyKey=CONCAT(N'expired:',CONVERT(nvarchar(36),id))
+WHERE idEmpresa=@IdEmpresa AND id=@Id AND Estado=1", connection, transaction);
+                            expire.Parameters.AddWithValue("@Now", now);
+                            expire.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                            expire.Parameters.AddWithValue("@Id", existingOperationId);
+                            if (await expire.ExecuteNonQueryAsync() != 1) throw new InvalidOperationException("OC_CIERRE_EXPIRED_TOKEN_NOT_RELEASED");
+                        }
+                        else
+                        {
+                            transaction.Rollback();
+                            return Conflict(new OrdenCompraOperacionResponse { Mensaje = "La operación de cierre ya no está disponible. Inicia una nueva confirmación." });
+                        }
+                    }
+
+                    List<OrdenCompraSucursalDto> branches = await ValidateEncabezadoCatalogosAsync(connection, transaction, context.IdEmpresa, request.IdSucursales, request.IdProveedor);
+                    request.IdRazonSocial = branches[0].IdRazonSocial;
+                    List<OrdenCompraPartidaPersistencia> proposal = await BuildValidatedPartidasAsync(connection, transaction, context.IdEmpresa, request.Partidas, request.IdSucursales);
+                    if (proposal.Any(x => x.CostoUnitario <= 0m) || CalculateTotals(proposal).Total <= 0m)
+                    {
+                        transaction.Rollback();
+                        return BadRequest(new OrdenCompraOperacionResponse { Mensaje = "Todas las partidas deben tener costo válido y la orden un total mayor a cero." });
+                    }
+
+                    List<OrdenCompraConflictoDto> conflicts = await FindClosureConflictsAsync(connection, transaction, context.IdEmpresa, request.IdProveedor, proposal);
+                    List<OrdenCompraPartidaPersistencia> priorRows = conflicts.Count == 0
+                        ? new List<OrdenCompraPartidaPersistencia>()
+                        : await LoadPriorOrderRowsAsync(connection, transaction, context.IdEmpresa, conflicts.Select(x => x.IdOrdenCompra).ToHashSet());
+                    Guid token = Guid.NewGuid();
+                    OrdenCompraPrepararCierreResponse response = new()
+                    {
+                        Exito = true,
+                        Token = token,
+                        FechaExpiracion = now.Add(CierreTokenLifetime),
+                        TieneConflictos = conflicts.Count > 0,
+                        PuedeConsolidar = conflicts.Count > 0 && conflicts.All(x => x.Consolidable),
+                        Mensaje = conflicts.Count > 0 ? "Ya existen pedidos pendientes." : "La orden está lista para confirmar.",
+                        Conflictos = conflicts,
+                        VistaPrevia = BuildClosurePreview(proposal, priorRows, branches)
+                    };
+                    string validationJson = JsonSerializer.Serialize(response, CierreJsonOptions);
+                    using SqlCommand insert = new(@"
+INSERT INTO dbo.OrdenesCompraOperacionesCierre
+(id,idEmpresa,Token,IdempotencyKey,PayloadHash,PropuestaJson,ValidacionJson,Estado,FechaExpiracion,idUsuario,FechaCreacion,FechaActualizacion)
+VALUES(@Id,@IdEmpresa,@Token,@IdempotencyKey,@PayloadHash,@PropuestaJson,@ValidacionJson,1,@FechaExpiracion,@IdUsuario,@Now,@Now)", connection, transaction);
+                    insert.Parameters.AddWithValue("@Id", Guid.NewGuid());
+                    insert.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                    insert.Parameters.AddWithValue("@Token", token);
+                    insert.Parameters.AddWithValue("@IdempotencyKey", idempotencyKey);
+                    insert.Parameters.AddWithValue("@PayloadHash", payloadHash);
+                    insert.Parameters.AddWithValue("@PropuestaJson", proposalJson);
+                    insert.Parameters.AddWithValue("@ValidacionJson", validationJson);
+                    insert.Parameters.AddWithValue("@FechaExpiracion", response.FechaExpiracion);
+                    insert.Parameters.AddWithValue("@IdUsuario", (object?)usuarioId ?? DBNull.Value);
+                    insert.Parameters.AddWithValue("@Now", now);
+                    await insert.ExecuteNonQueryAsync();
+                    transaction.Commit();
+                    return Ok(response);
+                }
+                catch { if (transaction.Connection != null) transaction.Rollback(); throw; }
+            }
+            catch (CatalogoValidationException ex) { return BadRequest(new OrdenCompraOperacionResponse { Mensaje = ex.PublicMessage }); }
+            catch (Exception ex) { return HandleException(ex, "PrepararCierreOrdenCompra", "No fue posible preparar el cierre de la orden."); }
+        }
+
+        [HttpPost("EjecutarCierreOrdenCompra")]
+        public async Task<IActionResult> EjecutarCierreOrdenCompra([FromBody] OrdenCompraEjecutarCierreRequest request, Guid idEmpresa)
+        {
+            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error)) return error!;
+            IActionResult? auth = await AuthorizeOrdenCompraAsync(context, ProductosServiciosAuthorizationDefaults.OrdenesCompraNuevaPermissionCode, ProductosServiciosPermissionRequirement.Write);
+            if (auth != null) return auth;
+            if (request == null || request.Token == Guid.Empty || string.IsNullOrWhiteSpace(request.IdempotencyKey)) return BadRequest(new OrdenCompraOperacionResponse { Mensaje = "La confirmación del cierre no es válida." });
+            string decision = (request.Decision ?? string.Empty).Trim().ToUpperInvariant();
+            if (decision is not "SEPARATE" and not "CONSOLIDATE") return BadRequest(new OrdenCompraOperacionResponse { Mensaje = "Selecciona cómo continuar con la orden." });
+
+            try
+            {
+                Guid? usuarioId = TryResolveUsuarioId();
+                if (!usuarioId.HasValue)
+                {
+                    return Unauthorized(new OrdenCompraOperacionResponse
+                    {
+                        Mensaje = "No fue posible identificar al usuario que confirma la orden de compra."
+                    });
+                }
+                DateTime now = DateTime.UtcNow;
+                using SqlConnection connection = CreateConnection();
+                await connection.OpenAsync();
+                using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+                try
+                {
+                    ClosureOperation operation = await LoadClosureOperationAsync(connection, transaction, context.IdEmpresa, request.Token, request.IdempotencyKey);
+                    if (operation.Id == Guid.Empty) { transaction.Rollback(); return NotFound(new OrdenCompraOperacionResponse { Mensaje = "La validación de cierre no está disponible." }); }
+                    if (operation.Estado == 2 && !string.IsNullOrWhiteSpace(operation.ResultadoJson)) { transaction.Commit(); return Content(operation.ResultadoJson, "application/json"); }
+                    if (operation.Estado != 1 || operation.FechaExpiracion <= now) { transaction.Rollback(); return Conflict(new OrdenCompraOperacionResponse { Mensaje = "La validación expiró. Vuelve a guardar para revalidar los pendientes." }); }
+
+                    OrdenCompraGuardarRequest proposalRequest = JsonSerializer.Deserialize<OrdenCompraGuardarRequest>(operation.PropuestaJson, CierreJsonOptions)
+                        ?? throw new InvalidOperationException("OC_CIERRE_PROPOSAL_INVALID");
+                    List<OrdenCompraSucursalDto> branches = await ValidateEncabezadoCatalogosAsync(connection, transaction, context.IdEmpresa, proposalRequest.IdSucursales, proposalRequest.IdProveedor);
+                    proposalRequest.IdRazonSocial = branches[0].IdRazonSocial;
+                    List<OrdenCompraPartidaPersistencia> proposal = await BuildValidatedPartidasAsync(connection, transaction, context.IdEmpresa, proposalRequest.Partidas, proposalRequest.IdSucursales);
+                    List<OrdenCompraConflictoDto> conflicts = await FindClosureConflictsAsync(connection, transaction, context.IdEmpresa, proposalRequest.IdProveedor, proposal);
+                    HashSet<Guid> priorOrders = conflicts.Select(x => x.IdOrdenCompra).ToHashSet();
+                    OrdenCompraPrepararCierreResponse initialValidation = JsonSerializer.Deserialize<OrdenCompraPrepararCierreResponse>(operation.ValidacionJson,CierreJsonOptions) ?? new();
+                    HashSet<string> initialConflictKeys = initialValidation.Conflictos.Select(ClosureConflictIdentity).ToHashSet(StringComparer.Ordinal);
+                    HashSet<string> currentConflictKeys = conflicts.Select(ClosureConflictIdentity).ToHashSet(StringComparer.Ordinal);
+                    if (decision == "CONSOLIDATE" && !initialConflictKeys.SetEquals(currentConflictKeys))
+                    {
+                        transaction.Rollback();
+                        return Conflict(new OrdenCompraOperacionResponse { Mensaje = "Los pendientes cambiaron desde la vista previa. Vuelve a validar antes de consolidar." });
+                    }
+                    if (decision == "CONSOLIDATE" && (priorOrders.Count == 0 || conflicts.Any(x => !x.Consolidable)))
+                    {
+                        transaction.Rollback();
+                        return Conflict(new OrdenCompraOperacionResponse { Mensaje = "Los pendientes cambiaron o incluyen recepción; revalida antes de consolidar." });
+                    }
+
+                    if (decision == "CONSOLIDATE")
+                    {
+                        List<OrdenCompraPartidaPersistencia> inherited = await LoadPriorOrderRowsAsync(connection, transaction, context.IdEmpresa, priorOrders);
+                        proposal = MergeClosureRows(proposal, inherited);
+                        proposalRequest.IdSucursales = proposal.Select(x => x.IdSucursal).Distinct().ToList();
+                    }
+
+                    OrdenCompraCierreResultadoDto result = await InsertGeneratedOrderAsync(connection, transaction, context.IdEmpresa, proposalRequest, proposal, usuarioId, now);
+                    if (decision == "CONSOLIDATE")
+                    {
+                        await ReplacePriorOrdersAsync(connection, transaction, context.IdEmpresa, operation.Id, result.IdOrdenCompra, priorOrders, usuarioId, now);
+                        result.Consolidada = true;
+                        result.OrdenesReemplazadas = priorOrders.Count;
+                    }
+
+                    string resultJson = JsonSerializer.Serialize(result, CierreJsonOptions);
+                    using SqlCommand complete = new(@"
+UPDATE dbo.OrdenesCompraOperacionesCierre
+SET Estado=2,FechaConsumo=@Now,idOrdenCompraResultado=@IdOrdenCompra,ResultadoJson=@ResultadoJson,FechaActualizacion=@Now
+WHERE idEmpresa=@IdEmpresa AND id=@Id AND Estado=1", connection, transaction);
+                    complete.Parameters.AddWithValue("@Now", now);
+                    complete.Parameters.AddWithValue("@IdOrdenCompra", result.IdOrdenCompra);
+                    complete.Parameters.AddWithValue("@ResultadoJson", resultJson);
+                    complete.Parameters.AddWithValue("@IdEmpresa", context.IdEmpresa);
+                    complete.Parameters.AddWithValue("@Id", operation.Id);
+                    if (await complete.ExecuteNonQueryAsync() != 1) throw new InvalidOperationException("OC_CIERRE_TOKEN_NOT_CONSUMED");
+                    transaction.Commit();
+                    return Ok(result);
+                }
+                catch { if (transaction.Connection != null) transaction.Rollback(); throw; }
+            }
+            catch (CatalogoValidationException ex) { return BadRequest(new OrdenCompraOperacionResponse { Mensaje = ex.PublicMessage }); }
+            catch (Exception ex) { return HandleException(ex, "EjecutarCierreOrdenCompra", "No fue posible cerrar la orden de compra."); }
         }
 
         [HttpPost("GenerarOrdenCompra")]
@@ -1134,48 +1363,6 @@ WHERE ps.idEmpresa = @IdEmpresa
             return File(excel, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
         }
 
-        [HttpGet("ExportarOrdenCompraPdf")]
-        public async Task<IActionResult> ExportarOrdenCompraPdf(Guid idEmpresa, Guid idOrdenCompra)
-        {
-            if (!TryResolveRequestContext(idEmpresa, null, out RequestContext context, out IActionResult? error))
-            {
-                return error!;
-            }
-            IActionResult? auth = await AuthorizeOrdenCompraAsync(
-                context,
-                ProductosServiciosAuthorizationDefaults.OrdenesCompraReportePermissionCode,
-                ProductosServiciosPermissionRequirement.Read);
-            if (auth != null)
-            {
-                return auth;
-            }
-
-            if (idOrdenCompra == Guid.Empty)
-            {
-                return BadRequest(new OrdenCompraOperacionResponse { Mensaje = "La orden de compra no está disponible." });
-            }
-
-            try
-            {
-                using SqlConnection connection = CreateConnection();
-                await connection.OpenAsync();
-
-                OrdenCompraDocumentoExportDto documento = await ObtenerDocumentoOrdenCompraAsync(connection, context.IdEmpresa, idOrdenCompra);
-                if (documento.IdOrdenCompra == Guid.Empty)
-                {
-                    return NotFound(new OrdenCompraOperacionResponse { Mensaje = "La orden de compra no está disponible." });
-                }
-
-                byte[] pdf = BuildPdfDocument(documento);
-                string fileName = BuildSafeFileName("orden_compra", documento.Folio, ".pdf");
-                return File(pdf, "application/pdf", fileName);
-            }
-            catch (Exception ex)
-            {
-                return HandleException(ex, "ExportarOrdenCompraPdf", "Ocurrió un error al procesar la solicitud.");
-            }
-        }
-
         [HttpGet("ExportarOrdenCompraExcel")]
         public async Task<IActionResult> ExportarOrdenCompraExcel(Guid idEmpresa, Guid idOrdenCompra)
         {
@@ -1635,76 +1822,6 @@ WHERE idEmpresa = @IdEmpresa
             return stream.ToArray();
         }
 
-        private static byte[] BuildPdfDocument(OrdenCompraDocumentoExportDto documento)
-        {
-            List<string> lines = BuildPdfLines(documento);
-            const int linesPerPage = 44;
-            List<List<string>> pages = lines
-                .Select((line, index) => new { line, index })
-                .GroupBy(x => x.index / linesPerPage)
-                .Select(group => group.Select(x => x.line).ToList())
-                .ToList();
-
-            StringBuilder pdf = new StringBuilder();
-            List<long> offsets = new List<long> { 0L };
-
-            void AppendObject(int number, string body)
-            {
-                offsets.Add(pdf.Length);
-                pdf.Append(number.ToString(CultureInfo.InvariantCulture))
-                   .Append(" 0 obj\n")
-                   .Append(body)
-                   .Append("\nendobj\n");
-            }
-
-            pdf.Append("%PDF-1.4\n");
-
-            int pageCount = pages.Count == 0 ? 1 : pages.Count;
-            int fontObject = 3 + (pageCount * 2);
-
-            AppendObject(1, "<< /Type /Catalog /Pages 2 0 R >>");
-
-            StringBuilder kids = new StringBuilder();
-            for (int i = 0; i < pageCount; i++)
-            {
-                if (i > 0) kids.Append(' ');
-                kids.Append(3 + i * 2).Append(" 0 R");
-            }
-            AppendObject(2, $"<< /Type /Pages /Count {pageCount} /Kids [ {kids} ] >>");
-
-            for (int i = 0; i < pageCount; i++)
-            {
-                int pageObject = 3 + i * 2;
-                int contentObject = pageObject + 1;
-                AppendObject(pageObject, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {fontObject} 0 R >> >> /Contents {contentObject} 0 R >>");
-                string content = BuildPdfContentStream(pages.Count == 0 ? new List<string>() : pages[i], i + 1, pageCount);
-                byte[] contentBytes = Encoding.ASCII.GetBytes(content);
-                AppendObject(contentObject, $"<< /Length {contentBytes.Length} >>\nstream\n{content}\nendstream");
-            }
-
-            AppendObject(fontObject, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-
-            long xrefOffset = pdf.Length;
-            pdf.Append("xref\n0 ")
-               .Append((offsets.Count).ToString(CultureInfo.InvariantCulture))
-               .Append('\n')
-               .Append("0000000000 65535 f \n");
-
-            for (int i = 1; i < offsets.Count; i++)
-            {
-                pdf.Append(offsets[i].ToString("D10", CultureInfo.InvariantCulture))
-                   .Append(" 00000 n \n");
-            }
-
-            pdf.Append("trailer << /Size ")
-               .Append(offsets.Count.ToString(CultureInfo.InvariantCulture))
-               .Append(" /Root 1 0 R >>\nstartxref\n")
-               .Append(xrefOffset.ToString(CultureInfo.InvariantCulture))
-               .Append("\n%%EOF");
-
-            return Encoding.ASCII.GetBytes(pdf.ToString());
-        }
-
         private static Stylesheet BuildWorkbookStylesheet()
         {
             return new Stylesheet(
@@ -1758,98 +1875,6 @@ WHERE idEmpresa = @IdEmpresa
             };
         }
 
-        private static List<string> BuildPdfLines(OrdenCompraDocumentoExportDto documento)
-        {
-            List<string> lines = new List<string>
-            {
-                "ORDEN DE COMPRA",
-                $"Folio: {TextOrDash(documento.Folio)}",
-                $"Estado: {documento.Estado}",
-                $"Razon social: {TextOrDash(documento.RazonSocial)}",
-                $"Sucursal: {TextOrDash(documento.Sucursal)}",
-                $"Proveedor: {TextOrDash(documento.Proveedor)}",
-                $"Fecha de orden: {documento.FechaOrden:dd/MM/yyyy}",
-                $"Fecha de llegada: {(documento.FechaLlegada.HasValue ? documento.FechaLlegada.Value.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) : "-")}",
-                $"Observaciones: {TextOrDash(documento.Observaciones)}",
-                string.Empty,
-                "PARTIDAS",
-                "No | Sucursal | Tipo | Codigo | Producto o servicio | Categoria | Marca | Variante | Presentacion compra | Ordenado | Recibido | Pendiente | Estado | Costo | Subtotal"
-            };
-
-            foreach (OrdenCompraDocumentoPartidaDto partida in documento.Partidas)
-            {
-                string descripcion = string.IsNullOrWhiteSpace(partida.Descripcion)
-                    ? partida.Nombre
-                    : $"{partida.Nombre} / {partida.Descripcion}";
-                lines.Add(string.Join(" | ", new[]
-                {
-                    partida.NumeroPartida.ToString(CultureInfo.InvariantCulture),
-                    ShortenPdfText(partida.Sucursal, 18),
-                    ShortenPdfText(partida.Tipo, 10),
-                    ShortenPdfText(partida.Codigo, 18),
-                    ShortenPdfText(descripcion, 45),
-                    ShortenPdfText(partida.Categoria, 16),
-                    ShortenPdfText(partida.Marca, 16),
-                    ShortenPdfText(partida.Variante, 18),
-                    ShortenPdfText(partida.PresentacionCompra, 18),
-                    partida.CantidadOrdenada.ToString("N4", CultureInfo.InvariantCulture),
-                    partida.CantidadRecibida.ToString("N4", CultureInfo.InvariantCulture),
-                    partida.CantidadPendiente.ToString("N4", CultureInfo.InvariantCulture),
-                    ShortenPdfText(partida.EstadoPartida, 20),
-                    partida.CostoUnitario.ToString("N2", CultureInfo.InvariantCulture),
-                    partida.Subtotal.ToString("N2", CultureInfo.InvariantCulture)
-                }));
-            }
-
-            lines.Add(string.Empty);
-            lines.Add($"Subtotal: {documento.Subtotal.ToString("N2", CultureInfo.InvariantCulture)}");
-            lines.Add($"Total: {documento.Total.ToString("N2", CultureInfo.InvariantCulture)}");
-            return lines;
-        }
-
-        private static string BuildPdfContentStream(List<string> lines, int pageNumber, int pageCount)
-        {
-            StringBuilder content = new StringBuilder();
-            content.Append("BT\n/F1 10 Tf\n40 770 Td\n");
-
-            for (int i = 0; i < lines.Count; i++)
-            {
-                if (i == 0)
-                {
-                    content.Append('(').Append(EscapePdfText(lines[i])).Append(") Tj\n");
-                }
-                else
-                {
-                    content.Append("T*\n(").Append(EscapePdfText(lines[i])).Append(") Tj\n");
-                }
-            }
-
-            content.Append("T*\n(Page ")
-                   .Append(pageNumber.ToString(CultureInfo.InvariantCulture))
-                   .Append(" de ")
-                   .Append(pageCount.ToString(CultureInfo.InvariantCulture))
-                   .Append(") Tj\nET");
-
-            return content.ToString();
-        }
-
-        private static string EscapePdfText(string text)
-            => (text ?? string.Empty)
-                .Replace("\\", "\\\\", StringComparison.Ordinal)
-                .Replace("(", "\\(", StringComparison.Ordinal)
-                .Replace(")", "\\)", StringComparison.Ordinal);
-
-        private static string ShortenPdfText(string text, int maxLength)
-        {
-            string value = (text ?? string.Empty).Trim();
-            if (value.Length <= maxLength)
-            {
-                return value;
-            }
-
-            return value.Substring(0, Math.Max(0, maxLength - 3)) + "...";
-        }
-
         private static string BuildSafeFileName(string prefix, string folio, string extension)
         {
             string safeFolio = string.IsNullOrWhiteSpace(folio)
@@ -1894,6 +1919,194 @@ WHERE s.idEmpresa=@IdEmpresa AND s.id=@IdSucursal AND ISNULL(s.borrado,0)=0", co
                 throw new CatalogoValidationException("El proveedor no está disponible.");
             }
             return sucursales;
+        }
+
+        private async Task<ClosureOperation> LoadClosureOperationAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid token, string idempotencyKey)
+        {
+            using SqlCommand command = new(@"
+SELECT TOP (1) id,Estado,FechaExpiracion,PropuestaJson,ValidacionJson,ResultadoJson
+FROM dbo.OrdenesCompraOperacionesCierre WITH (UPDLOCK,HOLDLOCK)
+WHERE idEmpresa=@IdEmpresa AND Token=@Token AND IdempotencyKey=@IdempotencyKey", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+            command.Parameters.AddWithValue("@Token", token);
+            command.Parameters.AddWithValue("@IdempotencyKey", idempotencyKey.Trim());
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            if (!await reader.ReadAsync()) return new ClosureOperation();
+            return new ClosureOperation
+            {
+                Id = ReadGuid(reader,"id"), Estado = ReadByte(reader,"Estado"), FechaExpiracion = ReadDateTime(reader,"FechaExpiracion"),
+                PropuestaJson = ReadString(reader,"PropuestaJson"), ValidacionJson=ReadString(reader,"ValidacionJson"), ResultadoJson = ReadString(reader,"ResultadoJson")
+            };
+        }
+
+        private async Task<List<OrdenCompraConflictoDto>> FindClosureConflictsAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid idProveedor, IEnumerable<OrdenCompraPartidaPersistencia> proposal)
+        {
+            List<OrdenCompraConflictoDto> result = new();
+            foreach (OrdenCompraPartidaPersistencia row in proposal)
+            {
+                using SqlCommand command = new(@"
+SELECT oc.id,ISNULL(oc.Folio,'') Folio,oc.Estado,ISNULL(s.Nombre,'') Sucursal,
+       CONCAT(d.Codigo,N' · ',d.Nombre) Concepto,ISNULL(d.VarianteSnapshot,'') Variante,
+       ISNULL(d.PresentacionCompraSnapshot,'') PresentacionCompra,d.CantidadCompra,
+       CASE WHEN oc.Estado=2
+              AND NOT EXISTS (SELECT 1 FROM dbo.OrdenesCompraDetalle dx WHERE dx.idEmpresa=oc.idEmpresa AND dx.idOrdenCompra=oc.id AND dx.Activo=1 AND dx.FechaArchivado IS NULL AND dx.CantidadBaseRecibidaAcumulada<>0)
+              AND NOT EXISTS (SELECT 1 FROM dbo.RecepcionPartidas rp WHERE rp.idEmpresa=oc.idEmpresa AND rp.idOrdenCompra=oc.id)
+            THEN CONVERT(bit,1) ELSE CONVERT(bit,0) END Consolidable
+FROM dbo.OrdenesCompra oc WITH (UPDLOCK,HOLDLOCK)
+JOIN dbo.OrdenesCompraDetalle d WITH (UPDLOCK,HOLDLOCK) ON d.idEmpresa=oc.idEmpresa AND d.idOrdenCompra=oc.id AND d.Activo=1 AND d.FechaArchivado IS NULL
+JOIN dbo.Sucursales s ON s.idEmpresa=d.idEmpresa AND s.id=d.idSucursal
+WHERE oc.idEmpresa=@IdEmpresa AND oc.idProveedor=@IdProveedor AND oc.Estado IN (2,4)
+  AND oc.Activo=1 AND oc.FechaArchivado IS NULL AND d.CantidadBasePendiente>0
+  AND d.idSucursal=@IdSucursal AND d.idProductoServicio=@IdProductoServicio
+  AND ((d.idVariante=@IdVariante) OR (d.idVariante IS NULL AND @IdVariante IS NULL))
+  AND ((d.idPresentacionCompra=@IdPresentacion) OR (d.idPresentacionCompra IS NULL AND @IdPresentacion IS NULL))
+ORDER BY oc.FechaOrden,oc.id,d.NumeroPartida", connection, transaction);
+                command.Parameters.AddWithValue("@IdEmpresa", idEmpresa);
+                command.Parameters.AddWithValue("@IdProveedor", idProveedor);
+                command.Parameters.AddWithValue("@IdSucursal", row.IdSucursal);
+                command.Parameters.AddWithValue("@IdProductoServicio", row.IdProductoServicio);
+                command.Parameters.AddWithValue("@IdVariante", (object?)row.IdVariante ?? DBNull.Value);
+                command.Parameters.AddWithValue("@IdPresentacion", (object?)row.IdPresentacionCompra ?? DBNull.Value);
+                using SqlDataReader reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    Guid orderId = ReadGuid(reader,"id");
+                    if (result.Any(x => x.IdOrdenCompra == orderId && x.Sucursal == ReadString(reader,"Sucursal") && x.Concepto == ReadString(reader,"Concepto") && x.Variante == ReadString(reader,"Variante") && x.PresentacionCompra == ReadString(reader,"PresentacionCompra"))) continue;
+                    result.Add(new OrdenCompraConflictoDto
+                    {
+                        IdOrdenCompra=orderId,Folio=ReadString(reader,"Folio"),Estado=ReadByte(reader,"Estado"),Consolidable=ReadBool(reader,"Consolidable"),
+                        Sucursal=ReadString(reader,"Sucursal"),Concepto=ReadString(reader,"Concepto"),Variante=ReadString(reader,"Variante"),
+                        PresentacionCompra=ReadString(reader,"PresentacionCompra"),CantidadAnterior=ReadDecimal(reader,"CantidadCompra"),CantidadPropuesta=row.CantidadCompra
+                    });
+                }
+            }
+            return result;
+        }
+
+        private async Task<List<OrdenCompraPartidaPersistencia>> LoadPriorOrderRowsAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, HashSet<Guid> orderIds)
+        {
+            if (orderIds.Count == 0) return new();
+            List<Guid> ids = orderIds.OrderBy(x => x).ToList();
+            string parameters = string.Join(",", ids.Select((_,i)=>"@Order"+i));
+            using SqlCommand command = new($@"
+SELECT d.idSucursal,d.NumeroPartida,d.idProductoServicio,d.TipoProductoServicio,d.idVariante,d.idPresentacionCompra,d.Codigo,d.Nombre,
+ ISNULL(d.Descripcion,'') Descripcion,ISNULL(d.VarianteSnapshot,'') VarianteSnapshot,ISNULL(d.PresentacionCompraSnapshot,'') PresentacionCompraSnapshot,
+ d.idUnidadMedida,d.UnidadMedida,d.UnidadAbreviatura,ISNULL(d.UnidadCompraSnapshot,'') UnidadCompraSnapshot,
+ ISNULL(d.UnidadCompraAbreviaturaSnapshot,'') UnidadCompraAbreviaturaSnapshot,d.Cantidad,d.CantidadCompra,d.FactorConversionSnapshot,
+ d.CantidadBaseOrdenada,d.CostoUnitario,d.Subtotal,d.Total
+FROM dbo.OrdenesCompraDetalle d WITH (UPDLOCK,HOLDLOCK)
+WHERE d.idEmpresa=@IdEmpresa AND d.idOrdenCompra IN ({parameters}) AND d.Activo=1 AND d.FechaArchivado IS NULL
+ORDER BY d.idOrdenCompra,d.NumeroPartida", connection, transaction);
+            command.Parameters.AddWithValue("@IdEmpresa",idEmpresa);
+            AddGuidInParameters(command,ids,"@Order");
+            List<OrdenCompraPartidaPersistencia> rows = new();
+            using SqlDataReader reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) rows.Add(new OrdenCompraPartidaPersistencia
+            {
+                Id=Guid.NewGuid(),IdSucursal=ReadGuid(reader,"idSucursal"),NumeroPartida=ReadInt(reader,"NumeroPartida"),IdProductoServicio=ReadGuid(reader,"idProductoServicio"),
+                TipoProductoServicio=ReadByte(reader,"TipoProductoServicio"),IdVariante=ReadNullableGuid(reader,"idVariante"),IdPresentacionCompra=ReadNullableGuid(reader,"idPresentacionCompra"),
+                Codigo=ReadString(reader,"Codigo"),Nombre=ReadString(reader,"Nombre"),Descripcion=ReadString(reader,"Descripcion"),VarianteSnapshot=ReadString(reader,"VarianteSnapshot"),
+                PresentacionCompraSnapshot=ReadString(reader,"PresentacionCompraSnapshot"),IdUnidadMedida=ReadGuid(reader,"idUnidadMedida"),UnidadMedida=ReadString(reader,"UnidadMedida"),
+                UnidadAbreviatura=ReadString(reader,"UnidadAbreviatura"),UnidadCompraSnapshot=ReadString(reader,"UnidadCompraSnapshot"),UnidadCompraAbreviaturaSnapshot=ReadString(reader,"UnidadCompraAbreviaturaSnapshot"),
+                Cantidad=ReadDecimal(reader,"Cantidad"),CantidadCompra=ReadDecimal(reader,"CantidadCompra"),FactorConversionSnapshot=ReadDecimal(reader,"FactorConversionSnapshot"),
+                CantidadBaseOrdenada=ReadDecimal(reader,"CantidadBaseOrdenada"),CantidadBasePendiente=ReadDecimal(reader,"CantidadBaseOrdenada"),EstadoPartida=1,
+                CostoUnitario=ReadDecimal(reader,"CostoUnitario"),Subtotal=ReadDecimal(reader,"Subtotal"),Total=ReadDecimal(reader,"Total")
+            });
+            return rows;
+        }
+
+        private static List<OrdenCompraPartidaPersistencia> MergeClosureRows(List<OrdenCompraPartidaPersistencia> proposal, List<OrdenCompraPartidaPersistencia> inherited)
+        {
+            Dictionary<string,OrdenCompraPartidaPersistencia> merged = proposal.ToDictionary(ClosureIdentity, CloneClosureRow);
+            HashSet<string> proposalKeys = merged.Keys.ToHashSet(StringComparer.Ordinal);
+            foreach (OrdenCompraPartidaPersistencia old in inherited)
+            {
+                string key = ClosureIdentity(old);
+                if (proposalKeys.Contains(key)) continue; // La propuesta reemplaza, nunca suma.
+                if (merged.TryGetValue(key,out OrdenCompraPartidaPersistencia? existing))
+                {
+                    if (existing.FactorConversionSnapshot != old.FactorConversionSnapshot || existing.CostoUnitario != old.CostoUnitario || existing.IdUnidadMedida != old.IdUnidadMedida)
+                        throw new CatalogoValidationException("Las órdenes anteriores contienen renglones ambiguos que no se pueden consolidar de forma segura.");
+                    existing.Cantidad=NormalizeQuantity(existing.Cantidad+old.Cantidad);
+                    existing.CantidadCompra=NormalizeQuantity(existing.CantidadCompra+old.CantidadCompra);
+                    existing.CantidadBaseOrdenada=NormalizeQuantity(existing.CantidadBaseOrdenada+old.CantidadBaseOrdenada);
+                    existing.Subtotal=NormalizeMoney(existing.Subtotal+old.Subtotal); existing.Total=existing.Subtotal;
+                    continue;
+                }
+                OrdenCompraPartidaPersistencia clone = CloneClosureRow(old);
+                merged.Add(key,clone);
+            }
+            int number=1;
+            foreach (OrdenCompraPartidaPersistencia row in merged.Values) { row.Id=Guid.NewGuid(); row.NumeroPartida=number++; row.CantidadBaseRecibidaAcumulada=0; row.CantidadBasePendiente=row.CantidadBaseOrdenada; row.EstadoPartida=1; }
+            return merged.Values.ToList();
+        }
+
+        private static string ClosureIdentity(OrdenCompraPartidaPersistencia row)
+            => string.Join("|",row.IdSucursal.ToString("N"),row.IdProductoServicio.ToString("N"),row.IdVariante?.ToString("N")??"-",row.IdPresentacionCompra?.ToString("N")??"-");
+
+        private static string ClosureConflictIdentity(OrdenCompraConflictoDto row)
+            => string.Join("|",row.IdOrdenCompra.ToString("N"),row.Sucursal,row.Concepto,row.Variante,row.PresentacionCompra,row.CantidadAnterior.ToString(CultureInfo.InvariantCulture),row.CantidadPropuesta.ToString(CultureInfo.InvariantCulture),row.Consolidable);
+
+        private static List<OrdenCompraCierreVistaPreviaDto> BuildClosurePreview(List<OrdenCompraPartidaPersistencia> proposal, List<OrdenCompraPartidaPersistencia> inherited, List<OrdenCompraSucursalDto> branches)
+        {
+            Dictionary<string,List<OrdenCompraPartidaPersistencia>> old = inherited.GroupBy(ClosureIdentity).ToDictionary(x=>x.Key,x=>x.ToList());
+            List<OrdenCompraCierreVistaPreviaDto> preview = new();
+            foreach(OrdenCompraPartidaPersistencia row in proposal)
+            {
+                old.TryGetValue(ClosureIdentity(row),out List<OrdenCompraPartidaPersistencia>? prior);
+                preview.Add(PreviewRow(prior is { Count: > 0 } ? "Actualizado" : "Agregado",row,prior?.Sum(x=>x.CantidadCompra)??0,row.CantidadCompra,branches));
+                old.Remove(ClosureIdentity(row));
+            }
+            foreach(List<OrdenCompraPartidaPersistencia> group in old.Values)
+            {
+                OrdenCompraPartidaPersistencia row=group[0]; decimal quantity=group.Sum(x=>x.CantidadCompra);
+                preview.Add(PreviewRow("Conservado",row,quantity,quantity,branches));
+            }
+            return preview;
+        }
+
+        private static OrdenCompraCierreVistaPreviaDto PreviewRow(string action, OrdenCompraPartidaPersistencia row, decimal oldQuantity, decimal newQuantity, List<OrdenCompraSucursalDto> branches)
+            => new(){Accion=action,Sucursal=branches.FirstOrDefault(x=>x.Id==row.IdSucursal)?.Nombre??row.IdSucursal.ToString(),Concepto=$"{row.Codigo} · {row.Nombre}",Variante=row.VarianteSnapshot,PresentacionCompra=row.PresentacionCompraSnapshot,CantidadAnterior=oldQuantity,CantidadNueva=newQuantity};
+
+        private static OrdenCompraPartidaPersistencia CloneClosureRow(OrdenCompraPartidaPersistencia x) => new()
+        {
+            Id=x.Id,IdSucursal=x.IdSucursal,NumeroPartida=x.NumeroPartida,IdProductoServicio=x.IdProductoServicio,TipoProductoServicio=x.TipoProductoServicio,
+            IdVariante=x.IdVariante,IdPresentacionCompra=x.IdPresentacionCompra,Codigo=x.Codigo,Nombre=x.Nombre,Descripcion=x.Descripcion,VarianteSnapshot=x.VarianteSnapshot,
+            PresentacionCompraSnapshot=x.PresentacionCompraSnapshot,IdUnidadMedida=x.IdUnidadMedida,UnidadMedida=x.UnidadMedida,UnidadAbreviatura=x.UnidadAbreviatura,
+            UnidadCompraSnapshot=x.UnidadCompraSnapshot,UnidadCompraAbreviaturaSnapshot=x.UnidadCompraAbreviaturaSnapshot,Cantidad=x.Cantidad,CantidadCompra=x.CantidadCompra,
+            FactorConversionSnapshot=x.FactorConversionSnapshot,CantidadBaseOrdenada=x.CantidadBaseOrdenada,CantidadBaseRecibidaAcumulada=x.CantidadBaseRecibidaAcumulada,
+            CantidadBasePendiente=x.CantidadBasePendiente,EstadoPartida=x.EstadoPartida,CostoUnitario=x.CostoUnitario,Subtotal=x.Subtotal,Total=x.Total
+        };
+
+        private async Task<OrdenCompraCierreResultadoDto> InsertGeneratedOrderAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, OrdenCompraGuardarRequest request, List<OrdenCompraPartidaPersistencia> rows, Guid? userId, DateTime now)
+        {
+            TotalesOrdenCompra totals=CalculateTotals(rows); Guid orderId=Guid.NewGuid(); string folio=await ReserveNextFolioAsync(connection,transaction,idEmpresa,now);
+            using SqlCommand insert = new(@"
+INSERT INTO dbo.OrdenesCompra(id,idEmpresa,identityKey,Folio,FolioReferencia,idRazonSocial,idSucursal,idProveedor,FechaOrden,FechaLlegada,FechaMinima,FechaMaxima,Estado,Subtotal,Total,Observaciones,Activo,FechaCreacion,FechaActualizacion,idUsuarioCreacion,idUsuarioActualizacion)
+VALUES(@Id,@IdEmpresa,NEWID(),@Folio,@FolioReferencia,@IdRazonSocial,NULL,@IdProveedor,@FechaOrden,@FechaLlegada,@FechaMinima,@FechaMaxima,2,@Subtotal,@Total,@Observaciones,1,@Now,@Now,@User,@User)", connection, transaction);
+            insert.Parameters.AddWithValue("@Id",orderId);insert.Parameters.AddWithValue("@IdEmpresa",idEmpresa);insert.Parameters.AddWithValue("@Folio",folio);
+            insert.Parameters.AddWithValue("@FolioReferencia",(object?)NormalizeNullableText(request.FolioReferencia,100)??DBNull.Value);insert.Parameters.AddWithValue("@IdRazonSocial",request.IdRazonSocial);
+            insert.Parameters.AddWithValue("@IdProveedor",request.IdProveedor);insert.Parameters.AddWithValue("@FechaOrden",request.FechaOrden);insert.Parameters.AddWithValue("@FechaLlegada",(object?)request.FechaLlegada??DBNull.Value);
+            insert.Parameters.AddWithValue("@FechaMinima",(object?)request.FechaMinima?.Date??DBNull.Value);insert.Parameters.AddWithValue("@FechaMaxima",(object?)request.FechaMaxima?.Date??DBNull.Value);
+            insert.Parameters.AddWithValue("@Subtotal",totals.Subtotal);insert.Parameters.AddWithValue("@Total",totals.Total);insert.Parameters.AddWithValue("@Observaciones",(object?)NormalizeNullableText(request.Observaciones,ObservacionesLength)??DBNull.Value);
+            insert.Parameters.AddWithValue("@Now",now);insert.Parameters.AddWithValue("@User",(object?)userId??DBNull.Value);await insert.ExecuteNonQueryAsync();
+            await UpsertSucursalesAsync(connection,transaction,idEmpresa,orderId,rows.Select(x=>x.IdSucursal).Distinct(),userId,now);
+            await InsertPartidasAsync(connection,transaction,idEmpresa,orderId,rows,now);
+            return new OrdenCompraCierreResultadoDto{IdOrdenCompra=orderId,Folio=folio,Estado=EstadoGenerada,EstadoNombre=GetEstadoNombre(EstadoGenerada),Renglones=rows.Count,Piezas=rows.Sum(x=>x.CantidadBaseOrdenada),Total=totals.Total};
+        }
+
+        private async Task ReplacePriorOrdersAsync(SqlConnection connection, SqlTransaction transaction, Guid idEmpresa, Guid operationId, Guid newOrderId, HashSet<Guid> oldOrderIds, Guid? userId, DateTime now)
+        {
+            List<Guid> ids=oldOrderIds.OrderBy(x=>x).ToList(); string inSql=string.Join(",",ids.Select((_,i)=>"@Old"+i));
+            using SqlCommand cancel = new($@"
+UPDATE oc SET Estado=3,MotivoCancelacion=N'Reemplazada por consolidación OC-QA15',FechaCancelacion=@Now,idUsuarioCancelacion=@User,idUsuarioActualizacion=@User,FechaActualizacion=@Now
+FROM dbo.OrdenesCompra oc
+WHERE oc.idEmpresa=@IdEmpresa AND oc.id IN ({inSql}) AND oc.Estado=2
+ AND NOT EXISTS(SELECT 1 FROM dbo.OrdenesCompraDetalle d WHERE d.idEmpresa=oc.idEmpresa AND d.idOrdenCompra=oc.id AND d.Activo=1 AND d.FechaArchivado IS NULL AND d.CantidadBaseRecibidaAcumulada<>0)
+ AND NOT EXISTS(SELECT 1 FROM dbo.RecepcionPartidas rp WHERE rp.idEmpresa=oc.idEmpresa AND rp.idOrdenCompra=oc.id)",connection,transaction);
+            cancel.Parameters.AddWithValue("@Now",now);cancel.Parameters.AddWithValue("@User",(object?)userId??DBNull.Value);cancel.Parameters.AddWithValue("@IdEmpresa",idEmpresa);AddGuidInParameters(cancel,ids,"@Old");
+            if(await cancel.ExecuteNonQueryAsync()!=ids.Count) throw new CatalogoValidationException("Una orden pendiente cambió o recibió mercancía; no se realizó ningún reemplazo.");
+            foreach(Guid oldId in ids){using SqlCommand trace=new(@"INSERT INTO dbo.OrdenesCompraReemplazos(id,idEmpresa,idOperacionCierre,idOrdenCompraAnterior,idOrdenCompraNueva,Motivo,idUsuario,FechaReemplazo) VALUES(NEWID(),@Empresa,@Operacion,@Anterior,@Nueva,N'Consolidación y reemplazo confirmados por usuario',@Usuario,@Fecha)",connection,transaction);trace.Parameters.AddWithValue("@Empresa",idEmpresa);trace.Parameters.AddWithValue("@Operacion",operationId);trace.Parameters.AddWithValue("@Anterior",oldId);trace.Parameters.AddWithValue("@Nueva",newOrderId);trace.Parameters.AddWithValue("@Usuario",(object?)userId??DBNull.Value);trace.Parameters.AddWithValue("@Fecha",now);await trace.ExecuteNonQueryAsync();}
         }
 
         private async Task<List<OrdenCompraPartidaPersistencia>> BuildValidatedPartidasAsync(
@@ -3442,6 +3655,16 @@ WHERE idEmpresa = @IdEmpresa", connection, transaction);
             public decimal CostoUnitario { get; set; }
             public decimal Subtotal { get; set; }
             public decimal Total { get; set; }
+        }
+
+        private sealed class ClosureOperation
+        {
+            public Guid Id { get; set; }
+            public byte Estado { get; set; }
+            public DateTime FechaExpiracion { get; set; }
+            public string PropuestaJson { get; set; } = string.Empty;
+            public string ValidacionJson { get; set; } = string.Empty;
+            public string ResultadoJson { get; set; } = string.Empty;
         }
 
         private sealed class TotalesOrdenCompra

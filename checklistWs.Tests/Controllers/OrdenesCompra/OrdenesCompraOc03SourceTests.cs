@@ -72,10 +72,10 @@ namespace checklistWs.Tests.Controllers.OrdenesCompra
             Assert.Contains("function toPlainText", script);
             Assert.Contains("toPlainText(item.descripcion", script);
             Assert.Contains("toPlainText(partida.descripcion", script);
-            Assert.Contains("Guardar borrador", script);
-            Assert.Contains("Guardar borrador", view);
-            Assert.DoesNotContain("Guardar orden", script);
-            Assert.DoesNotContain("Guardar orden", view);
+            Assert.Contains("Guardar orden de compra", script);
+            Assert.Contains("Guardar orden de compra", view);
+            Assert.DoesNotContain("Guardar borrador", script);
+            Assert.DoesNotContain("Guardar borrador", view);
             Assert.DoesNotContain("sin mover inventario", view, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -255,6 +255,79 @@ namespace checklistWs.Tests.Controllers.OrdenesCompra
 
             Assert.DoesNotContain("ISNULL(s.Codigo", source);
             Assert.Contains("CAST('' AS nvarchar(50)) AS Codigo", source);
+        }
+
+        [Fact]
+        public void OcPdf04_UsesPersistedHistoricalCreatorWithoutSchemaOrSessionFallback()
+        {
+            string source = ReadSource("checklistWs", "Controllers", "OrdenesCompra", "OrdenesCompraController.cs");
+            string models = ReadSource("checklistWs", "Models", "OrdenesCompra", "OrdenesCompraModels.cs");
+            string mvc = ReadSource("inspector", "checklist", "Controllers", "Activos", "OrdenesCompraController.cs");
+
+            Assert.Contains("oc.idUsuarioCreacion", source);
+            Assert.Contains("uc.id = oc.idUsuarioCreacion AND uc.idEmpresa = oc.idEmpresa", source);
+            Assert.Contains("up.id = uc.idPuesto AND up.idEmpresa = oc.idEmpresa", source);
+            Assert.Contains("UsuarioCreacionNombre", models);
+            Assert.Contains("UsuarioCreacionPuesto", models);
+            Assert.Contains("detail.UsuarioCreacionNombre.Trim()", mvc);
+            Assert.Contains("detail.UsuarioCreacionPuesto.Trim()", mvc);
+            Assert.DoesNotContain("creatorName = User.FindFirstValue(ClaimTypes.Name)", mvc);
+            Assert.DoesNotContain("creatorRole = Request.Cookies[SuperAdminRoleCookie]", mvc);
+        }
+
+        [Fact]
+        public void OcPdf04_FinalClosureRequiresAndPersistsTheExecutingUser()
+        {
+            string source = ReadSource("checklistWs", "Controllers", "OrdenesCompra", "OrdenesCompraController.cs");
+
+            Assert.Contains("No fue posible identificar al usuario que confirma la orden de compra", source);
+            Assert.Contains("InsertGeneratedOrderAsync(connection, transaction, context.IdEmpresa, proposalRequest, proposal, usuarioId, now)", source);
+            Assert.Contains("idUsuarioCreacion,idUsuarioActualizacion", source);
+            Assert.Contains("@User,@User", source);
+        }
+
+        [Fact]
+        public void OcPdf04_ServiceDescriptionIsNotCompactedWithAnEllipsis()
+        {
+            string composer = ReadSource("inspector", "checklist", "Controllers", "Activos", "OrdenCompraPdfComposer.cs");
+
+            Assert.Contains("group.Type == 2", composer);
+            Assert.Contains("? group.Description", composer);
+            Assert.Contains(": Compact(group.Description, 115)", composer);
+        }
+
+        [Fact]
+        public void OcPdf05_AllMvcDownloadContextsUseTheCertifiedComposerAndApiHasNoAlternateGenerator()
+        {
+            string mvc = ReadSource("inspector", "checklist", "Controllers", "Activos", "OrdenesCompraController.cs");
+            string script = ReadSource("inspector", "checklist", "wwwroot", "js", "Activos", "OrdenesCompra", "OrdenesCompra.js");
+            string api = ReadSource("checklistWs", "Controllers", "OrdenesCompra", "OrdenesCompraController.cs");
+
+            Assert.Contains("OrdenCompraPdfComposer.Build", mvc);
+            Assert.Equal(2, script.Split("/Activos/OrdenesCompra/ExportarOrdenCompraPdf?idOrdenCompra=", StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("[HttpGet(\"ExportarOrdenCompraPdf\")]", api);
+            Assert.DoesNotContain("BuildPdfDocument(OrdenCompraDocumentoExportDto", api);
+            Assert.DoesNotContain("BuildPdfLines(OrdenCompraDocumentoExportDto", api);
+        }
+
+        [Fact]
+        public void OcPdf05_ReportDetailUsesDocumentGroupingWithResponsiveAdministrativeMetrics()
+        {
+            string view = ReadSource("inspector", "checklist", "Views", "Activos", "OrdenesCompra", "Index.cshtml");
+            string script = ReadSource("inspector", "checklist", "wwwroot", "js", "Activos", "OrdenesCompra", "OrdenesCompra.js");
+            string css = ReadSource("inspector", "checklist", "wwwroot", "css", "Activos", "OrdenesCompra", "OrdenesCompra.css");
+
+            Assert.Contains("ocDetallePartidasGroups", view);
+            Assert.Contains("txOcDetallePartidasResumen", view);
+            Assert.Contains("txOcDetallePiezas", view);
+            Assert.DoesNotContain("tbOcDetallePartidas", view);
+            Assert.Contains("buildReportDetailGroups", script);
+            Assert.Contains("resolveReportDetailBranches", script);
+            Assert.Contains("Subtotal ", script);
+            Assert.Contains("Recibido ", script);
+            Assert.Contains("Pendiente ", script);
+            Assert.Contains(".oc-detail-mobile-matrix", css);
+            Assert.Contains(".oc-detail-matrix-wrap", css);
         }
 
         [Fact]

@@ -127,7 +127,7 @@ namespace checklistWs.Services.Tenant
                 }
 
                 SchemaMigrationDefinition[] candidates = package.Migrations
-                    .Where(migration => migration.FromVersion == cursor && migration.ToVersion <= target)
+                    .Where(migration => migration.FromVersion == cursor && migration.ToVersion != cursor && migration.ToVersion <= target)
                     .OrderBy(migration => migration.Order)
                     .ToArray();
 

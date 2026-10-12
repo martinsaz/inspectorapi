@@ -45,7 +45,9 @@ namespace checklistWs.Services.Tenant
             "dbo.OrdenesCompra",
             "dbo.OrdenesCompraDetalle",
             "dbo.OrdenesCompraFolios",
+            "dbo.OrdenesCompraOperacionesCierre",
             "dbo.OrdenesCompraPresentacionesCompra",
+            "dbo.OrdenesCompraReemplazos",
             "dbo.OrdenesCompraSucursales"
         };
 

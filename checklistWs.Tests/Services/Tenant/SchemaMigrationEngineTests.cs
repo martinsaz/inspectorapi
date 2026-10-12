@@ -59,6 +59,22 @@ namespace checklistWs.Tests.Services.Tenant
         }
 
         [Fact]
+        public void ReconciliationAtCurrentVersion_DoesNotBranchForwardMigration()
+        {
+            SchemaMigrationDefinition reconciliation = M(1, 1);
+            SchemaMigrationResolution result = Resolver().GetPendingMigrations(
+                Identity,
+                DatabaseScopes.ProductosServicios,
+                1,
+                2,
+                Package(reconciliation, M(1, 2)),
+                Array.Empty<SchemaControlHistory>());
+
+            Assert.Equal(SchemaMigrationResolutionStatus.Ready, result.Status);
+            Assert.Equal("PS-M1-2", Assert.Single(result.PendingMigrations).MigrationId);
+        }
+
+        [Fact]
         public void FromVersionIncorrect_Blocks()
         {
             SchemaMigrationResolution result = Resolver().GetPendingMigrations(Identity, DatabaseScopes.ProductosServicios, 1, 2, Package(M(2, 3)), Array.Empty<SchemaControlHistory>());
@@ -326,7 +342,7 @@ namespace checklistWs.Tests.Services.Tenant
 
             SchemaMigrationPackage package = provider.GetPackage(DatabaseScopes.OrdenesCompra);
 
-            Assert.Equal(5, package.Release.LatestSchemaVersion);
+            Assert.Equal(OrdenesCompraV6ContractProposal.TargetVersion, package.Release.LatestSchemaVersion);
             SchemaMigrationDefinition migration = package.Migrations.Single(x => x.FromVersion == 1);
             Assert.Equal(1, migration.FromVersion);
             Assert.Equal(2, migration.ToVersion);
@@ -351,7 +367,10 @@ namespace checklistWs.Tests.Services.Tenant
             SchemaMigrationDefinition v5 = package.Migrations.Single(x => x.FromVersion == 4);
             Assert.Equal(5, v5.ToVersion);
             Assert.Equal(OrdenesCompraV5ContractProposal.MigrationId, v5.MigrationId);
-            Assert.Equal(v5.TargetManifestHash, package.Release.LatestManifestHash);
+            SchemaMigrationDefinition v6 = package.Migrations.Single(x => x.MigrationId == OrdenesCompraV6ContractProposal.MigrationId);
+            Assert.Equal(OrdenesCompraV6ContractProposal.TargetVersion, v6.ToVersion);
+            Assert.Equal(OrdenesCompraV6ContractProposal.MigrationId, v6.MigrationId);
+            Assert.Equal(v6.TargetManifestHash, package.Release.LatestManifestHash);
         }
 
         [Fact]

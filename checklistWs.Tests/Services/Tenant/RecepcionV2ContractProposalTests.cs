@@ -46,9 +46,9 @@ public sealed class RecepcionV2ContractProposalTests
     {
         ProductosServiciosMigrationPackageProvider packages = new(_contracts, _manifests);
 
-        Assert.Equal(5, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
+        Assert.Equal(6, ProductosServiciosSchemaContractProvider.OrdenesCompraLatestVersion);
         Assert.Equal(2, ProductosServiciosSchemaContractProvider.RecepcionLatestVersion);
-        Assert.Equal(5, packages.GetPackage(DatabaseScopes.OrdenesCompra).Release.LatestSchemaVersion);
+        Assert.Equal(6, packages.GetPackage(DatabaseScopes.OrdenesCompra).Release.LatestSchemaVersion);
         Assert.Equal(2, packages.GetPackage(DatabaseScopes.Recepcion).Release.LatestSchemaVersion);
         Assert.Equal(2, _contracts.GetContract(DatabaseScopes.Recepcion, 2).ContractVersion);
         Assert.Contains(packages.GetPackage(DatabaseScopes.Recepcion).Migrations,

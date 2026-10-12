@@ -741,3 +741,25 @@
 - 2026-10-07 #MOKA OC-QA06: reconstrucción final de Nueva OC PASS. API productiva sólo ajusta `CurvasSugerencias/Preview` para reconocer el contexto HMAC oficial firmado por MVC, con tolerancia temporal y tenant/user confiables; motor, persistencia y schema intactos. Corrida autenticada mixta guardada/F5/generada, PDF/Excel y cleanup oficial cancelado PASS; responsive `1440/820/390`, builds/node PASS, focal OC+Recepción+Curvas `84/84`, diff check PASS. Inventos/diferencias 0; listo para QA manual Denisse, no aprobado PO/FROZEN. Expediente MVC `../inspector/docs/compras/OC_QA06_RECONSTRUCCION_FINAL_NUEVA_OC_20261007.md`.
 - 2026-10-07 #MOKA OC-QA07: API de búsqueda Nueva OC expone únicamente categoría y marca canónicas tenant-scoped para completar las cards autorizadas; no expone costos ni cambia persistencia, schema, OC V5 o Recepción V2. QA autenticada mixta multisucursal guardada/F5/generada y cleanup oficial cancelado PASS; build 0 errores y focal OC `45/45` PASS. Suite global `889/890` conserva una falla de datos ListaPrecios ajena al ticket. Expediente MVC `../inspector/docs/compras/OC_QA07_CORRECCION_QA_PO_NUEVA_OC_20261007.md`. Pendiente QA manual Denisse; no aprobado PO/FROZEN.
 - 2026-10-07 #MOKA OC-QA07R: recertificación visual corrige exclusivamente CSS MVC (`--ca-secondary` gris → `--ca-success`) para estados completados; API productiva 0 cambios. Estados A–F, Legacy↔CheckApp, corrida multisucursal, guardado/generado, PDF/Excel y cleanup oficial cancelado PASS; responsive exacto `1440/820/390`, build API 0 errores, focal OC `45/45` y diff PASS. Schema, OC V5, Recepción V2, Auth y módulos ajenos intactos. Expediente MVC `../inspector/docs/compras/OC_QA07R_RECERTIFICACION_VISUAL_REAL_20261007.md`; pendiente QA manual Denisse, no aprobado PO/FROZEN.
+
+# MOKA OC-QA15 contrato de cierre equivalente a Legacy - 2026-10-09
+
+- El cierre de Nueva OC es una operación directa e idempotente: preparar valida propuesta/conflictos y ejecutar crea la orden Generada sin un borrador o generación posterior visibles.
+- Llave exacta: tenant, proveedor, sucursal, producto/servicio, variante nullable y presentación de compra nullable. Servicios no inventan variante ni presentación.
+- Sólo una OC Generada (`Estado=2`) sin cantidad recibida ni `RecepcionPartidas` activas es reemplazable; otros estados o evidencia de recepción fallan cerrado.
+- Consolidar reemplaza coincidencias con la propuesta, conserva previos no coincidentes, agrega nuevos, cancela lógicamente antecedentes y registra anterior→nueva en una transacción Serializable.
+- OC V6 agrega `OrdenesCompraOperacionesCierre` y `OrdenesCompraReemplazos`: token, expiración, hash, idempotency key, snapshot, usuario, fecha, motivo y resultado recuperable; sin hard delete ni backfill comercial.
+
+# MOKA OC-PDF05 fuente oficial PDF y detalle web - 2026-10-11
+
+- `OrdenCompraPdfComposer` / formato certificado OC-PDF04 constituye la única fuente oficial para generar el PDF de Orden de Compra. Ninguna pantalla, reporte o flujo puede mantener un generador alternativo.
+- El detalle web puede adaptar el documento a UX administrativa responsive, pero debe conservar la misma semántica, agrupación y totales.
+- Reporte, detalle y resultado posterior a generación descargan desde `/Activos/OrdenesCompra/ExportarOrdenCompraPdf`; el API conserva datos/Excel pero no genera un segundo PDF.
+
+# MOKA OC-FREEZE01 congelamiento funcional OC + Reporte - 2026-10-11
+
+- Decisión PO Denisse: `OC_FUNCIONAL = FROZEN`, incluyendo Nueva OC, pasos 1–5, Productos/Servicios, proveedor, variantes, presentaciones, curvas, multisucursal, OC mixta, guardado, pendientes, mantener separados, consolidar/reemplazar, generación, estados y trazabilidad.
+- `OC_PDF = FROZEN` y `OC_EXCEL = FROZEN`; sus endpoints y contratos relacionados quedan congelados.
+- `REPORTE_FUNCIONAL = FROZEN`: consultas, filtros funcionales, endpoints, contratos, API, schema, PDF, Excel, modal funcional, datos y reglas de negocio no pueden modificarse.
+- `REPORTE_UI_UX = PENDIENTE_APROBACION_PO` y `REPORTE_PATRON_CHECKAPP = NO_APROBADO`. No declarar Reporte aprobado, Reporte FROZEN visual ni Patrón CheckApp PASS.
+- Cualquier homologación futura del Reporte será exclusivamente UI/UX y requerirá revisar primero el Patrón CheckApp oficial; los colores actuales de botones no están aprobados.

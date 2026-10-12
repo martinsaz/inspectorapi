@@ -4,6 +4,12 @@ namespace checklistWs.Services.Tenant
     {
         public static SchemaContract GetContract(int version)
         {
+            if (version == ProductosServiciosSchemaContractProvider.V6)
+            {
+                return OrdenesCompraV6ContractProposal.CreateTargetContract(
+                    GetContract(ProductosServiciosSchemaContractProvider.V5));
+            }
+
             if (version == ProductosServiciosSchemaContractProvider.V5)
             {
                 return OrdenesCompraV5ContractProposal.CreateTargetContract(

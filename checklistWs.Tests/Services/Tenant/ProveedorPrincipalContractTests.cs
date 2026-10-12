@@ -16,9 +16,12 @@ public sealed class ProveedorPrincipalContractTests
         string source = File.ReadAllText(Path.Combine(
             FindWorkspaceRoot(),
             "inspectorapi", "checklistWs", "Controllers", "OrdenesCompra", "OrdenesCompraController.cs"));
+        int searchStart = source.IndexOf("public async Task<IActionResult> BuscarProductosServiciosOrdenCompra", StringComparison.Ordinal);
+        int searchEnd = source.IndexOf("[HttpPost(\"ValidarPendientesOrdenCompra\")]", searchStart, StringComparison.Ordinal);
+        string searchSource = source[searchStart..searchEnd];
 
-        Assert.Contains("ps.idProveedorPrincipal = @IdProveedor", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("EXISTS (SELECT 1 FROM dbo.OrdenesCompraDetalle", source, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ps.idProveedorPrincipal = @IdProveedor", searchSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("EXISTS (SELECT 1 FROM dbo.OrdenesCompraDetalle", searchSource, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
