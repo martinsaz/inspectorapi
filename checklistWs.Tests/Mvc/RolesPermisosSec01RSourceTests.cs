@@ -27,9 +27,13 @@ public sealed class RolesPermisosSec01RSourceTests
         Assert.Contains("sw05005001W", view);
         Assert.Contains("sw05005002A", view);
         Assert.Contains("sw05005002W", view);
+        Assert.Contains("sw05005003A", view);
         Assert.Contains("sw05001008A", view);
         Assert.Contains("sw05001009A", view);
         Assert.Contains("sw05001009W", view);
+        Assert.Contains("sw05001010A", view);
+        Assert.Contains("sw05001011A", view);
+        Assert.Contains("sw05001011W", view);
     }
 
     [Fact]
@@ -54,9 +58,14 @@ public sealed class RolesPermisosSec01RSourceTests
         Assert.Contains("mncurvascatalogow", js);
         Assert.Contains("mncurvassiembra", js);
         Assert.Contains("mncurvassiembraw", js);
+        Assert.Contains("mncurvashuecoscopetes", js);
         Assert.Contains("mnlistaprecios", js);
         Assert.Contains("mnlistapreciosadmin", js);
         Assert.Contains("mnlistapreciosadminw", js);
+        Assert.Contains("mnkits", js);
+        Assert.Contains("mnkitsadmin", js);
+        Assert.Contains("mnkitsadminw", js);
+        Assert.Contains("$('#sw05001010A').prop('checked', true);", js);
     }
 
     [Fact]
@@ -73,8 +82,11 @@ public sealed class RolesPermisosSec01RSourceTests
         Assert.Contains("CurvasPermissionCode = \"05005000\"", controller);
         Assert.Contains("CurvasCatalogoPermissionCode = \"05005001\"", controller);
         Assert.Contains("CurvasSiembraPermissionCode = \"05005002\"", controller);
+        Assert.Contains("CurvasHuecosCopetesPermissionCode = \"05005003\"", controller);
         Assert.Contains("ListaPreciosPermissionCode = \"05001008\"", controller);
         Assert.Contains("ListaPreciosAdministrarPermissionCode = \"05001009\"", controller);
+        Assert.Contains("KitsPermissionCode = \"05001010\"", controller);
+        Assert.Contains("KitsAdministrarPermissionCode = \"05001011\"", controller);
         Assert.Contains("Escritura = 0", controller);
         Assert.Contains("Escritura = listaPreciosAdminAcceso && IsChecked(mnlistapreciosadminw) ? 1 : 0", controller);
         Assert.Contains("Escritura = ordenesCompraNuevaAcceso && IsChecked(mnordenescompranuevaw) ? 1 : 0", controller);
@@ -87,8 +99,12 @@ public sealed class RolesPermisosSec01RSourceTests
         Assert.Contains("AddPermissionSwitch(result, \"#sw05004002A\", \"#sw05004002W\", recepcionReporte)", controller);
         Assert.Contains("AddPermissionSwitch(result, \"#sw05005001A\", \"#sw05005001W\", curvasCatalogo)", controller);
         Assert.Contains("AddPermissionSwitch(result, \"#sw05005002A\", \"#sw05005002W\", curvasSiembra)", controller);
+        Assert.Contains("AddPermissionSwitch(result, \"#sw05005003A\", null, curvasHuecosCopetes)", controller);
         Assert.Contains("AddPermissionSwitch(result, \"#sw05001008A\", null, listaPrecios)", controller);
         Assert.Contains("AddPermissionSwitch(result, \"#sw05001009A\", \"#sw05001009W\", listaPreciosAdmin)", controller);
+        Assert.Contains("AddPermissionSwitch(result, \"#sw05001010A\", null, kits)", controller);
+        Assert.Contains("AddPermissionSwitch(result, \"#sw05001011A\", \"#sw05001011W\", kitsAdmin)", controller);
+        Assert.Contains("Escritura = kitsAdminAcceso && IsChecked(mnkitsadminw) ? 1 : 0", controller);
     }
 
     [Fact]

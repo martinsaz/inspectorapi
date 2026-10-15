@@ -153,6 +153,21 @@ namespace checklistWs.Services.Tenant
 
         public SchemaMigrationPackage GetPackage(string scope)
         {
+            if (string.Equals(scope, DatabaseScopes.Kits, StringComparison.OrdinalIgnoreCase))
+            {
+                SchemaContract kits = _contractProvider.GetContract(DatabaseScopes.Kits, ProductosServiciosSchemaContractProvider.KitsLatestVersion);
+                SchemaManifest manifest = _manifestProvider.CreateManifest(kits);
+                return new SchemaMigrationPackage(
+                    new SchemaReleaseManifest(
+                        DatabaseScopes.Kits,
+                        "KITS-B20261011",
+                        ProductosServiciosSchemaContractProvider.KitsLatestVersion,
+                        ProductosServiciosSchemaContractProvider.KitsLatestVersion,
+                        manifest.ManifestHash,
+                        Array.Empty<string>()),
+                    Array.Empty<SchemaMigrationDefinition>());
+            }
+
             if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase))
             {
                 SchemaContract cotizacionesV1 = _contractProvider.GetContract(DatabaseScopes.Cotizaciones, ProductosServiciosSchemaContractProvider.V1);

@@ -196,7 +196,8 @@ namespace checklistWs.Services.Tenant
                 string.Equals(scope, DatabaseScopes.Recepcion, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.Curvas, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(scope, DatabaseScopes.ListaPrecios, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase);
+                string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(scope, DatabaseScopes.Kits, StringComparison.OrdinalIgnoreCase);
         }
 
         private static int? ResolveBootstrapVersion(string scope)

@@ -44,6 +44,30 @@ public sealed class ProveeduriaMenuBuilderTests
     }
 
     [Fact]
+    public void BuildShowsKitsOnlyWhenExplicitlyGranted()
+    {
+        string html = ProveeduriaMenuBuilder.Build(new[]
+        {
+            Option("05000000", 1, Option("05001000", 1, Option("05001010", 1)))
+        });
+
+        Assert.Contains(@"id=""menu-productos-servicios-kits""", html);
+        Assert.Contains(@"/Kits/Index", html);
+    }
+
+    [Fact]
+    public void BuildDoesNotGrantKitsFromProductosServiciosParentOnly()
+    {
+        string html = ProveeduriaMenuBuilder.Build(new[]
+        {
+            Option("05000000", 1, Option("05001000", 1))
+        });
+
+        Assert.DoesNotContain(@"id=""menu-productos-servicios-kits""", html);
+        Assert.DoesNotContain(@"/Kits/Index", html);
+    }
+
+    [Fact]
     public void BuildShowsOrdenesCompraChildrenOnlyWhenExplicitlyGranted()
     {
         string html = ProveeduriaMenuBuilder.Build(new[]
@@ -115,12 +139,15 @@ public sealed class ProveeduriaMenuBuilderTests
         Assert.Contains(@"id=""menu-proveeduria-curvas""", html);
         Assert.Contains(@"id=""menu-proveeduria-curvas-catalogo""", html);
         Assert.Contains(@"id=""menu-proveeduria-curvas-siembra""", html);
+        Assert.Contains(@"id=""menu-proveeduria-curvas-huecos-copetes""", html);
         Assert.Contains(@"id=""menu-productos-servicios-colecciones""", html);
         Assert.Contains(@"id=""menu-productos-servicios-etiquetas""", html);
         Assert.Contains(@"id=""menu-productos-servicios-lista-precios""", html);
         Assert.Contains(@"/Proveeduria/Curvas/Catalogo", html);
         Assert.Contains(@"/Proveeduria/Curvas/Siembra", html);
+        Assert.Contains(@"/Activos/Curvas/HuecosCopetes", html);
         Assert.Contains(@"/ListaPrecios/Index", html);
+        Assert.Contains(@"/Kits/Index", html);
         Assert.DoesNotContain(@"id=""menu-proveeduria-recepcion""", html);
         Assert.DoesNotContain(@"/Activos/Recepcion/Nueva", html);
         Assert.DoesNotContain(@"/Activos/Recepcion/Reporte", html);
@@ -185,6 +212,7 @@ public sealed class ProveeduriaMenuBuilderTests
         Opciones curvas = proveeduria.Hijos.Single(option => option.Opcion == "05005000");
         Assert.Contains(curvas.Hijos, option => option.Opcion == "05005001");
         Assert.Contains(curvas.Hijos, option => option.Opcion == "05005002");
+        Assert.Contains(curvas.Hijos, option => option.Opcion == "05005003");
         Opciones productosServicios = proveeduria.Hijos.Single(option => option.Opcion == "05001000");
         Opciones listaPrecios = productosServicios.Hijos.Single(option => option.Opcion == "05001008");
         Assert.Contains(listaPrecios.Hijos, option => option.Opcion == "05001009");
@@ -204,6 +232,7 @@ public sealed class ProveeduriaMenuBuilderTests
     [InlineData("05005001", true)]
     [InlineData("05005002", false)]
     [InlineData("05005002", true)]
+    [InlineData("05005003", false)]
     [InlineData("05001006", false)]
     [InlineData("05001006", true)]
     [InlineData("05001007", false)]
@@ -211,6 +240,9 @@ public sealed class ProveeduriaMenuBuilderTests
     [InlineData("05001008", false)]
     [InlineData("05001009", false)]
     [InlineData("05001009", true)]
+    [InlineData("05001010", false)]
+    [InlineData("05001011", false)]
+    [InlineData("05001011", true)]
     public void SuperAdminOfficialPermissionsResolveProveeduriaCodes(string permissionCode, bool requireWrite)
     {
         Assert.True(ProveeduriaMenuBuilder.HasOfficialSuperAdminPermission(permissionCode, requireWrite));

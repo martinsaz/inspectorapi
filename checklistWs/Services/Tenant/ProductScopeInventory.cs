@@ -91,6 +91,13 @@ namespace checklistWs.Services.Tenant
             "dbo.CotizacionesHistorial"
         };
 
+        private static readonly IReadOnlyCollection<string> KitsTables = new[]
+        {
+            "dbo.Kits",
+            "dbo.KitsComponentes",
+            "dbo.KitsHistorial"
+        };
+
         public IReadOnlyCollection<string> GetExpectedTables(string scope)
         {
             if (string.Equals(scope, DatabaseScopes.ProductosServicios, StringComparison.OrdinalIgnoreCase))
@@ -136,6 +143,11 @@ namespace checklistWs.Services.Tenant
             if (string.Equals(scope, DatabaseScopes.Cotizaciones, StringComparison.OrdinalIgnoreCase))
             {
                 return CotizacionesTables;
+            }
+
+            if (string.Equals(scope, DatabaseScopes.Kits, StringComparison.OrdinalIgnoreCase))
+            {
+                return KitsTables;
             }
 
             return Array.Empty<string>();

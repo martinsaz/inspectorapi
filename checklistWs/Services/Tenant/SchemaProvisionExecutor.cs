@@ -24,6 +24,10 @@ namespace checklistWs.Services.Tenant
         {
             using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
             await connection.OpenAsync(cancellationToken);
+            using (SqlCommand xactAbort = new SqlCommand("SET XACT_ABORT ON;", connection))
+            {
+                await xactAbort.ExecuteNonQueryAsync(cancellationToken);
+            }
             using SqlTransaction transaction = connection.BeginTransaction();
 
             try

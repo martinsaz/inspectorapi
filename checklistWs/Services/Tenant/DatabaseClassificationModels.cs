@@ -30,6 +30,7 @@ namespace checklistWs.Services.Tenant
         public const string Curvas = "Curvas";
         public const string ListaPrecios = "ListaPrecios";
         public const string Cotizaciones = "Cotizaciones";
+        public const string Kits = "Kits";
     }
 
     public sealed class DatabaseSchemaProbeResult
