@@ -16,10 +16,12 @@ namespace checklistWs.Services.Tenant
         Task<Guid> RelacionarOrdenCompraAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaOperacionOrdenCompraRequest request, CancellationToken cancellationToken = default);
         Task<Guid> CrearSnapshotAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvaSnapshotRequest request, CancellationToken cancellationToken = default);
         Task<IReadOnlyList<CurvasCatalogoItemDto>> ListarCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvasCatalogoListRequest request, CancellationToken cancellationToken = default);
+        Task<CurvasCatalogoResumenDto> ObtenerResumenCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvasCatalogoListRequest request, CancellationToken cancellationToken = default);
         Task<CurvasCatalogoDetalleDto?> ObtenerCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idCurva, CancellationToken cancellationToken = default);
         Task<Guid> GuardarCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvasCatalogoGuardarRequest request, CancellationToken cancellationToken = default);
         Task BajaCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idCurva, Guid? usuarioId, CancellationToken cancellationToken = default);
         Task ReactivarCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idCurva, Guid? usuarioId, CancellationToken cancellationToken = default);
+        Task EliminarCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idCurva, Guid? usuarioId, CancellationToken cancellationToken = default);
         Task<IReadOnlyList<CurvasProductoElegibleDto>> BuscarProductosElegiblesAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, string? busqueda, CancellationToken cancellationToken = default);
         Task<IReadOnlyList<CurvasVarianteElegibleDto>> ObtenerVariantesAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idProductoServicio, CancellationToken cancellationToken = default);
     }
@@ -113,18 +115,48 @@ SELECT
     c.Estado,
     c.Activo,
     c.FechaActualizacion,
-    COUNT(d.id) AS Renglones,
-    COALESCE(SUM(d.CantidadBaseObjetivo), 0) AS PiezasObjetivo
+    ISNULL(da.Renglones, 0) AS Renglones,
+    ISNULL(da.PiezasObjetivo, 0) AS PiezasObjetivo,
+    ISNULL(da.ProductosAsignados, 0) AS ProductosAsignados,
+    ISNULL(da.VariantesConfiguradas, 0) AS VariantesConfiguradas,
+    ISNULL(da.ProductosBaseConfigurados, 0) AS ProductosBaseConfigurados,
+    ISNULL(sa.SucursalesSembradas, 0) AS SucursalesSembradas,
+    ISNULL(pr.ProductoResumen, '') AS ProductoResumen,
+    CAST(CASE WHEN c.Activo = 0 AND NOT EXISTS (
+        SELECT 1 FROM dbo.CurvasDetalle de
+        WHERE de.idEmpresa = c.idEmpresa AND de.idCurva = c.id
+          AND de.Activo = 1 AND de.FechaArchivado IS NULL
+    ) THEN 1 ELSE 0 END AS bit) AS Eliminada
 FROM dbo.CurvasCatalogo c
-LEFT JOIN dbo.CurvasDetalle d
-    ON d.idEmpresa = c.idEmpresa
-   AND d.idCurva = c.id
-   AND d.Activo = 1
-   AND d.FechaArchivado IS NULL
+OUTER APPLY (
+    SELECT
+        COUNT(*) AS Renglones,
+        COALESCE(SUM(d.CantidadBaseObjetivo), 0) AS PiezasObjetivo,
+        COUNT(DISTINCT d.idProductoServicio) AS ProductosAsignados,
+        SUM(CASE WHEN d.idVariante IS NOT NULL THEN 1 ELSE 0 END) AS VariantesConfiguradas,
+        SUM(CASE WHEN d.idVariante IS NULL THEN 1 ELSE 0 END) AS ProductosBaseConfigurados
+    FROM dbo.CurvasDetalle d
+    WHERE d.idEmpresa = c.idEmpresa AND d.idCurva = c.id
+      AND d.Activo = 1 AND d.FechaArchivado IS NULL
+) da
+OUTER APPLY (
+    SELECT TOP (1)
+        CONCAT(ISNULL(NULLIF(ps.Codigo, ''), 'Producto'), ' · ', ps.Nombre) AS ProductoResumen
+    FROM dbo.CurvasDetalle d
+    INNER JOIN dbo.ProductosServicios ps ON ps.idEmpresa = d.idEmpresa AND ps.id = d.idProductoServicio
+    WHERE d.idEmpresa = c.idEmpresa AND d.idCurva = c.id
+      AND d.Activo = 1 AND d.FechaArchivado IS NULL
+    ORDER BY ps.Nombre
+) pr
+OUTER APPLY (
+    SELECT COUNT(DISTINCT s.idSucursal) AS SucursalesSembradas
+    FROM dbo.CurvasSiembra s
+    WHERE s.idEmpresa = c.idEmpresa AND s.idCurva = c.id
+      AND s.Estado = 1 AND s.FechaVigenciaFin IS NULL
+) sa
 WHERE c.idEmpresa = @IdEmpresa
   {statusFilter}
   AND (@Busqueda = '' OR c.Nombre LIKE @BusquedaLike OR c.Codigo LIKE @BusquedaLike)
-GROUP BY c.id, c.Nombre, c.Codigo, c.Estado, c.Activo, c.FechaActualizacion
 ORDER BY c.Activo DESC, c.Nombre ASC", connection);
             command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
             command.Parameters.Add("@Busqueda", SqlDbType.NVarChar, 150).Value = search;
@@ -141,13 +173,77 @@ ORDER BY c.Activo DESC, c.Nombre ASC", connection);
                     Codigo = ReadString(reader, "Codigo"),
                     Estado = Convert.ToByte(reader["Estado"]),
                     Activo = Convert.ToBoolean(reader["Activo"]),
+                    Eliminada = Convert.ToBoolean(reader["Eliminada"]),
                     FechaActualizacion = Convert.ToDateTime(reader["FechaActualizacion"]),
                     Renglones = Convert.ToInt32(reader["Renglones"]),
-                    PiezasObjetivo = Convert.ToDecimal(reader["PiezasObjetivo"])
+                    PiezasObjetivo = Convert.ToDecimal(reader["PiezasObjetivo"]),
+                    ProductosAsignados = Convert.ToInt32(reader["ProductosAsignados"]),
+                    VariantesConfiguradas = Convert.ToInt32(reader["VariantesConfiguradas"]),
+                    ProductosBaseConfigurados = Convert.ToInt32(reader["ProductosBaseConfigurados"]),
+                    SucursalesSembradas = Convert.ToInt32(reader["SucursalesSembradas"]),
+                    ProductoResumen = ReadString(reader, "ProductoResumen")
                 });
             }
 
             return result;
+        }
+
+        public async Task<CurvasCatalogoResumenDto> ObtenerResumenCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, CurvasCatalogoListRequest request, CancellationToken cancellationToken = default)
+        {
+            string estatus = NormalizeEstatus(request?.Estatus);
+            string search = (request?.Busqueda ?? string.Empty).Trim();
+            string statusFilter = estatus switch
+            {
+                "inactivos" => "AND c.Activo = 0",
+                "todos" => string.Empty,
+                _ => "AND c.Activo = 1"
+            };
+
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlCommand command = new($@"
+WITH CurvasFiltradas AS (
+    SELECT c.id, c.Activo
+    FROM dbo.CurvasCatalogo c
+    WHERE c.idEmpresa = @IdEmpresa
+      {statusFilter}
+      AND (@Busqueda = '' OR c.Nombre LIKE @BusquedaLike OR c.Codigo LIKE @BusquedaLike)
+), DetallesVisibles AS (
+    SELECT d.id, d.idProductoServicio, d.CantidadBaseObjetivo
+    FROM dbo.CurvasDetalle d
+    INNER JOIN CurvasFiltradas f ON f.id = d.idCurva
+    WHERE d.idEmpresa = @IdEmpresa AND d.Activo = 1 AND d.FechaArchivado IS NULL
+), SiembrasVisibles AS (
+    SELECT s.idSucursal
+    FROM dbo.CurvasSiembra s
+    INNER JOIN CurvasFiltradas f ON f.id = s.idCurva
+    WHERE s.idEmpresa = @IdEmpresa AND s.Estado = 1 AND s.FechaVigenciaFin IS NULL
+)
+SELECT
+    (SELECT COUNT(*) FROM CurvasFiltradas WHERE Activo = 1) AS CurvasActivas,
+    (SELECT COUNT(*) FROM CurvasFiltradas WHERE Activo = 0) AS CurvasInactivas,
+    (SELECT COALESCE(SUM(CantidadBaseObjetivo), 0) FROM DetallesVisibles) AS CantidadObjetivo,
+    (SELECT COUNT(*) FROM DetallesVisibles) AS IdentidadesConfiguradas,
+    (SELECT COUNT(DISTINCT idProductoServicio) FROM DetallesVisibles) AS ProductosAsignados,
+    (SELECT COUNT(DISTINCT idSucursal) FROM SiembrasVisibles) AS SucursalesSembradas", connection);
+            command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
+            command.Parameters.Add("@Busqueda", SqlDbType.NVarChar, 150).Value = search;
+            command.Parameters.Add("@BusquedaLike", SqlDbType.NVarChar, 160).Value = $"%{search}%";
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return new CurvasCatalogoResumenDto();
+            }
+
+            return new CurvasCatalogoResumenDto
+            {
+                CurvasActivas = Convert.ToInt32(reader["CurvasActivas"]),
+                CurvasInactivas = Convert.ToInt32(reader["CurvasInactivas"]),
+                CantidadObjetivo = Convert.ToDecimal(reader["CantidadObjetivo"]),
+                IdentidadesConfiguradas = Convert.ToInt32(reader["IdentidadesConfiguradas"]),
+                ProductosAsignados = Convert.ToInt32(reader["ProductosAsignados"]),
+                SucursalesSembradas = Convert.ToInt32(reader["SucursalesSembradas"])
+            };
         }
 
         public async Task<CurvasCatalogoDetalleDto?> ObtenerCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idCurva, CancellationToken cancellationToken = default)
@@ -157,7 +253,12 @@ ORDER BY c.Activo DESC, c.Nombre ASC", connection);
 
             CurvasCatalogoDetalleDto? curva = null;
             using (SqlCommand command = new(@"
-SELECT c.id, c.Nombre, ISNULL(c.Codigo, '') AS Codigo, c.Estado, c.Activo, c.FechaActualizacion
+SELECT c.id, c.Nombre, ISNULL(c.Codigo, '') AS Codigo, c.Estado, c.Activo, c.FechaActualizacion,
+       CAST(CASE WHEN c.Activo = 0 AND NOT EXISTS (
+           SELECT 1 FROM dbo.CurvasDetalle de
+           WHERE de.idEmpresa = c.idEmpresa AND de.idCurva = c.id
+             AND de.Activo = 1 AND de.FechaArchivado IS NULL
+       ) THEN 1 ELSE 0 END AS bit) AS Eliminada
 FROM dbo.CurvasCatalogo c
 WHERE c.idEmpresa = @IdEmpresa AND c.id = @Id", connection))
             {
@@ -173,8 +274,52 @@ WHERE c.idEmpresa = @IdEmpresa AND c.id = @Id", connection))
                         Codigo = ReadString(reader, "Codigo"),
                         Estado = Convert.ToByte(reader["Estado"]),
                         Activo = Convert.ToBoolean(reader["Activo"]),
+                        Eliminada = Convert.ToBoolean(reader["Eliminada"]),
                         FechaActualizacion = Convert.ToDateTime(reader["FechaActualizacion"])
                     };
+                }
+            }
+
+            List<CurvasCatalogoAsignacionDto> asignaciones = new();
+            using (SqlCommand command = new(@"
+SELECT s.id AS IdSiembra, s.idSucursal, ISNULL(NULLIF(LTRIM(RTRIM(su.Nombre)), ''), 'Sucursal') AS Sucursal,
+       s.idProductoServicio, ps.Nombre AS Producto, ISNULL(ps.Codigo, '') AS CodigoProducto,
+       s.idVariante, ISNULL(v.Nombre, 'Producto base') AS Variante,
+       ISNULL(u.Abreviatura, ISNULL(u.Nombre, 'unidad base')) AS UnidadBase,
+       d.CantidadBaseObjetivo, 'Activa' AS Estado, s.FechaVigenciaInicio
+FROM dbo.CurvasSiembra s
+INNER JOIN dbo.Sucursales su ON su.idEmpresa = s.idEmpresa AND su.id = s.idSucursal
+INNER JOIN dbo.ProductosServicios ps ON ps.idEmpresa = s.idEmpresa AND ps.id = s.idProductoServicio
+LEFT JOIN dbo.ProductosServiciosVariantes v ON v.idEmpresa = s.idEmpresa AND v.id = s.idVariante
+LEFT JOIN dbo.ProductosServiciosUnidadesMedida u ON u.idEmpresa = ps.idEmpresa AND u.id = ps.idUnidadMedida
+INNER JOIN dbo.CurvasDetalle d ON d.idEmpresa = s.idEmpresa AND d.idCurva = s.idCurva
+    AND d.idProductoServicio = s.idProductoServicio
+    AND ((d.idVariante IS NULL AND s.idVariante IS NULL) OR d.idVariante = s.idVariante)
+    AND d.Activo = 1 AND d.FechaArchivado IS NULL
+WHERE s.idEmpresa = @IdEmpresa AND s.idCurva = @IdCurva
+  AND s.Estado = 1 AND s.FechaVigenciaFin IS NULL
+ORDER BY su.Nombre, ps.Nombre, ISNULL(v.Nombre, 'Producto base')", connection))
+            {
+                command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
+                command.Parameters.Add("@IdCurva", SqlDbType.UniqueIdentifier).Value = idCurva;
+                using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    asignaciones.Add(new CurvasCatalogoAsignacionDto
+                    {
+                        IdSiembra = reader.GetGuid(reader.GetOrdinal("IdSiembra")),
+                        IdSucursal = reader.GetGuid(reader.GetOrdinal("idSucursal")),
+                        Sucursal = ReadString(reader, "Sucursal"),
+                        IdProductoServicio = reader.GetGuid(reader.GetOrdinal("idProductoServicio")),
+                        Producto = ReadString(reader, "Producto"),
+                        CodigoProducto = ReadString(reader, "CodigoProducto"),
+                        IdVariante = ReadNullableGuid(reader, "idVariante"),
+                        Variante = ReadString(reader, "Variante"),
+                        UnidadBase = ReadString(reader, "UnidadBase"),
+                        CantidadBaseObjetivo = Convert.ToDecimal(reader["CantidadBaseObjetivo"]),
+                        Estado = ReadString(reader, "Estado"),
+                        FechaVigenciaInicio = Convert.ToDateTime(reader["FechaVigenciaInicio"])
+                    });
                 }
             }
 
@@ -193,7 +338,8 @@ SELECT
     ISNULL(ps.Codigo, '') AS CodigoProducto,
     ISNULL(pv.Nombre, '') AS Variante,
     ISNULL(um.Abreviatura, um.Nombre) AS UnidadBase,
-    d.CantidadBaseObjetivo
+    d.CantidadBaseObjetivo,
+    CAST(CASE WHEN ps.Activo = 1 AND (d.idVariante IS NULL OR pv.Activo = 1) THEN 1 ELSE 0 END AS bit) AS FuenteActiva
 FROM dbo.CurvasDetalle d
 INNER JOIN dbo.ProductosServicios ps
     ON ps.idEmpresa = d.idEmpresa
@@ -224,14 +370,46 @@ ORDER BY ps.Nombre, pv.Nombre", connection))
                         CodigoProducto = ReadString(reader, "CodigoProducto"),
                         Variante = ReadString(reader, "Variante"),
                         UnidadBase = ReadString(reader, "UnidadBase"),
-                        CantidadBaseObjetivo = Convert.ToDecimal(reader["CantidadBaseObjetivo"])
+                        CantidadBaseObjetivo = Convert.ToDecimal(reader["CantidadBaseObjetivo"]),
+                        FuenteActiva = Convert.ToBoolean(reader["FuenteActiva"])
+                    });
+                }
+            }
+
+            List<CurvasCatalogoSucursalDto> sucursales = new();
+            using (SqlCommand command = new(@"
+SELECT s.idSucursal AS Id, ISNULL(NULLIF(LTRIM(RTRIM(su.Nombre)), ''), 'Sucursal') AS Nombre, COUNT(*) AS Identidades
+FROM dbo.CurvasSiembra s
+INNER JOIN dbo.Sucursales su ON su.idEmpresa = s.idEmpresa AND su.id = s.idSucursal
+WHERE s.idEmpresa = @IdEmpresa AND s.idCurva = @IdCurva
+  AND s.Estado = 1 AND s.FechaVigenciaFin IS NULL
+GROUP BY s.idSucursal, su.Nombre
+ORDER BY su.Nombre", connection))
+            {
+                command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
+                command.Parameters.Add("@IdCurva", SqlDbType.UniqueIdentifier).Value = idCurva;
+                using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    sucursales.Add(new CurvasCatalogoSucursalDto
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Nombre = ReadString(reader, "Nombre"),
+                        Identidades = Convert.ToInt32(reader["Identidades"])
                     });
                 }
             }
 
             curva.Detalles = detalles;
+            curva.Sucursales = sucursales;
+            curva.Asignaciones = asignaciones;
             curva.Renglones = detalles.Count;
             curva.PiezasObjetivo = detalles.Sum(item => item.CantidadBaseObjetivo);
+            curva.ProductosAsignados = detalles.Select(item => item.IdProductoServicio).Distinct().Count();
+            curva.VariantesConfiguradas = detalles.Count(item => item.IdVariante.HasValue);
+            curva.ProductosBaseConfigurados = detalles.Count(item => !item.IdVariante.HasValue);
+            curva.SucursalesSembradas = sucursales.Count;
+            curva.ProductoResumen = detalles.Select(item => string.Join(" · ", new[] { item.CodigoProducto, item.Producto }.Where(value => !string.IsNullOrWhiteSpace(value)))).FirstOrDefault() ?? string.Empty;
             return curva;
         }
 
@@ -311,6 +489,31 @@ VALUES
         public async Task ReactivarCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idCurva, Guid? usuarioId, CancellationToken cancellationToken = default)
         {
             await CambiarEstadoCatalogoAsync(descriptor, idEmpresa, idCurva, activo: true, usuarioId, cancellationToken);
+        }
+
+        public async Task EliminarCatalogoAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, Guid idCurva, Guid? usuarioId, CancellationToken cancellationToken = default)
+        {
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlTransaction transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+            if (!await ExistsAsync(connection, transaction, "SELECT 1 FROM dbo.CurvasCatalogo WHERE idEmpresa=@IdEmpresa AND id=@Id", cancellationToken, ("@IdEmpresa", idEmpresa), ("@Id", idCurva)))
+            {
+                throw new InvalidOperationException("CURVA_NO_DISPONIBLE");
+            }
+            if (await ExistsAsync(connection, transaction, "SELECT 1 FROM dbo.CurvasSiembra WHERE idEmpresa=@IdEmpresa AND idCurva=@Id AND Estado=1 AND FechaVigenciaFin IS NULL", cancellationToken, ("@IdEmpresa", idEmpresa), ("@Id", idCurva)))
+            {
+                throw new InvalidOperationException("CURVA_ELIMINAR_CON_ASIGNACIONES");
+            }
+
+            await ExecuteAsync(connection, transaction, @"
+UPDATE dbo.CurvasCatalogo
+SET Estado=2, Activo=0, FechaActualizacion=SYSUTCDATETIME(), FechaArchivado=COALESCE(FechaArchivado, SYSUTCDATETIME()), idUsuarioActualizacion=@Usuario, idUsuarioArchivado=@Usuario
+WHERE idEmpresa=@IdEmpresa AND id=@Id;
+UPDATE dbo.CurvasDetalle
+SET Activo=0, FechaActualizacion=SYSUTCDATETIME(), FechaArchivado=COALESCE(FechaArchivado, SYSUTCDATETIME()), idUsuarioActualizacion=@Usuario
+WHERE idEmpresa=@IdEmpresa AND idCurva=@Id AND Activo=1 AND FechaArchivado IS NULL;", cancellationToken,
+                ("@IdEmpresa", idEmpresa), ("@Id", idCurva), ("@Usuario", Db(usuarioId)));
+            transaction.Commit();
         }
 
         public async Task<IReadOnlyList<CurvasProductoElegibleDto>> BuscarProductosElegiblesAsync(TenantDatabaseDescriptor descriptor, Guid idEmpresa, string? busqueda, CancellationToken cancellationToken = default)
@@ -750,6 +953,10 @@ VALUES
 
             if (activo)
             {
+                if (!await ExistsAsync(connection, transaction, "SELECT 1 FROM dbo.CurvasDetalle WHERE idEmpresa=@IdEmpresa AND idCurva=@Id AND Activo=1 AND FechaArchivado IS NULL", cancellationToken, ("@IdEmpresa", idEmpresa), ("@Id", idCurva)))
+                {
+                    throw new InvalidOperationException("CURVA_ELIMINADA_NO_REACTIVABLE");
+                }
                 await ExecuteAsync(connection, transaction, @"
 UPDATE dbo.CurvasCatalogo
 SET Estado=1, Activo=1, FechaActualizacion=SYSUTCDATETIME(), FechaArchivado=NULL, idUsuarioActualizacion=@Usuario, idUsuarioArchivado=NULL

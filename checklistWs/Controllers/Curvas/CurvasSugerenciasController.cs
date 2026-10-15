@@ -108,6 +108,58 @@ namespace checklistWs.Controllers.Curvas
             }
         }
 
+        [HttpGet("Analisis/Sucursales")]
+        public async Task<IActionResult> SucursalesAnalisis()
+        {
+            TenantDatabaseDescriptor? descriptor = await ResolveDescriptorAsync(Guid.Empty, string.Empty);
+            if (descriptor == null) return Unauthorized(new { mensaje = "No fue posible resolver la empresa activa." });
+
+            IActionResult? guard = await GuardAsync(
+                descriptor,
+                ProductosServiciosAuthorizationDefaults.CurvasHuecosCopetesPermissionCode,
+                ProductosServiciosPermissionRequirement.Read,
+                DatabaseScopes.Curvas,
+                DatabaseScopes.Inventario,
+                DatabaseScopes.OrdenesCompra,
+                DatabaseScopes.Recepcion);
+            if (guard != null) return guard;
+
+            try
+            {
+                return Ok(await _motorService.ListarSucursalesAnalisisAsync(descriptor, descriptor.IdEmpresa, HttpContext.RequestAborted));
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "SucursalesAnalisis");
+            }
+        }
+
+        [HttpPost("Analisis")]
+        public async Task<IActionResult> Analisis([FromBody] CurvasAnalisisRequest request)
+        {
+            TenantDatabaseDescriptor? descriptor = await ResolveDescriptorAsync(Guid.Empty, string.Empty);
+            if (descriptor == null) return Unauthorized(new { mensaje = "No fue posible resolver la empresa activa." });
+
+            IActionResult? guard = await GuardAsync(
+                descriptor,
+                ProductosServiciosAuthorizationDefaults.CurvasHuecosCopetesPermissionCode,
+                ProductosServiciosPermissionRequirement.Read,
+                DatabaseScopes.Curvas,
+                DatabaseScopes.Inventario,
+                DatabaseScopes.OrdenesCompra,
+                DatabaseScopes.Recepcion);
+            if (guard != null) return guard;
+
+            try
+            {
+                return Ok(await _motorService.AnalizarAsync(descriptor, descriptor.IdEmpresa, request!, HttpContext.RequestAborted));
+            }
+            catch (Exception ex)
+            {
+                return HandleException(ex, "Analisis");
+            }
+        }
+
         private async Task<IActionResult?> GuardAsync(TenantDatabaseDescriptor descriptor, string permissionCode, ProductosServiciosPermissionRequirement requirement, params string[] scopes)
         {
             string userId = TryResolveUsuarioId();

@@ -1,4 +1,6 @@
+using System.Data;
 using System.Data.SqlClient;
+using System.Diagnostics;
 
 namespace checklistWs.Services.Tenant
 {
@@ -13,6 +15,15 @@ namespace checklistWs.Services.Tenant
             TenantDatabaseDescriptor descriptor,
             Guid idEmpresa,
             Guid idProductoServicio,
+            CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<CurvasSiembraSucursalDto>> ListarSucursalesAnalisisAsync(
+            TenantDatabaseDescriptor descriptor,
+            Guid idEmpresa,
+            CancellationToken cancellationToken = default);
+        Task<CurvasAnalisisResponse> AnalizarAsync(
+            TenantDatabaseDescriptor descriptor,
+            Guid idEmpresa,
+            CurvasAnalisisRequest request,
             CancellationToken cancellationToken = default);
     }
 
@@ -132,6 +143,195 @@ ORDER BY c.Nombre, c.Codigo", ("@IdEmpresa", idEmpresa), ("@IdProductoServicio",
             }
 
             return result;
+        }
+
+        public async Task<IReadOnlyList<CurvasSiembraSucursalDto>> ListarSucursalesAnalisisAsync(
+            TenantDatabaseDescriptor descriptor,
+            Guid idEmpresa,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureTenant(descriptor, idEmpresa);
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlCommand command = Command(connection, @"
+SELECT id, ISNULL(NULLIF(LTRIM(RTRIM(Nombre)), ''), 'Sucursal') AS Nombre
+FROM dbo.Sucursales
+WHERE idEmpresa = @IdEmpresa AND ISNULL(borrado, 0) = 0
+ORDER BY Nombre", ("@IdEmpresa", idEmpresa));
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            List<CurvasSiembraSucursalDto> result = new();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Add(new CurvasSiembraSucursalDto
+                {
+                    Id = reader.GetGuid(reader.GetOrdinal("id")),
+                    Nombre = reader.GetString(reader.GetOrdinal("Nombre"))
+                });
+            }
+            return result;
+        }
+
+        public async Task<CurvasAnalisisResponse> AnalizarAsync(
+            TenantDatabaseDescriptor descriptor,
+            Guid idEmpresa,
+            CurvasAnalisisRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureTenant(descriptor, idEmpresa);
+            if (request == null) throw new InvalidOperationException("CURVA_ANALISIS_REQUEST_REQUERIDO");
+
+            int page = Math.Max(request.Pagina, 1);
+            int pageSize = request.TamanoPagina is 25 or 50 or 100 ? request.TamanoPagina : 25;
+            string status = NormalizeAnalysisStatus(request.Estado);
+            string product = (request.Producto ?? string.Empty).Trim();
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
+            await using SqlConnection connection = _connectionFactory.CreateConnection(descriptor);
+            await connection.OpenAsync(cancellationToken);
+            using SqlCommand command = new(@"
+;WITH SucursalesFiltradas AS (
+    SELECT s.id, ISNULL(NULLIF(LTRIM(RTRIM(s.Nombre)), ''), 'Sucursal') AS Nombre
+    FROM dbo.Sucursales s
+    WHERE s.idEmpresa = @IdEmpresa
+      AND ISNULL(s.borrado, 0) = 0
+      AND (@IdSucursal IS NULL OR s.id = @IdSucursal)
+), Identidades AS (
+    SELECT p.id AS IdProductoServicio, ISNULL(p.Codigo, '') AS Codigo, p.Nombre AS Producto,
+           v.id AS IdVariante, ISNULL(v.Nombre, '') AS Variante
+    FROM dbo.ProductosServicios p
+    LEFT JOIN dbo.ProductosServiciosVariantes v
+      ON v.idEmpresa = p.idEmpresa AND v.idProductoServicio = p.id AND v.Activo = 1
+    WHERE p.idEmpresa = @IdEmpresa AND p.Tipo = @TipoProducto AND p.Activo = 1
+      AND (@Producto = '' OR p.Nombre LIKE @ProductoLike OR ISNULL(p.Codigo, '') LIKE @ProductoLike OR ISNULL(v.Nombre, '') LIKE @ProductoLike)
+      AND (v.id IS NOT NULL OR NOT EXISTS (
+          SELECT 1 FROM dbo.ProductosServiciosVariantes vx
+          WHERE vx.idEmpresa = p.idEmpresa AND vx.idProductoServicio = p.id AND vx.Activo = 1))
+), Existencias AS (
+    SELECT i.idSucursal, i.idProductoServicio, i.idVariante, SUM(i.CantidadBaseActual) AS Existencia
+    FROM dbo.InventarioSaldos i
+    WHERE i.idEmpresa = @IdEmpresa
+    GROUP BY i.idSucursal, i.idProductoServicio, i.idVariante
+), Transitos AS (
+    SELECT d.idSucursal, d.idProductoServicio, d.idVariante, SUM(d.CantidadBasePendiente) AS Transito
+    FROM dbo.OrdenesCompraDetalle d
+    INNER JOIN dbo.OrdenesCompra oc ON oc.idEmpresa = d.idEmpresa AND oc.id = d.idOrdenCompra
+    WHERE d.idEmpresa = @IdEmpresa
+      AND oc.Estado IN (@EstadoGenerada, @EstadoParcial)
+      AND oc.Activo = 1 AND oc.FechaArchivado IS NULL
+      AND d.Activo = 1 AND d.FechaArchivado IS NULL
+      AND d.TipoProductoServicio = @TipoProducto
+      AND d.EstadoPartida IN (@PartidaPendiente, @PartidaParcial)
+      AND d.CantidadBasePendiente > 0
+    GROUP BY d.idSucursal, d.idProductoServicio, d.idVariante
+), Base AS (
+    SELECT su.id AS IdSucursal, su.Nombre AS Sucursal,
+           i.IdProductoServicio, i.Codigo, i.Producto, i.IdVariante, i.Variante,
+           CASE WHEN cd.id IS NULL THEN NULL ELSE c.id END AS IdCurva,
+           CASE WHEN cd.id IS NULL THEN '' ELSE ISNULL(c.Nombre, '') END AS Curva,
+           CAST(ISNULL(cd.CantidadBaseObjetivo, 0) AS decimal(18,6)) AS Objetivo,
+           CAST(ISNULL(ex.Existencia, 0) AS decimal(18,6)) AS Existencia,
+           CAST(ISNULL(tr.Transito, 0) AS decimal(18,6)) AS Transito
+    FROM SucursalesFiltradas su
+    CROSS JOIN Identidades i
+    LEFT JOIN dbo.CurvasSiembra si
+      ON si.idEmpresa = @IdEmpresa AND si.idSucursal = su.id
+     AND si.idProductoServicio = i.IdProductoServicio
+     AND ((si.idVariante IS NULL AND i.IdVariante IS NULL) OR si.idVariante = i.IdVariante)
+     AND si.Estado = 1 AND si.FechaVigenciaFin IS NULL
+    LEFT JOIN dbo.CurvasCatalogo c
+      ON c.idEmpresa = si.idEmpresa AND c.id = si.idCurva
+     AND c.Estado = 1 AND c.Activo = 1 AND c.FechaArchivado IS NULL
+    LEFT JOIN dbo.CurvasDetalle cd
+      ON cd.idEmpresa = si.idEmpresa AND cd.idCurva = si.idCurva
+     AND cd.idProductoServicio = i.IdProductoServicio
+     AND ((cd.idVariante IS NULL AND i.IdVariante IS NULL) OR cd.idVariante = i.IdVariante)
+     AND cd.Activo = 1 AND cd.FechaArchivado IS NULL
+    LEFT JOIN Existencias ex
+      ON ex.idSucursal = su.id AND ex.idProductoServicio = i.IdProductoServicio
+     AND ((ex.idVariante IS NULL AND i.IdVariante IS NULL) OR ex.idVariante = i.IdVariante)
+    LEFT JOIN Transitos tr
+      ON tr.idSucursal = su.id AND tr.idProductoServicio = i.IdProductoServicio
+     AND ((tr.idVariante IS NULL AND i.IdVariante IS NULL) OR tr.idVariante = i.IdVariante)
+), Calculado AS (
+    SELECT *, CAST(Existencia + Transito AS decimal(18,6)) AS Cobertura,
+           CAST(CASE WHEN IdCurva IS NOT NULL AND Objetivo > Existencia + Transito THEN Objetivo - (Existencia + Transito) ELSE 0 END AS decimal(18,6)) AS Hueco,
+           CAST(CASE WHEN IdCurva IS NOT NULL AND Existencia + Transito > Objetivo THEN (Existencia + Transito) - Objetivo ELSE 0 END AS decimal(18,6)) AS Copete,
+           CASE WHEN IdCurva IS NULL THEN 'SIN_CURVA'
+                WHEN Objetivo > Existencia + Transito THEN 'HUECO'
+                WHEN Existencia + Transito > Objetivo THEN 'COPETE'
+                ELSE 'EN_OBJETIVO' END AS Estado
+    FROM Base
+), Filtrado AS (
+    SELECT * FROM Calculado WHERE @Estado = 'TODOS' OR Estado = @Estado
+)
+SELECT IdSucursal, Sucursal, IdProductoServicio, Codigo, Producto, IdVariante, Variante,
+       IdCurva, Curva, Objetivo, Existencia, Transito, Cobertura, Hueco, Copete, Estado,
+       COUNT(1) OVER() AS TotalRegistros
+FROM Filtrado
+ORDER BY Sucursal, Producto, Variante, IdProductoServicio, IdVariante
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY", connection);
+            command.Parameters.Add("@IdEmpresa", SqlDbType.UniqueIdentifier).Value = idEmpresa;
+            command.Parameters.Add("@IdSucursal", SqlDbType.UniqueIdentifier).Value = (object?)request.IdSucursal ?? DBNull.Value;
+            command.Parameters.Add("@Producto", SqlDbType.NVarChar, 150).Value = product;
+            command.Parameters.Add("@ProductoLike", SqlDbType.NVarChar, 160).Value = $"%{product}%";
+            command.Parameters.Add("@Estado", SqlDbType.VarChar, 20).Value = status;
+            command.Parameters.Add("@TipoProducto", SqlDbType.TinyInt).Value = TipoProducto;
+            command.Parameters.Add("@EstadoGenerada", SqlDbType.TinyInt).Value = OcEstadoGenerada;
+            command.Parameters.Add("@EstadoParcial", SqlDbType.TinyInt).Value = OcEstadoParcialmenteRecibida;
+            command.Parameters.Add("@PartidaPendiente", SqlDbType.TinyInt).Value = PartidaPendiente;
+            command.Parameters.Add("@PartidaParcial", SqlDbType.TinyInt).Value = PartidaParcial;
+            command.Parameters.Add("@Offset", SqlDbType.Int).Value = (page - 1) * pageSize;
+            command.Parameters.Add("@PageSize", SqlDbType.Int).Value = pageSize;
+
+            List<CurvasAnalisisItemDto> items = new();
+            int total = 0;
+            using SqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                total = reader.GetInt32(reader.GetOrdinal("TotalRegistros"));
+                items.Add(new CurvasAnalisisItemDto
+                {
+                    IdSucursal = reader.GetGuid(reader.GetOrdinal("IdSucursal")),
+                    Sucursal = reader.GetString(reader.GetOrdinal("Sucursal")),
+                    IdProductoServicio = reader.GetGuid(reader.GetOrdinal("IdProductoServicio")),
+                    Codigo = reader.GetString(reader.GetOrdinal("Codigo")),
+                    Producto = reader.GetString(reader.GetOrdinal("Producto")),
+                    IdVariante = reader.IsDBNull(reader.GetOrdinal("IdVariante")) ? null : reader.GetGuid(reader.GetOrdinal("IdVariante")),
+                    Variante = reader.GetString(reader.GetOrdinal("Variante")),
+                    IdCurva = reader.IsDBNull(reader.GetOrdinal("IdCurva")) ? null : reader.GetGuid(reader.GetOrdinal("IdCurva")),
+                    Curva = reader.GetString(reader.GetOrdinal("Curva")),
+                    Objetivo = reader.GetDecimal(reader.GetOrdinal("Objetivo")),
+                    Existencia = reader.GetDecimal(reader.GetOrdinal("Existencia")),
+                    Transito = reader.GetDecimal(reader.GetOrdinal("Transito")),
+                    Cobertura = reader.GetDecimal(reader.GetOrdinal("Cobertura")),
+                    Hueco = reader.GetDecimal(reader.GetOrdinal("Hueco")),
+                    Copete = reader.GetDecimal(reader.GetOrdinal("Copete")),
+                    Estado = reader.GetString(reader.GetOrdinal("Estado"))
+                });
+            }
+            stopwatch.Stop();
+            return new CurvasAnalisisResponse
+            {
+                Pagina = page,
+                TamanoPagina = pageSize,
+                TotalRegistros = total,
+                DuracionMilisegundos = stopwatch.ElapsedMilliseconds,
+                Items = items
+            };
+        }
+
+        private static void EnsureTenant(TenantDatabaseDescriptor descriptor, Guid idEmpresa)
+        {
+            if (idEmpresa == Guid.Empty || descriptor.IdEmpresa != idEmpresa)
+                throw new InvalidOperationException("CURVA_TENANT_INVALIDO");
+        }
+
+        private static string NormalizeAnalysisStatus(string? value)
+        {
+            string status = (value ?? "TODOS").Trim().ToUpperInvariant();
+            return status is "TODOS" or "HUECO" or "COPETE" or "EN_OBJETIVO" or "SIN_CURVA"
+                ? status
+                : throw new InvalidOperationException("CURVA_ANALISIS_ESTADO_INVALIDO");
         }
 
         private static void ValidateItem(CurvasSugerenciaItemRequest item)

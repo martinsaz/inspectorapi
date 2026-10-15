@@ -211,6 +211,47 @@ namespace checklistWs.Services.Tenant
         public int VariantesConfiguradas { get; set; }
     }
 
+    public sealed class CurvasAnalisisRequest
+    {
+        public Guid IdEmpresa { get; set; }
+        public string EmpresaKey { get; set; } = string.Empty;
+        public Guid? IdSucursal { get; set; }
+        public string? Producto { get; set; }
+        public string Estado { get; set; } = "TODOS";
+        public int Pagina { get; set; } = 1;
+        public int TamanoPagina { get; set; } = 25;
+    }
+
+    public sealed class CurvasAnalisisResponse
+    {
+        public int Pagina { get; set; }
+        public int TamanoPagina { get; set; }
+        public int TotalRegistros { get; set; }
+        public long DuracionMilisegundos { get; set; }
+        public bool PreviewReadOnly { get; set; } = true;
+        public IReadOnlyList<CurvasAnalisisItemDto> Items { get; set; } = Array.Empty<CurvasAnalisisItemDto>();
+    }
+
+    public sealed class CurvasAnalisisItemDto
+    {
+        public Guid IdSucursal { get; set; }
+        public string Sucursal { get; set; } = string.Empty;
+        public Guid IdProductoServicio { get; set; }
+        public string Codigo { get; set; } = string.Empty;
+        public string Producto { get; set; } = string.Empty;
+        public Guid? IdVariante { get; set; }
+        public string Variante { get; set; } = string.Empty;
+        public Guid? IdCurva { get; set; }
+        public string Curva { get; set; } = string.Empty;
+        public decimal Objetivo { get; set; }
+        public decimal Existencia { get; set; }
+        public decimal Transito { get; set; }
+        public decimal Cobertura { get; set; }
+        public decimal Hueco { get; set; }
+        public decimal Copete { get; set; }
+        public string Estado { get; set; } = string.Empty;
+    }
+
     public sealed class CurvaSnapshotPreviewPayload
     {
         public Guid? IdOperacionCurva { get; set; }
@@ -249,14 +290,32 @@ namespace checklistWs.Services.Tenant
         public string Codigo { get; set; } = string.Empty;
         public byte Estado { get; set; }
         public bool Activo { get; set; }
+        public bool Eliminada { get; set; }
         public int Renglones { get; set; }
         public decimal PiezasObjetivo { get; set; }
+        public int ProductosAsignados { get; set; }
+        public int VariantesConfiguradas { get; set; }
+        public int ProductosBaseConfigurados { get; set; }
+        public int SucursalesSembradas { get; set; }
+        public string ProductoResumen { get; set; } = string.Empty;
         public DateTime FechaActualizacion { get; set; }
+    }
+
+    public sealed class CurvasCatalogoResumenDto
+    {
+        public int CurvasActivas { get; set; }
+        public int CurvasInactivas { get; set; }
+        public decimal CantidadObjetivo { get; set; }
+        public int IdentidadesConfiguradas { get; set; }
+        public int ProductosAsignados { get; set; }
+        public int SucursalesSembradas { get; set; }
     }
 
     public sealed class CurvasCatalogoDetalleDto : CurvasCatalogoItemDto
     {
         public IReadOnlyList<CurvasCatalogoDetalleRenglonDto> Detalles { get; set; } = Array.Empty<CurvasCatalogoDetalleRenglonDto>();
+        public IReadOnlyList<CurvasCatalogoSucursalDto> Sucursales { get; set; } = Array.Empty<CurvasCatalogoSucursalDto>();
+        public IReadOnlyList<CurvasCatalogoAsignacionDto> Asignaciones { get; set; } = Array.Empty<CurvasCatalogoAsignacionDto>();
     }
 
     public sealed class CurvasCatalogoDetalleRenglonDto
@@ -269,6 +328,30 @@ namespace checklistWs.Services.Tenant
         public string Variante { get; set; } = string.Empty;
         public string UnidadBase { get; set; } = string.Empty;
         public decimal CantidadBaseObjetivo { get; set; }
+        public bool FuenteActiva { get; set; }
+    }
+
+    public sealed class CurvasCatalogoSucursalDto
+    {
+        public Guid Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public int Identidades { get; set; }
+    }
+
+    public sealed class CurvasCatalogoAsignacionDto
+    {
+        public Guid IdSiembra { get; set; }
+        public Guid IdSucursal { get; set; }
+        public string Sucursal { get; set; } = string.Empty;
+        public Guid IdProductoServicio { get; set; }
+        public string Producto { get; set; } = string.Empty;
+        public string CodigoProducto { get; set; } = string.Empty;
+        public Guid? IdVariante { get; set; }
+        public string Variante { get; set; } = string.Empty;
+        public string UnidadBase { get; set; } = string.Empty;
+        public decimal CantidadBaseObjetivo { get; set; }
+        public string Estado { get; set; } = string.Empty;
+        public DateTime FechaVigenciaInicio { get; set; }
     }
 
     public sealed class CurvasCatalogoGuardarRequest

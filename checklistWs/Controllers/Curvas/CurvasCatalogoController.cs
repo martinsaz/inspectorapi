@@ -66,6 +66,17 @@ namespace checklistWs.Controllers.Curvas
             return curva == null ? NotFound(BuildResponse(false, "La curva no está disponible.")) : Ok(curva);
         }
 
+        [HttpGet("Resumen")]
+        public async Task<IActionResult> Resumen([FromQuery] Guid idEmpresa, [FromQuery] string empresaKey = "", [FromQuery] string busqueda = "", [FromQuery] string estatus = "activos")
+        {
+            TenantDatabaseDescriptor? descriptor = await ResolveDescriptorAsync(idEmpresa, empresaKey);
+            IActionResult? guard = await GuardAsync(descriptor, ProductosServiciosPermissionRequirement.Read);
+            if (guard != null) return guard;
+
+            CurvasCatalogoResumenDto resumen = await _curvasService.ObtenerResumenCatalogoAsync(descriptor!, descriptor!.IdEmpresa, new CurvasCatalogoListRequest { Busqueda = busqueda, Estatus = estatus }, HttpContext.RequestAborted);
+            return Ok(resumen);
+        }
+
         [HttpPost("Guardar")]
         public async Task<IActionResult> Guardar([FromBody] CurvasCatalogoGuardarRequest request)
         {
@@ -114,6 +125,24 @@ namespace checklistWs.Controllers.Curvas
             {
                 await _curvasService.ReactivarCatalogoAsync(descriptor!, descriptor!.IdEmpresa, id, TryResolveUsuarioGuid(), HttpContext.RequestAborted);
                 return Ok(BuildResponse(true, "Curva reactivada.", id));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException)
+            {
+                return BadRequest(BuildResponse(false, ex.Message));
+            }
+        }
+
+        [HttpPost("Eliminar")]
+        public async Task<IActionResult> Eliminar([FromQuery] Guid id)
+        {
+            TenantDatabaseDescriptor? descriptor = await ResolveDescriptorAsync(Guid.Empty, string.Empty);
+            IActionResult? guard = await GuardAsync(descriptor, ProductosServiciosPermissionRequirement.Write);
+            if (guard != null) return guard;
+
+            try
+            {
+                await _curvasService.EliminarCatalogoAsync(descriptor!, descriptor!.IdEmpresa, id, TryResolveUsuarioGuid(), HttpContext.RequestAborted);
+                return Ok(BuildResponse(true, "Curva eliminada del catálogo activo; su historial quedó preservado.", id));
             }
             catch (Exception ex) when (ex is InvalidOperationException)
             {

@@ -32,6 +32,9 @@ public sealed class CurvasCatalogoSourceTests
         Assert.Contains("CURVA_DETALLE_DUPLICADO", source);
         Assert.Contains("FechaArchivado=SYSUTCDATETIME()", source);
         Assert.Contains("FechaArchivado=NULL", source);
+        Assert.Contains("CURVA_ELIMINAR_CON_ASIGNACIONES", source);
+        Assert.Contains("CURVA_ELIMINADA_NO_REACTIVABLE", source);
+        Assert.Contains("Task EliminarCatalogoAsync", source);
     }
 
     [Fact]
@@ -49,6 +52,27 @@ public sealed class CurvasCatalogoSourceTests
     }
 
     [Fact]
+    public void CatalogoSummaryAndListUseRealTenantScopedCurvesDetailsAndSeeds()
+    {
+        string controller = File.ReadAllText(Path.Combine(ApiRoot, "Controllers", "Curvas", "CurvasCatalogoController.cs"));
+        string service = File.ReadAllText(Path.Combine(ApiRoot, "Services", "Tenant", "CurvasScopeService.cs"));
+        string models = File.ReadAllText(Path.Combine(ApiRoot, "Services", "Tenant", "CurvasScopeModels.cs"));
+
+        Assert.Contains("HttpGet(\"Resumen\")", controller);
+        Assert.Contains("ObtenerResumenCatalogoAsync", controller);
+        Assert.Contains("CurvasCatalogoResumenDto", models);
+        Assert.Contains("COUNT(DISTINCT idProductoServicio)", service);
+        Assert.Contains("COUNT(DISTINCT idSucursal)", service);
+        Assert.Contains("s.Estado = 1 AND s.FechaVigenciaFin IS NULL", service);
+        Assert.Contains("d.Activo = 1 AND d.FechaArchivado IS NULL", service);
+        Assert.Contains("FuenteActiva", service);
+        Assert.Contains("CurvasCatalogoSucursalDto", models);
+        Assert.Contains("CurvasCatalogoAsignacionDto", models);
+        Assert.Contains("CodigoProducto", models);
+        Assert.Contains("FechaVigenciaInicio", models);
+    }
+
+    [Fact]
     public void MvcCatalogoUsesGoldenMasterDynamicGridWithoutParallelCss()
     {
         string view = File.ReadAllText(Path.Combine(MvcRoot, "Views", "Curvas", "Catalogo.cshtml"));
@@ -61,12 +85,27 @@ public sealed class CurvasCatalogoSourceTests
         Assert.Contains("ckCurvaActiva", view);
         Assert.Contains("btAplicarCantidadTodasCurva", view);
         Assert.Contains("txResumenObjetivosCurva", view);
+        Assert.Contains("txKpiCurvasActivas", view);
+        Assert.Contains("txKpiSucursales", view);
+        Assert.Contains("role=\"switch\"", view);
+        Assert.Contains("modalCurvaConsulta", view);
         Assert.Contains("tbObjetivosCurva", view);
         Assert.Contains("tbDetalleCurva", view);
         Assert.Contains("variantRows", script);
+        Assert.Contains("curvasCatalogoIdentidades", script);
+        Assert.Contains("curvasCatalogoProductos", script);
+        Assert.Contains("curvasCatalogoEliminar", script);
+        Assert.Contains("curvas-assignment-search", script);
+        Assert.Contains("Sin productos asignados", script);
+        Assert.Contains("curvas-qty-step", script);
+        Assert.Contains("productSearchSequence", script);
+        Assert.Contains("pluralize(total, \"pieza\", \"piezas\")", script);
+        Assert.Contains("/Proveeduria/Curvas/Resumen?", script);
         Assert.Contains("activo:", script);
         Assert.DoesNotContain("txCurvaCodigo", view);
         Assert.DoesNotContain("txCurvaCodigo", script);
+        Assert.DoesNotContain("btAgregarProductoCurva", view);
+        Assert.DoesNotContain("addProductObjectives", script);
         Assert.DoesNotContain("<style", view, StringComparison.OrdinalIgnoreCase);
     }
 

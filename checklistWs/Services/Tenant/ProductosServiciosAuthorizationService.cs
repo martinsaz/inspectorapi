@@ -87,27 +87,7 @@ WHERE u.idEmpresa = @IdEmpresa
                     return Deny(permissionCode, "ROLE_PERMISSION_NOT_FOUND", referenceId);
                 }
 
-                LegacyPermissionNode? node = FindPermission(permisos, permissionCode);
-                if (node == null)
-                {
-                    return Deny(permissionCode, "PERMISSION_NOT_FOUND", referenceId);
-                }
-
-                bool hasAccess = node.Permisos?.Acceso == 1;
-                bool accessOnlyPermission = IsAccessOnlyPermission(permissionCode);
-                bool canWrite = hasAccess && !accessOnlyPermission && node.Permisos?.Escritura == 1;
-                string reason = hasAccess
-                    ? canWrite ? "ALLOW_WRITE" : accessOnlyPermission ? "ALLOW_READ_ACCESS_ONLY" : "ALLOW_READ"
-                    : "ACCESS_DENIED";
-
-                return new ProductosServiciosAuthorizationDecision
-                {
-                    HasAccess = hasAccess,
-                    CanWrite = canWrite,
-                    PermissionCode = permissionCode,
-                    ReasonCode = reason,
-                    ReferenceId = referenceId
-                };
+                return EvaluateStoredPermission(permisos, permissionCode, referenceId);
             }
             catch (Exception ex) when (ex is JsonException || ex is SqlException || ex is InvalidOperationException)
             {
@@ -158,6 +138,46 @@ WHERE u.idEmpresa = @IdEmpresa
             };
         }
 
+        public static ProductosServiciosAuthorizationDecision EvaluateStoredPermission(
+            string permissionsJson,
+            string permissionCode,
+            string referenceId = "TEST")
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(permissionsJson) || string.IsNullOrWhiteSpace(permissionCode))
+                {
+                    return Deny(permissionCode ?? string.Empty, "PERMISSION_NOT_FOUND", referenceId);
+                }
+
+                LegacyPermissionNode? node = FindPermission(permissionsJson, permissionCode);
+                if (node == null)
+                {
+                    return Deny(permissionCode, "PERMISSION_NOT_FOUND", referenceId);
+                }
+
+                bool hasAccess = node.Permisos?.Acceso == 1;
+                bool accessOnlyPermission = IsAccessOnlyPermission(permissionCode);
+                bool canWrite = hasAccess && !accessOnlyPermission && node.Permisos?.Escritura == 1;
+                string reason = hasAccess
+                    ? canWrite ? "ALLOW_WRITE" : accessOnlyPermission ? "ALLOW_READ_ACCESS_ONLY" : "ALLOW_READ"
+                    : "ACCESS_DENIED";
+
+                return new ProductosServiciosAuthorizationDecision
+                {
+                    HasAccess = hasAccess,
+                    CanWrite = canWrite,
+                    PermissionCode = permissionCode,
+                    ReasonCode = reason,
+                    ReferenceId = referenceId
+                };
+            }
+            catch (JsonException)
+            {
+                return Deny(permissionCode, "AUTHZ_SOURCE_FAILED", referenceId);
+            }
+        }
+
         private static LegacyPermissionNode? FindPermission(string json, string permissionCode)
         {
             List<LegacyPermissionNode>? roots = JsonSerializer.Deserialize<List<LegacyPermissionNode>>(json, new JsonSerializerOptions
@@ -172,6 +192,11 @@ WHERE u.idEmpresa = @IdEmpresa
 
             foreach (LegacyPermissionNode root in roots)
             {
+                if (root == null)
+                {
+                    continue;
+                }
+
                 LegacyPermissionNode? match = FindPermission(root, permissionCode);
                 if (match != null)
                 {
@@ -189,8 +214,13 @@ WHERE u.idEmpresa = @IdEmpresa
                 return node;
             }
 
-            foreach (LegacyPermissionNode child in node.Hijos)
+            foreach (LegacyPermissionNode child in node.Hijos ?? Enumerable.Empty<LegacyPermissionNode>())
             {
+                if (child == null)
+                {
+                    continue;
+                }
+
                 LegacyPermissionNode? match = FindPermission(child, permissionCode);
                 if (match != null)
                 {
@@ -207,6 +237,7 @@ WHERE u.idEmpresa = @IdEmpresa
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.ModulePermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.CatalogosPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.ListaPreciosPermissionCode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.KitsPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.AjustesPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.SucursalesPermissionCode, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(permissionCode, ProductosServiciosAuthorizationDefaults.OrdenesCompraPermissionCode, StringComparison.OrdinalIgnoreCase) ||
@@ -218,7 +249,7 @@ WHERE u.idEmpresa = @IdEmpresa
         {
             public string Opcion { get; set; } = string.Empty;
             public LegacyPermissionValue? Permisos { get; set; }
-            public List<LegacyPermissionNode> Hijos { get; set; } = new List<LegacyPermissionNode>();
+            public List<LegacyPermissionNode>? Hijos { get; set; } = new List<LegacyPermissionNode>();
         }
 
         private sealed class LegacyPermissionValue
