@@ -73,7 +73,7 @@ public sealed class CurvasCatalogoSourceTests
     }
 
     [Fact]
-    public void MvcCatalogoUsesGoldenMasterDynamicGridWithoutParallelCss()
+    public void MvcCatalogoUsesGoldenMasterAndSingleCanonicalObjectivesTable()
     {
         string view = File.ReadAllText(Path.Combine(MvcRoot, "Views", "Curvas", "Catalogo.cshtml"));
         string script = File.ReadAllText(Path.Combine(MvcRoot, "wwwroot", "js", "Curvas", "CurvasCatalogo.js"));
@@ -84,14 +84,23 @@ public sealed class CurvasCatalogoSourceTests
         Assert.Contains("cbFiltroEstatusCurvas", view);
         Assert.Contains("ckCurvaActiva", view);
         Assert.Contains("btAplicarCantidadTodasCurva", view);
+        Assert.Contains("placeholder=\"Cantidad para todas\"", view);
+        Assert.Contains("aria-label=\"Cantidad para todas\"", view);
+        Assert.DoesNotContain("<span>Cantidad para todas</span>", view);
         Assert.Contains("txResumenObjetivosCurva", view);
         Assert.Contains("txKpiCurvasActivas", view);
         Assert.Contains("txKpiSucursales", view);
         Assert.Contains("role=\"switch\"", view);
         Assert.Contains("modalCurvaConsulta", view);
         Assert.Contains("tbObjetivosCurva", view);
-        Assert.Contains("tbDetalleCurva", view);
+        Assert.DoesNotContain("tbDetalleCurva", view);
+        Assert.DoesNotContain("panelDetalleCurva", view);
+        Assert.DoesNotContain("btLimpiarProductoCurva", view);
+        Assert.DoesNotContain("Producto seleccionado", view);
+        Assert.DoesNotContain("modal-xl", view);
+        Assert.Contains("Selecciona un producto para cargar sus objetivos.", view);
         Assert.Contains("variantRows", script);
+        Assert.DoesNotContain("state.details", script);
         Assert.Contains("curvasCatalogoIdentidades", script);
         Assert.Contains("curvasCatalogoProductos", script);
         Assert.Contains("curvasCatalogoEliminar", script);
